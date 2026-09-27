@@ -39,6 +39,13 @@ fn main() -> anyhow::Result<()> {
         cp.claude.instructions =
             "Conventions:\n- Write tests first.\n- Keep changes small and focused.\n".into();
         cp.agents = agent::claude_default_pipeline(&language)?;
+        // A preset-derived skill, to exercise the richer skill authoring.
+        if let Some(cmd) = ocgen::claude::skill_presets()?
+            .into_iter()
+            .find(|p| p.name == "command")
+        {
+            cp.skills.push(cmd.to_skill("commit", &language));
+        }
         let written = cp.scaffold(std::path::Path::new(&target), true)?;
         println!("Wrote {} Claude files to {target}", written.len());
         for p in written {

@@ -1,0 +1,52 @@
+# Skill presets for `ocgen add skill`. Each seeds a SKILL.md with sensible
+# frontmatter and a numbered-step body. Fully editable (copy out with
+# `ocgen templates init`). `body` is language-keyed; falls back to English.
+
+[[preset]]
+name = "command"
+description = "A user-run task Claude will not auto-invoke."
+allowed_tools = "Bash(git status:*), Bash(git add:*), Bash(git commit:*)"
+disable_model_invocation = true
+[preset.body]
+English = """Run this task step by step:
+
+1. Review the current state (e.g. `git status`).
+2. Make the change described by $ARGUMENTS.
+3. Verify the result and report what you did."""
+Ukrainian = """Виконай задачу крок за кроком:
+
+1. Переглянь поточний стан (наприклад, `git status`).
+2. Зроби зміну, описану в $ARGUMENTS.
+3. Перевір результат і звітуй, що зроблено."""
+
+[[preset]]
+name = "knowledge"
+description = "Background reference knowledge Claude loads automatically."
+[preset.body]
+English = """Guidance for <topic>:
+
+- Key convention or rule.
+- Another rule, with a short rationale.
+- A gotcha to avoid."""
+Ukrainian = """Настанови щодо <теми>:
+
+- Ключове правило чи домовленість.
+- Ще одне правило з коротким обґрунтуванням.
+- Пастка, якої слід уникати."""
+
+[[preset]]
+name = "forked-research"
+description = "Research a topic thoroughly in an isolated subagent."
+context_fork = true
+agent = "Explore"
+[preset.body]
+English = """Research $ARGUMENTS thoroughly:
+
+1. Find relevant files with Glob and Grep.
+2. Read and analyze the code.
+3. Summarize findings with specific file references."""
+Ukrainian = """Досліди $ARGUMENTS ретельно:
+
+1. Знайди релевантні файли через Glob і Grep.
+2. Прочитай і проаналізуй код.
+3. Зведи висновки з посиланнями на конкретні файли."""

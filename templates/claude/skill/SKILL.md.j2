@@ -1,8 +1,29 @@
 ---
 name: {{ skill.name }}
 description: {{ skill.description }}
+{% if skill.when_to_use -%}
+when_to_use: {{ skill.when_to_use }}
+{% endif -%}
+{% if skill.argument_hint -%}
+argument-hint: {{ skill.argument_hint }}
+{% endif -%}
 {% if skill.allowed_tools -%}
 allowed-tools: {{ skill.allowed_tools }}
+{% endif -%}
+{% if skill.disable_model_invocation -%}
+disable-model-invocation: true
+{% endif -%}
+{% if skill.hidden_from_menu -%}
+user-invocable: false
+{% endif -%}
+{% if skill.model -%}
+model: {{ skill.model }}
+{% endif -%}
+{% if skill.context_fork -%}
+context: fork
+{% if skill.agent -%}
+agent: {{ skill.agent }}
+{% endif -%}
 {% endif -%}
 ---
 {{ skill.body }}

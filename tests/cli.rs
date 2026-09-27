@@ -444,6 +444,7 @@ fn show_claude_coordinator_and_landscape_with_skills() {
         allowed_tools: "Bash(git commit:*)".into(),
         body: "do it".into(),
         role: None,
+        ..Default::default()
     });
     p.scaffold(dir.path(), false).unwrap();
 

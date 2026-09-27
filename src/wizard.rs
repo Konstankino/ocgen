@@ -5,7 +5,7 @@ use std::path::Path;
 
 use anyhow::{anyhow, bail, Context, Result};
 use console::style;
-use dialoguer::{theme::ColorfulTheme, Confirm, Editor, Input, Select};
+use dialoguer::{theme::ColorfulTheme, Confirm, Editor, Input, MultiSelect, Select};
 
 use ocgen::agent::{self, Agent};
 use ocgen::claude::{Output, Powerups, Skill, Team, Workflow};
@@ -1478,10 +1478,29 @@ pub fn run_add_skill(path_arg: Option<String>) -> Result<()> {
         style(&project.project_name).bold()
     );
     let taken: Vec<String> = project.skills.iter().map(|s| s.name.clone()).collect();
-    let seed = Skill {
-        body: "Describe the steps this skill performs.\n".to_string(),
-        ..Default::default()
+
+    let presets = ocgen::claude::skill_presets()?;
+    let mut labels: Vec<String> = presets
+        .iter()
+        .map(|p| format!("{} — {}", p.name, p.description))
+        .collect();
+    labels.push("blank (from scratch)".to_string());
+    let idx = ask_select(
+        &theme,
+        "Start from preset",
+        "Presets seed the tools, frontmatter and a numbered-step body.",
+        &labels,
+        0,
+    )?;
+    let seed = if idx < presets.len() {
+        presets[idx].to_skill("", &project.language)
+    } else {
+        Skill {
+            body: "Describe the steps this skill performs.\n".to_string(),
+            ..Default::default()
+        }
     };
+
     let skill = configure_skill(&theme, seed, false, &taken)?;
     project.skills.push(skill);
     let written = project.scaffold(&target, true)?;
@@ -1576,13 +1595,113 @@ fn configure_skill(
         },
         false,
     )?;
-    s.allowed_tools = ask(
+    s.when_to_use = ask(
         theme,
-        "  Allowed tools (comma-separated; empty = none pre-approved)",
-        "e.g. Bash(git commit:*), Read",
-        Some(&s.allowed_tools),
+        "  When to use (extra trigger context; optional)",
+        "Appended to the description to help Claude auto-invoke it.",
+        Some(&s.when_to_use),
+        true,
+    )?;
+    s.allowed_tools = pick_tools(theme, &s.allowed_tools)?;
+    s.argument_hint = ask(
+        theme,
+        "  Argument hint (optional)",
+        "Shown in autocomplete, e.g. [issue] or [file] [format].",
+        Some(&s.argument_hint),
+        true,
+    )?;
+    s.disable_model_invocation = ask_confirm(
+        theme,
+        "  User-run only (disable auto-invocation)?",
+        "A task you trigger with /name; Claude won't run it on its own.",
+        s.disable_model_invocation,
+    )?;
+    s.hidden_from_menu = ask_confirm(
+        theme,
+        "  Hide from the / menu (Claude-only knowledge)?",
+        "Sets user-invocable: false — only Claude loads it, never you.",
+        s.hidden_from_menu,
+    )?;
+    s.context_fork = ask_confirm(
+        theme,
+        "  Run in an isolated subagent (context: fork)?",
+        "Runs the skill in a forked context; pick which agent next.",
+        s.context_fork,
+    )?;
+    if s.context_fork {
+        s.agent = ask(
+            theme,
+            "  Fork into agent",
+            "Subagent type, e.g. Explore / Plan / general-purpose.",
+            Some(if s.agent.is_empty() {
+                "Explore"
+            } else {
+                &s.agent
+            }),
+            true,
+        )?;
+    } else {
+        s.agent = String::new();
+    }
+    s.model = ask(
+        theme,
+        "  Model alias for this skill (optional)",
+        "opus / sonnet / haiku / inherit; empty = session model.",
+        Some(&s.model),
         true,
     )?;
     s.body = edit_multiline(theme, "Skill body", HELP_BODY, &s.body)?;
     Ok(s)
+}
+
+/// Multi-select the built-in tools, then collect any Bash(...)/mcp__ patterns,
+/// warning (not rejecting) on unrecognized names.
+fn pick_tools(theme: &ColorfulTheme, current: &str) -> Result<String> {
+    let tools = ocgen::claude::CLAUDE_TOOLS;
+    let selected_now: Vec<String> = current
+        .split(',')
+        .map(|x| x.trim().to_string())
+        .filter(|x| !x.is_empty())
+        .collect();
+    let defaults: Vec<bool> = tools
+        .iter()
+        .map(|t| selected_now.iter().any(|x| x == t))
+        .collect();
+    hint("Space toggles, Enter confirms. Add Bash(...)/mcp__ patterns at the next prompt.");
+    let chosen = MultiSelect::with_theme(theme)
+        .with_prompt("  Allowed tools (pre-approved during the skill's turn)")
+        .items(&tools)
+        .defaults(&defaults)
+        .interact()?;
+    let mut all: Vec<String> = chosen.iter().map(|&i| tools[i].to_string()).collect();
+    let custom_seed = selected_now
+        .iter()
+        .filter(|x| !tools.contains(&x.as_str()))
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(", ");
+    let custom = ask(
+        theme,
+        "  Extra tool patterns (comma-separated; empty = none)",
+        "e.g. Bash(git commit:*), mcp__github__create_pr",
+        Some(&custom_seed),
+        true,
+    )?;
+    for c in custom
+        .split(',')
+        .map(|x| x.trim())
+        .filter(|x| !x.is_empty())
+    {
+        all.push(c.to_string());
+    }
+    let joined = all.join(", ");
+    let unknown = ocgen::claude::unknown_tools(&joined);
+    if !unknown.is_empty() {
+        println!(
+            "  {} unrecognized: {} (kept — fine for MCP/custom, but check for typos)",
+            style("warning:").yellow(),
+            unknown.join(", ")
+        );
+    }
+    Ok(joined)
 }

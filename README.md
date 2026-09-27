@@ -243,9 +243,19 @@ claude plugin install <name>@<name>
 **Skills** can be authored on their own:
 
 ```bash
-ocgen add skill ./my-team        # name, description, allowed-tools, body ($EDITOR)
+ocgen add skill ./my-team        # preset → tools picker → frontmatter → body ($EDITOR)
 ocgen edit skill [name] -p ./my-team
 ```
+
+`add skill` starts from a **preset** (`command` — a user-run task with `git` tools and a
+numbered-step body; `knowledge` — background reference; `forked-research` — runs in a
+forked `Explore` subagent), or blank. It then **multi-selects the built-in tools**
+(`Read`/`Grep`/`Write`/`Bash`/`Edit`/`Glob`/`WebFetch`/`WebSearch`/`TodoWrite`/`Task`/
+`NotebookEdit`/`Skill`) and lets you add `Bash(cmd *)` / `mcp__server__tool` patterns —
+warning (not rejecting) on unrecognized names. The full `SKILL.md` frontmatter is exposed:
+`description`, `when_to_use`, `argument-hint`, `allowed-tools`, `disable-model-invocation`,
+`user-invocable`, `context: fork` + `agent`, and `model`. Presets are editable templates
+(`claude/skill-presets.toml`).
 
 #### Agent Teams
 
@@ -357,8 +367,10 @@ opencode/commands/multi.md.j2     # a command that fans out to the subagents
 seeds.toml               # blank-agent seed text (body + external prompt)
 claude/agent.md.j2              # one generic Claude subagent
 claude/CLAUDE.md.j2             # project instructions + roster
-claude/commands/*.md.j2         # multi / intake / refine commands
+claude/commands/*.md.j2         # multi / intake / refine / team commands
 claude/skill/SKILL.md.j2        # one generic skill
+claude/skill-presets.toml       # add-skill presets (command / knowledge / forked-research)
+claude/hooks/team-*.sh          # Agent Teams quality-gate hook stubs
 claude/output-styles/concise.md.j2
 claude/plugin/*.j2              # plugin.json, marketplace.json, README, release.yml
 ```

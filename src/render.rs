@@ -274,14 +274,8 @@ impl Project {
 
         let skill_tmpl = templates::load("claude/skill/SKILL.md.j2")?;
         for skill in &self.skills {
-            let sval = context! {
-                name => skill.name,
-                description => skill.description,
-                allowed_tools => skill.allowed_tools.trim(),
-                body => skill.body,
-            };
             let md = env
-                .render_str(&skill_tmpl, context! { skill => sval })
+                .render_str(&skill_tmpl, context! { skill => skill })
                 .with_context(|| format!("rendering skill '{}'", skill.name))?;
             components.push((format!("skills/{}/SKILL.md", skill.name), md));
         }

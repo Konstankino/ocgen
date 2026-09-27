@@ -781,6 +781,7 @@ fn claude_project_state_roundtrips_and_is_back_compat() {
         allowed_tools: "Bash(git *)".into(),
         body: "Do it".into(),
         role: None,
+        ..Default::default()
     });
     proj.agents = agent::default_pipeline("English", "mac").unwrap();
     proj.agents[0].tools = "Read, Grep, Glob".into();
@@ -887,6 +888,7 @@ fn claude_renders_workflow_commands_skills_and_hooks() {
         allowed_tools: "Bash(git add:*), Bash(git commit:*)".into(),
         body: "Stage and commit with a clear message.".into(),
         role: None,
+        ..Default::default()
     });
     let mut a = Agent::blank("worker", "custom", "");
     a.mode = "subagent".into();
@@ -1070,6 +1072,7 @@ fn claude_plugin_output_emits_manifest_marketplace_and_workflow() {
         allowed_tools: "Bash(git commit:*)".into(),
         body: "b".into(),
         role: None,
+        ..Default::default()
     });
 
     let dir = tempdir().unwrap();
@@ -1226,6 +1229,7 @@ fn claude_rename_cleanup_helpers_remove_files() {
         allowed_tools: "".into(),
         body: "b".into(),
         role: None,
+        ..Default::default()
     });
     let dir = tempdir().unwrap();
     p.scaffold(dir.path(), false).unwrap();
@@ -1359,4 +1363,85 @@ fn claude_team_enabled_without_hook_stubs() {
     assert!(!dir.path().join(".claude/hooks").exists());
     // …but the /team command is still emitted.
     assert!(dir.path().join(".claude/commands/team.md").is_file());
+}
+
+// ---- Claude Code target: richer skill authoring (phase 8) ----
+
+#[test]
+fn claude_skill_renders_full_frontmatter() {
+    let mut p = base_project("English");
+    p.target = Target::ClaudeCode;
+    p.project_name = "sk".into();
+    p.skills.push(Skill {
+        name: "deploy".into(),
+        description: "Deploy to prod".into(),
+        allowed_tools: "Bash(npm run build), Bash(npm run deploy)".into(),
+        body: "1. build\n2. deploy".into(),
+        role: None,
+        when_to_use: "When the user says ship it".into(),
+        argument_hint: "[env]".into(),
+        disable_model_invocation: true,
+        hidden_from_menu: false,
+        context_fork: true,
+        agent: "Explore".into(),
+        model: "sonnet".into(),
+    });
+    let mut a = Agent::blank("w", "custom", "");
+    a.mode = "subagent".into();
+    a.model = "sonnet".into();
+    a.description = "d".into();
+    a.body = "b".into();
+    p.agents = vec![a];
+
+    let dir = tempdir().unwrap();
+    p.scaffold(dir.path(), false).unwrap();
+    let sk = read(dir.path(), ".claude/skills/deploy/SKILL.md");
+    assert!(sk.contains("name: deploy"));
+    assert!(sk.contains("when_to_use: When the user says ship it"));
+    assert!(sk.contains("argument-hint: [env]"));
+    assert!(sk.contains("allowed-tools: Bash(npm run build), Bash(npm run deploy)"));
+    assert!(sk.contains("disable-model-invocation: true"));
+    assert!(sk.contains("model: sonnet"));
+    assert!(sk.contains("context: fork"));
+    assert!(sk.contains("agent: Explore"));
+    assert!(
+        !sk.contains("user-invocable"),
+        "hidden_from_menu false → omitted"
+    );
+    assert!(sk.contains("1. build"));
+}
+
+#[test]
+fn unknown_tools_flags_only_unrecognized() {
+    use ocgen::claude::unknown_tools;
+    assert!(unknown_tools("Read, Grep, Bash(git add:*), mcp__gh__pr").is_empty());
+    assert_eq!(
+        unknown_tools("Read, Frobnicate, Grpe"),
+        vec!["Frobnicate".to_string(), "Grpe".to_string()]
+    );
+    assert!(unknown_tools("").is_empty());
+}
+
+#[test]
+fn skill_presets_load_and_seed_skills() {
+    let presets = ocgen::claude::skill_presets().unwrap();
+    let names: Vec<&str> = presets.iter().map(|p| p.name.as_str()).collect();
+    assert!(names.contains(&"command"));
+    assert!(names.contains(&"knowledge"));
+    assert!(names.contains(&"forked-research"));
+
+    let command = presets.iter().find(|p| p.name == "command").unwrap();
+    let sk = command.to_skill("commit", "English");
+    assert_eq!(sk.name, "commit");
+    assert!(sk.disable_model_invocation);
+    assert!(sk.allowed_tools.contains("Bash(git commit:*)"));
+    assert!(sk.body.contains("1."));
+
+    let forked = presets
+        .iter()
+        .find(|p| p.name == "forked-research")
+        .unwrap()
+        .to_skill("research", "English");
+    assert!(forked.context_fork);
+    assert_eq!(forked.agent, "Explore");
 }

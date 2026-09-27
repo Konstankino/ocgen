@@ -4,7 +4,89 @@
 //! its `target` is [`crate::target::Target::ClaudeCode`]. Everything is
 //! `#[serde(default)]` so OpenCode state files (which omit them) still load.
 
+use std::collections::HashMap;
+
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
+
+use crate::archetype::pick;
+use crate::templates;
+
+/// Built-in Claude Code tools that can appear in a skill's `allowed-tools`.
+pub const CLAUDE_TOOLS: [&str; 12] = [
+    "Read",
+    "Write",
+    "Edit",
+    "Grep",
+    "Glob",
+    "Bash",
+    "WebFetch",
+    "WebSearch",
+    "TodoWrite",
+    "Task",
+    "NotebookEdit",
+    "Skill",
+];
+
+/// Entries in a comma-separated tool list that are not a known built-in, a
+/// `Bash(...)`/`Tool(...)` pattern on a known tool, or an `mcp__…` server tool.
+/// Used to *warn* (not reject) on likely typos.
+pub fn unknown_tools(list: &str) -> Vec<String> {
+    list.split(',')
+        .map(|t| t.trim())
+        .filter(|t| !t.is_empty())
+        .filter(|t| {
+            !t.starts_with("mcp__")
+                && !CLAUDE_TOOLS.contains(&t.split('(').next().unwrap_or(t).trim())
+        })
+        .map(|t| t.to_string())
+        .collect()
+}
+
+/// A reusable skill preset (`claude/skill-presets.toml`) that seeds a [`Skill`]
+/// with sensible frontmatter and a numbered-step body.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SkillPreset {
+    pub name: String,
+    pub description: String,
+    #[serde(default)]
+    pub allowed_tools: String,
+    #[serde(default)]
+    pub disable_model_invocation: bool,
+    #[serde(default)]
+    pub context_fork: bool,
+    #[serde(default)]
+    pub agent: String,
+    /// Language-keyed numbered-step body.
+    pub body: HashMap<String, String>,
+}
+
+impl SkillPreset {
+    /// Turn this preset into a seed [`Skill`] with the given name and language.
+    pub fn to_skill(&self, name: &str, lang: &str) -> Skill {
+        Skill {
+            name: name.to_string(),
+            description: self.description.clone(),
+            allowed_tools: self.allowed_tools.clone(),
+            body: pick(&self.body, lang),
+            disable_model_invocation: self.disable_model_invocation,
+            context_fork: self.context_fork,
+            agent: self.agent.clone(),
+            ..Default::default()
+        }
+    }
+}
+
+/// Load the skill presets (embedded, override-able).
+pub fn skill_presets() -> Result<Vec<SkillPreset>> {
+    #[derive(Deserialize)]
+    struct Presets {
+        #[serde(default, rename = "preset")]
+        presets: Vec<SkillPreset>,
+    }
+    let src = templates::load("claude/skill-presets.toml")?;
+    Ok(toml::from_str::<Presets>(&src)?.presets)
+}
 
 /// Claude Code generation settings: the global default model alias, the editable
 /// `CLAUDE.md` body, what to emit, which power-user defaults to include, which
@@ -113,4 +195,18 @@ pub struct Skill {
     pub body: String,
     /// The archetype this skill was derived from, if any.
     pub role: Option<String>,
+    /// Extra trigger context appended to the description (`when_to_use`).
+    pub when_to_use: String,
+    /// Autocomplete hint for arguments (`argument-hint`).
+    pub argument_hint: String,
+    /// `disable-model-invocation: true` — a user-run-only task skill.
+    pub disable_model_invocation: bool,
+    /// Emit `user-invocable: false` (Claude-only background knowledge).
+    pub hidden_from_menu: bool,
+    /// Run in a forked subagent context (`context: fork`).
+    pub context_fork: bool,
+    /// Subagent type to fork into (`agent`, only with `context_fork`).
+    pub agent: String,
+    /// Model alias to pin for this skill's turn (empty = inherit).
+    pub model: String,
 }
