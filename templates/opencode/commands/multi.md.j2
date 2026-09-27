@@ -1,0 +1,11 @@
+---
+description: {% if language == "Ukrainian" %}Кілька моделей паралельно над однією задачею{% else %}Several models in parallel on one task{% endif %}
+agent: {{ primary.name }}
+---
+{% if language == "Ukrainian" -%}
+Запусти {% for sub in subagents %}@{{ sub.name }}{% if not loop.last %}, {% endif %}{% endfor %} над задачею: $ARGUMENTS
+Потім зведи відповіді, познач розбіжності і дай фінальне рішення.
+{%- else -%}
+Run {% for sub in subagents %}@{{ sub.name }}{% if not loop.last %}, {% endif %}{% endfor %} on the task: $ARGUMENTS
+Then consolidate the answers, flag disagreements, and give a final decision.
+{%- endif %}

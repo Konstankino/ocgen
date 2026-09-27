@@ -1,0 +1,32 @@
+---
+description: {{ agent.description }}
+mode: {{ agent.mode }}
+model: {{ agent.provider }}/{{ agent.model }}
+{% if agent.variant -%}
+variant: {{ agent.variant }}
+{% endif -%}
+temperature: {{ agent.temperature }}
+{% if agent.top_p -%}
+top_p: {{ agent.top_p }}
+{% endif -%}
+{% if agent.steps -%}
+steps: {{ agent.steps }}
+{% endif -%}
+color: {{ agent.color_yaml }}
+{% if agent.disable -%}
+disable: true
+{% endif -%}
+{% if agent.hidden -%}
+hidden: true
+{% endif -%}
+{% if agent.prompt_file -%}
+prompt: "{file:../prompts/{{ agent.name }}.txt}"
+{% endif -%}
+{% if agent.options -%}
+options:
+{{ agent.options }}
+{% endif -%}
+permission:
+{{ agent.permissions }}
+---
+{{ agent.body }}

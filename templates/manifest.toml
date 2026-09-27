@@ -1,0 +1,82 @@
+# ocgen template manifest.
+# Declares the project-level questions the wizard asks, the default provider(s)
+# and their models, and the default primary/utility models.
+#
+# Editable: copy this whole templates/ dir out with `ocgen templates init`
+# (into ~/.config/ocgen/templates/) and change anything below.
+
+[[variable]]
+key = "project_name"
+prompt = "Project name"
+help = "A label for this project; not written into OpenCode files."
+default = "my-writing-project"
+
+[[variable]]
+key = "language"
+prompt = "Prompt language"
+help = "Language used for the seeded agent descriptions and system prompts."
+type = "select"
+choices = ["Ukrainian", "English"]
+default = "Ukrainian"
+
+# One or more providers. The wizard seeds the provider loop with these; you can
+# edit them, add more, and assign a provider to each agent. Each provider becomes
+# a "provider.<key>" entry in opencode.json.
+[[provider]]
+key = "mac"
+name = "M4 Pro 24GB"
+npm = "@ai-sdk/openai-compatible"
+base_url = "http://mac.home:8080/v1"
+
+# Model ids must match what the server exposes (see `GET <base_url>/models`).
+# llama-swap aliases (e.g. "qwen-coder") are NOT ids — use the canonical id.
+[[provider.models]]
+id = "qwen3.5-9b"
+name = "Qwen3.5 9B"
+
+[[provider.models]]
+id = "gemma-26b"
+name = "Gemma 26B"
+
+[[provider.models]]
+id = "qwen3-35b-a3b"
+name = "Qwen3 35B A3B"
+
+[[provider.models]]
+id = "qwen3-coder-30b"
+name = "Qwen3 Coder 30B"
+
+[[provider.models]]
+id = "devstral-24b"
+name = "Devstral 24B"
+
+[[provider.models]]
+id = "qwen38-27b"
+name = "Qwen38 27B"
+
+# The default team the wizard offers to seed. Each entry names an agent and the
+# archetype (archetypes/<archetype>.toml) it starts from. Reorder, rename, add or
+# remove entries — or delete the whole section for no default team — to retarget
+# ocgen at any domain without touching code.
+[[pipeline]]
+name = "orchestrator"
+archetype = "orchestrator"
+
+[[pipeline]]
+name = "structure"
+archetype = "reviewer"
+
+[[pipeline]]
+name = "editor"
+archetype = "editor"
+
+[[pipeline]]
+name = "grammar"
+archetype = "corrector"
+
+# Fallbacks. primary_model is used for the top-level "model" when no agent is
+# primary; utility_provider/utility_model drive the compaction/title/summary agents.
+[defaults]
+primary_model = "qwen3-35b-a3b"
+utility_provider = "mac"
+utility_model = "qwen3.5-9b"

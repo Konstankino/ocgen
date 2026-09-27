@@ -1,0 +1,22 @@
+name: Release {{ name }}
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Package plugin
+        run: zip -r "{{ name }}.zip" . -x ".git/*"
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: "{{ name }}.zip"
+          generate_release_notes: true

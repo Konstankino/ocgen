@@ -1,0 +1,24 @@
+# Seed text the wizard pre-fills for a "blank (custom role)" agent.
+# `body`   — the inline system-prompt body seed.
+# `prompt` — the external prompt-file seed (used when an agent has a prompt file).
+# Language-keyed (falls back to English). Editable via `ocgen templates init`.
+
+[body]
+English = "You are an agent. Describe your task here."
+Ukrainian = "Ти агент. Опиши тут своє завдання."
+
+[prompt]
+English = """You are the coordinator. You do not do the work yourself.
+
+Your subagents:
+{% for sub in subagents %}- {{ sub.name }} — {{ sub.description }}
+{% endfor %}
+Delegate to them one at a time and consolidate the results.
+"""
+Ukrainian = """Ти координатор. Сам роботу не виконуєш.
+
+Твої підагенти:
+{% for sub in subagents %}- {{ sub.name }} — {{ sub.description }}
+{% endfor %}
+Делегуй їм по одному за раз і зведи результати.
+"""

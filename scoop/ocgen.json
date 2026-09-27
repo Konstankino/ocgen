@@ -1,0 +1,20 @@
+{
+  "version": "0.1.0",
+  "description": "Interactive wizard to scaffold OpenCode and Claude Code multi-agent projects",
+  "homepage": "https://github.com/OWNER/REPO",
+  "license": "MIT",
+  "architecture": {
+    "64bit": {
+      "url": "https://github.com/OWNER/REPO/releases/download/v0.1.0/ocgen-v0.1.0-x86_64-pc-windows-msvc.zip"
+    }
+  },
+  "bin": "ocgen.exe",
+  "checkver": "github",
+  "autoupdate": {
+    "architecture": {
+      "64bit": {
+        "url": "https://github.com/OWNER/REPO/releases/download/v$version/ocgen-v$version-x86_64-pc-windows-msvc.zip"
+      }
+    }
+  }
+}

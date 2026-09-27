@@ -1,0 +1,12 @@
+# `cargo cov` reports coverage of the testable code. The interactive wizard
+# (src/wizard.rs) is excluded: it is a thin layer of dialoguer prompts that
+# require a real terminal and cannot be exercised by unit/integration tests.
+# Its pure logic (validators, consistency checks) lives in the library
+# (validate.rs, render.rs) and is fully covered.
+[alias]
+cov = "llvm-cov --ignore-filename-regex wizard\\.rs"
+cov-all = "llvm-cov"
+
+# Note: do not commit a `[build] target-dir` here — an absolute path breaks CI,
+# `cargo install --git`, and other machines. For a slow/networked checkout, set
+# the target dir per-shell instead:  export CARGO_TARGET_DIR=/path/on/local/disk

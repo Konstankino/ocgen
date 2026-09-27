@@ -1,0 +1,19 @@
+# {{ project_name }}
+
+{{ instructions }}
+{% if subagents %}
+## Agent team
+
+Delegate work to these subagents (invoke each by name), then consolidate their
+results and flag any disagreements. Run `/multi <task>` to fan the whole team out
+on one task at once.
+
+{% for sub in subagents -%}
+- **{{ sub.name }}** — {{ sub.description }}
+{% endfor %}
+{% endif -%}
+{% if coordinator %}
+## Coordination
+
+{{ coordinator }}
+{% endif %}

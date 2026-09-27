@@ -1,0 +1,318 @@
+# ocgen
+
+An interactive wizard that scaffolds [OpenCode](https://opencode.ai) multi-agent
+projects. Run it, answer a few questions, and it writes a ready-to-use
+`opencode.json` plus a `.opencode/` tree of agents, prompts and commands — with
+your own agent names, roles and models.
+
+It can also target **[Claude Code](https://claude.com/claude-code)**: the same wizard
+writes a `.claude/` project (subagents, commands, skills, `CLAUDE.md`, `settings.json`)
+and/or a distributable **plugin**. See [Claude Code target](#claude-code-target).
+
+It's a single self-contained binary for **Windows, macOS and Linux**. The default
+templates are baked in but fully editable.
+
+## Install
+
+`ocgen` runs on **Windows, macOS and Linux**. Pick your platform — every method
+produces the same binary, and re-running any of them **updates** to the latest release
+(see [Updating](#updating)).
+
+> The commands below use `OWNER/REPO` as a placeholder — replace it with the GitHub
+> repository that hosts the releases.
+
+**Windows** (PowerShell) — downloads the latest `ocgen.exe`, installs it to
+`%LOCALAPPDATA%\ocgen\bin`, and adds it to your PATH:
+
+```powershell
+irm https://raw.githubusercontent.com/OWNER/REPO/main/install.ps1 | iex
+```
+
+Prefer [Scoop](https://scoop.sh)? A manifest is in [`scoop/ocgen.json`](scoop/ocgen.json)
+to host in a bucket, after which `scoop install ocgen` / `scoop update ocgen` work.
+
+**macOS / Linux** — installs to `~/.local/bin`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/OWNER/REPO/main/install.sh | sh
+```
+
+Or download a prebuilt archive for your platform from the releases page and put the
+binary on your PATH.
+
+**From source** (any OS with [Rust](https://rustup.rs)):
+
+```bash
+cargo install --git https://github.com/OWNER/REPO ocgen
+```
+
+### Updating
+
+New versions ship as GitHub Releases: pushing a version tag (`git tag v0.2.0 && git push
+--tags`) triggers [`.github/workflows/release.yml`](.github/workflows/release.yml), which
+builds and uploads binaries for Windows, macOS and Linux. To update:
+
+- **Windows:** re-run the PowerShell one-liner, or `scoop update ocgen`.
+- **macOS / Linux:** re-run the `install.sh` one-liner.
+- **From source:** `cargo install --git https://github.com/OWNER/REPO ocgen --force`.
+
+Every installer is idempotent — running it again just replaces the binary with the newest
+release.
+
+## Use
+
+Just run it and answer the prompts (press Enter to accept each default):
+
+```bash
+ocgen
+```
+
+Every prompt shows a short dimmed help line reminding you what the field means.
+For the full story, run `ocgen fields` — a detailed reference explaining every
+agent and provider setting (temperature, steps, permissions, …), with valid
+values and examples.
+
+The wizard asks for:
+
+1. **Project basics** — project name and prompt language.
+2. **Providers** — define one or more providers (key, display name, npm adapter,
+   base URL, and its models). Start from the seeded provider or add your own. Pass
+   `ocgen new --base-url <url>` to set the seeded provider's base URL from the command
+   line (so the server address need not be baked into the template); it becomes the
+   editable default at the base-URL prompt.
+3. **Utility model** — which provider + model the built-in compaction/title/summary
+   agents use.
+4. **Agents** — start from the default 4-agent writing pipeline, then add/rename as
+   many as you like. For each agent you configure **every field OpenCode exposes**:
+   name, a starting **role/preset** (or `blank (custom role)`), **mode**
+   (primary/subagent/all), **provider** and **model**, **variant**, **temperature**,
+   **top_p**, **max steps**, **color**, **disable**, **hidden**, **description**, the
+   full **permission block**, provider-specific **options** (e.g. `reasoningEffort`),
+   the **system-prompt body**, and an optional **external prompt file**.
+5. **Review & confirm** before anything is written.
+
+Input is validated as you type — the wizard re-prompts on bad values rather than
+writing them: identifiers (agent name, provider key, model id) must be safe for
+filenames and `@mentions` and unique; temperature must be 0–2 and top_p 0–1; steps
+a positive integer; color a theme name or `#hex`; and a provider base URL must be a
+real `http(s)://` URL.
+
+Multi-line fields (permissions, prompt body) use a hybrid flow: the seeded default
+is shown, and your `$EDITOR` opens pre-filled only if you choose to edit.
+
+**Multiple providers, per agent:** each agent picks which provider hosts its model,
+so its model reference becomes `<provider>/<model>`; all providers are written into
+`opencode.json`.
+
+**Dynamic roles:** roles are not limited to the built-in four. Pick `blank (custom
+role)`, name the role, and fill in the fields yourself — no archetype file involved.
+
+Cross-references stay consistent automatically: the coordinator's task permissions,
+its prompt file, and the `multi` command are all generated from the agent names you
+chose.
+
+### Other commands
+
+```bash
+ocgen new ./my-project              # scaffold into a specific directory
+ocgen new ./my-project --base-url http://192.168.1.10:8080/v1   # override the seeded provider's base URL
+ocgen new ./my-project --target claude   # scaffold a Claude Code project (see "Claude Code target")
+ocgen add agent ./my-project        # add one more agent to an existing project
+ocgen add skill ./my-project        # author a Claude Code skill (Claude projects)
+ocgen edit agent [name] -p ./dir    # tweak any field of an existing agent
+ocgen add provider ./my-project     # add another provider to an existing project
+ocgen edit provider [key] -p ./dir  # edit a provider and its models
+ocgen show agent [name] -p ./dir    # print one agent's full configuration
+ocgen landscape ./my-project        # overview of all agents + providers (alias: horizon)
+ocgen doctor ./my-project           # repair a project's config and rewrite its files
+ocgen fields                        # explain every configurable field (alias: reference)
+ocgen templates init                # copy the editable templates to ~/.config/ocgen/templates
+ocgen templates path                # print that directory
+ocgen templates list                # show which templates are overridden vs built-in
+ocgen templates edit [path]         # edit a template in $EDITOR; saves to the override dir
+```
+
+`ocgen templates edit` opens a template in your `$EDITOR` pre-filled with its current
+content (your override if you have one, otherwise the embedded default) and saves the
+result into `~/.config/ocgen/templates/` — so you can tweak an existing template (or a
+one you added yourself, like a new archetype) without running `templates init` or hunting
+for files. Pass a path (e.g. `ocgen templates edit seeds.toml` or
+`ocgen templates edit archetypes/reviewer.toml`) or omit it to pick from a list. Edits to
+a `.toml` template are checked for valid syntax, with a warning if they don't parse.
+
+`ocgen edit agent` reloads the saved project, lets you pick an agent (or names one
+directly), and walks every field seeded with its current value — press Enter to
+keep, or type a new value. It then re-renders the whole project, so renaming an
+agent updates the coordinator's task permissions, its prompt file and the `multi`
+command, and removes the old files. This is how you adjust an agent that has already
+been in use for a while.
+
+`ocgen edit provider` works the same way for providers: pick one, edit its key,
+name, npm adapter, base URL, and its model list (keep/edit/remove each model, then
+add new ones). Renaming a provider's key automatically updates every agent that
+referenced it and the utility provider.
+
+The `add`, `edit` and `landscape` commands find the project automatically: they
+look for it in the given directory (default: the current one) and walk **up**
+through parent directories, so you can run them from anywhere inside a project —
+not just its root. If no project is found, they say so and point you at `ocgen new`.
+
+`ocgen landscape` (alias `ocgen horizon`) prints a read-only overview so you can
+review the whole setup at a glance: a providers table (with the utility provider
+marked), an agents table (mode, model, temperature, steps, colour, prompt, and a
+one-line description), the delegation topology (which primary delegates to which
+subagents, and the `/multi` command), and a **Checks** section that flags problems
+worth fixing — an agent pointing at an unknown provider or a model its provider
+doesn't offer, missing or multiple coordinators, or an undefined utility provider.
+Use it to spot what to change, then adjust with the `edit` commands above.
+
+`ocgen show agent [name]` zooms into a single agent and prints its **full**
+configuration: every field (with the colour shown as a swatch), the effective
+permission block (including the auto-generated `task:` list for a coordinator), any
+provider-specific options, the system prompt (inline or the external file), and how
+it fits with the team (what it delegates to, or which coordinator calls it). Omit the
+name to pick one from a list.
+
+`ocgen doctor` repairs a project and rewrites its files: it reassigns agents that
+point at an unknown provider or a model their provider doesn't offer, fills empty
+required fields (permissions, temperature, colour, role), fixes the utility
+provider/model, and disables a prompt file that has no body. It reports each change,
+then regenerates everything. Running it on a project made by an **older version of
+ocgen** also upgrades it — the state file and generated files are rewritten in the
+current format.
+
+### Backward compatibility
+
+State files (`.opencode/.ocgen-state.json`) written by older versions of ocgen are
+migrated automatically on load: an old single-provider project is converted to the
+providers list, and agent fields added in later versions are backfilled from the
+agent's original role/archetype. So older projects keep working with `landscape`,
+`add`, `edit`, and `doctor` without manual edits.
+
+## Claude Code target
+
+ocgen also scaffolds [Claude Code](https://claude.com/claude-code) projects. Because
+Claude Code has no per-agent providers or base URLs, an agent's model is a Claude
+**alias** (`opus`/`sonnet`/`haiku`/`inherit`) rather than a `provider/model` id — so the
+provider and utility-model questions are replaced by an alias plus a **tools** allow-list
+per agent.
+
+```bash
+ocgen new ./my-team --target claude
+ocgen new ./my-team --target claude --output both --repo me/my-team
+```
+
+`--target claude` switches the wizard to the Claude flow; `--output` chooses what to emit
+(`project`, `plugin`, or `both`; default `project`); `--repo <owner/name>` sets the GitHub
+repo used for a plugin's marketplace and release workflow.
+
+**Project output** writes:
+
+```
+.claude/agents/<name>.md       # each subagent: name, description, tools, model alias, color + body
+.claude/commands/multi.md      # fan the whole team out on one task
+.claude/commands/intake.md     # a structured requirements interview (defaulted questions)
+.claude/commands/refine.md     # present a proposal, take reasoned push-back, iterate before approval
+.claude/skills/<name>/SKILL.md # reusable skills (optional)
+.claude/settings.json          # model, a permissions allow-list, hooks, output style, statusline
+.claude/output-styles/*.md
+CLAUDE.md                      # project instructions + the roster; the coordinator lives here
+```
+
+The **coordinator** (an agent whose mode is `primary`) is not written as an agent file —
+it becomes `CLAUDE.md` plus the `/multi` command, because Claude Code's main session *is*
+the coordinator. Every other agent becomes a subagent file. The wizard opens `CLAUDE.md`
+in your `$EDITOR` so you can shape the project instructions before anything is written.
+
+**Plugin output** (`--output plugin` or `both`) additionally writes, under
+`plugin/<name>/`, a complete Claude Code plugin: `.claude-plugin/plugin.json` +
+`marketplace.json`, the `agents/`, `commands/`, `skills/` and `output-styles/` trees, a
+`hooks/hooks.json`, a `README.md`, and a `.github/workflows/release.yml` that zips the
+plugin and attaches it to a GitHub Release on a version tag. Users install it with:
+
+```bash
+claude plugin marketplace add <owner>/<repo>
+claude plugin install <name>@<name>
+```
+
+**Power-user defaults** (toggled in the wizard) put a permissions allow-list, a
+`SessionStart` hook that nudges `/intake`, an output style and a statusline into
+`settings.json`.
+
+**Skills** can be authored on their own:
+
+```bash
+ocgen add skill ./my-team        # name, description, allowed-tools, body ($EDITOR)
+ocgen edit skill [name] -p ./my-team
+```
+
+Every other command is target-aware. On a Claude project, `ocgen landscape` shows the
+agents' aliases and tools, the skills, the workflow/output setup and the delegation
+topology; `ocgen show agent` shows an agent's alias, tools and role (or, for the
+coordinator, that it lives in `CLAUDE.md`); and `ocgen doctor` repairs invalid model
+aliases, non-Claude colours and empty roles. Run `ocgen fields` for the full Claude field
+reference. Claude projects are found by their `.claude/.ocgen-state.json`, so `add`,
+`edit`, `landscape` and `doctor` work from anywhere inside the project.
+
+## Customising the templates
+
+`ocgen templates init` copies the whole template set into
+`~/.config/ocgen/templates/`. Anything you put there wins over the built-in
+defaults. To change just one template without copying everything, use
+`ocgen templates edit <path>`, which opens it in your `$EDITOR` (seeded with its
+current content) and writes only that file to the override dir. The layout:
+
+```
+manifest.toml            # wizard questions (with help text) + default provider(s)
+archetypes/*.toml        # agent role presets (mode, permissions, colour, text)
+opencode.json.j2         # the provider/model config template (loops over providers)
+opencode/agents/_agent.md.j2      # one generic agent, rendered per agent
+opencode/commands/multi.md.j2     # a command that fans out to the subagents
+seeds.toml               # blank-agent seed text (body + external prompt)
+claude/agent.md.j2              # one generic Claude subagent
+claude/CLAUDE.md.j2             # project instructions + roster
+claude/commands/*.md.j2         # multi / intake / refine commands
+claude/skill/SKILL.md.j2        # one generic skill
+claude/output-styles/concise.md.j2
+claude/plugin/*.j2              # plugin.json, marketplace.json, README, release.yml
+```
+
+Templates use [MiniJinja](https://docs.rs/minijinja) (Jinja2 syntax). Values such
+as the model, base URL, provider and language are variables filled in at
+generation time.
+
+**Add a new role preset** by dropping an `archetypes/<name>.toml` file — no code
+changes needed. Each archetype declares `mode`, `default_model`, `temperature`,
+`color`, an optional `steps`, a raw `permissions` YAML block, and language-keyed
+`description` / `body` (and, for coordinators, an external `prompt`). For the Claude
+target an archetype also supplies `claude_model` (the alias) and `tools`. Presets are
+just starting points: the wizard lets you override every field, and you can always
+choose `blank (custom role)` to skip presets entirely. Generated projects are
+self-contained — each agent stores its own resolved fields (in the target's state file,
+`.opencode/.ocgen-state.json` or `.claude/.ocgen-state.json`), so they don't depend on
+the archetype files.
+
+## Development
+
+```bash
+cargo test                       # library-level scaffold tests
+cargo run --example demo -- /tmp/out default Ukrainian   # render without the wizard
+```
+
+The scaffolding logic lives in the library (`src/render.rs`); the wizard
+(`src/wizard.rs`) is a thin [dialoguer](https://docs.rs/dialoguer) layer on top,
+which is why the tests drive the library directly.
+
+### Coverage
+
+```bash
+cargo cov --summary-only   # coverage of the testable code (~94% lines)
+```
+
+`cargo cov` (see `.cargo/config.toml`) excludes `src/wizard.rs` — the interactive
+dialoguer prompt layer needs a real terminal and can't be unit-tested. All of its
+non-interactive logic is extracted into the library: input validation lives in
+`src/validate.rs` (100% covered) and the consistency checks in `Project::issues`.
+Everything else — rendering, migration, `doctor`, the `landscape`/`fields`/`doctor`
+CLI output, and template management — is covered by unit tests plus `assert_cmd`
+end-to-end tests in `tests/cli.rs`. Run `cargo cov-all` to include the wizard.

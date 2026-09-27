@@ -1,0 +1,8 @@
+---
+name: {{ skill.name }}
+description: {{ skill.description }}
+{% if skill.allowed_tools -%}
+allowed-tools: {{ skill.allowed_tools }}
+{% endif -%}
+---
+{{ skill.body }}

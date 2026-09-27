@@ -1,0 +1,61 @@
+name: Release
+
+# Publish binaries for Windows, macOS and Linux whenever you push a version tag.
+#   git tag v0.2.0 && git push --tags
+# Re-runnable by hand from the Actions tab (workflow_dispatch).
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest, target: x86_64-pc-windows-msvc,    ext: ".exe", archive: zip }
+          - { os: macos-latest,   target: aarch64-apple-darwin,      ext: "",     archive: tar }
+          - { os: macos-latest,   target: x86_64-apple-darwin,       ext: "",     archive: tar }
+          - { os: ubuntu-latest,  target: x86_64-unknown-linux-musl, ext: "",     archive: tar }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install musl tools
+        if: contains(matrix.target, 'linux-musl')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Build
+        run: cargo build --release --locked --bin ocgen --target ${{ matrix.target }}
+
+      - name: Package
+        shell: bash
+        run: |
+          name="ocgen-${{ github.ref_name }}-${{ matrix.target }}"
+          mkdir dist
+          cp "target/${{ matrix.target }}/release/ocgen${{ matrix.ext }}" dist/
+          cp README.md dist/ 2>/dev/null || true
+          cd dist
+          if [ "${{ matrix.archive }}" = "zip" ]; then
+            7z a "../${name}.zip" ./*
+            echo "ASSET=${name}.zip" >> "$GITHUB_ENV"
+          else
+            tar czf "../${name}.tar.gz" ./*
+            echo "ASSET=${name}.tar.gz" >> "$GITHUB_ENV"
+          fi
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.ASSET }}
+          generate_release_notes: true

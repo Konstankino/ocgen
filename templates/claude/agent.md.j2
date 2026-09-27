@@ -1,0 +1,12 @@
+---
+name: {{ agent.name }}
+description: {{ agent.description }}
+{% if agent.tools -%}
+tools: {{ agent.tools }}
+{% endif -%}
+model: {{ agent.model }}
+{% if agent.color -%}
+color: {{ agent.color }}
+{% endif -%}
+---
+{{ agent.body }}

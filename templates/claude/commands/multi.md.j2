@@ -1,0 +1,19 @@
+---
+description: {% if language == "Ukrainian" %}Запустити команду агентів над однією задачею{% else %}Run the agent team on one task{% endif %}
+argument-hint: "[task]"
+---
+{% if language == "Ukrainian" -%}
+Задача: $ARGUMENTS
+
+Делегуй її по черзі кожному підагенту й дочекайся кожного:
+{% for sub in subagents %}- @{{ sub.name }}
+{% endfor %}
+Потім зведи відповіді, познач розбіжності і дай фінальне рішення.
+{%- else -%}
+Task: $ARGUMENTS
+
+Delegate it to each subagent in turn and wait for each to finish:
+{% for sub in subagents %}- @{{ sub.name }}
+{% endfor %}
+Then consolidate the answers, flag disagreements, and give a final decision.
+{%- endif %}
