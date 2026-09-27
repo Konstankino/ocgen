@@ -625,3 +625,22 @@ fn landscape_shows_agent_teams_when_enabled() {
         .stdout(contains("agent teams"))
         .stdout(contains("in-process"));
 }
+
+#[test]
+fn new_advertises_preset_flag() {
+    ocgen()
+        .args(["new", "--help"])
+        .assert()
+        .success()
+        .stdout(contains("--preset"));
+}
+
+#[test]
+fn new_claude_rejects_unknown_preset() {
+    // A bad preset name fails fast (before any interactive prompt).
+    ocgen()
+        .args(["new", "--target", "claude", "--preset", "nope"])
+        .assert()
+        .failure()
+        .stderr(contains("unknown preset"));
+}

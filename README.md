@@ -295,6 +295,29 @@ invalid model aliases, non-Claude colours, empty roles and a bad `teammateMode`.
 reference. Claude projects are found by their `.claude/.ocgen-state.json`, so `add`,
 `edit`, `landscape` and `doctor` work from anywhere inside the project.
 
+#### Presets
+
+A **preset** bundles a whole Claude project — its agent roster, model, Agent Teams
+settings, skills, extra commands and `CLAUDE.md` — into one editable file. Start from one
+with `--preset`:
+
+```bash
+ocgen new ./work --target claude --preset intent
+```
+
+The bundled **`intent`** preset scaffolds an *intent-first* workflow: a coordinator plus a
+read-only `explorer`, parallel `researcher` teammates (Agent Teams), and an `intent-writer`,
+driven by a `/intent <problem>` command that (1) explores the codebase, (2) researches
+**only the source URLs you provide explicitly** — one researcher per URL via `WebFetch`, no
+implicit web search — (3) asks a round of specific questions, (4) a domain round, then (5)
+emits a formatted **intent document** (via the `write-intent` skill) for your approval
+before any coding. Roles default to `opus` (editable). Completion hooks
+(`TaskCompleted`/`TeammateIdle`) fire as tasks finish.
+
+Presets live in `presets/<name>.toml` (embedded, override-able via `ocgen templates init`) —
+add your own by dropping a file there; it lists the pipeline (name→archetype), `model`,
+`[team]`, `skills`, `commands`, and language-keyed `[instructions]`.
+
 ### Command reference (Claude Code target)
 
 Every command below is interactive (it prompts, with a dimmed help line and defaults) and
@@ -311,6 +334,7 @@ defaults to `.`.
 | `ocgen new [dir] --target claude --output plugin` | Emit a distributable plugin instead of the project tree. |
 | `ocgen new [dir] --target claude --output both --repo <owner/repo>` | Emit both the project **and** a plugin (marketplace + release workflow). |
 | `ocgen new [dir] --target claude --team` | Also enable Agent Teams (env flag + `/team` + hooks + guidance). |
+| `ocgen new [dir] --target claude --preset <name>` | Start from a named preset (e.g. `intent`) — a bundled roster/skills/commands/CLAUDE.md. |
 
 `--output` is `project` (default) / `plugin` / `both`; `--repo` is the GitHub `owner/repo`
 for a plugin; `--team` is off by default. (The `--base-url` flag is OpenCode-only.)
@@ -369,8 +393,9 @@ claude/agent.md.j2              # one generic Claude subagent
 claude/CLAUDE.md.j2             # project instructions + roster
 claude/commands/*.md.j2         # multi / intake / refine / team commands
 claude/skill/SKILL.md.j2        # one generic skill
-claude/skill-presets.toml       # add-skill presets (command / knowledge / forked-research)
+claude/skill-presets.toml       # add-skill presets (command / knowledge / forked-research / write-intent)
 claude/hooks/team-*.sh          # Agent Teams quality-gate hook stubs
+presets/*.toml                  # whole-project presets (e.g. intent) for `--preset`
 claude/output-styles/concise.md.j2
 claude/plugin/*.j2              # plugin.json, marketplace.json, README, release.yml
 ```

@@ -14,6 +14,16 @@ fn main() -> anyhow::Result<()> {
     let manifest = Manifest::load()?;
 
     // Claude Code target: render a full .claude/ project non-interactively.
+    if roster == "claude-intent" {
+        let mut cp = ocgen::preset::Preset::load("intent")?.build(&language)?;
+        cp.project_name = "demo-intent".into();
+        let written = cp.scaffold(std::path::Path::new(&target), true)?;
+        println!("Wrote {} Claude files to {target}", written.len());
+        for p in written {
+            println!("  {}", p.display());
+        }
+        return Ok(());
+    }
     if roster == "claude" || roster == "claude-plugin" || roster == "claude-team" {
         let mut cp = Project::from_manifest(&manifest, &language);
         cp.target = ocgen::target::Target::ClaudeCode;

@@ -35,6 +35,9 @@ pub enum Command {
         /// Enable Claude Code Agent Teams (experimental) in the generated project.
         #[arg(long)]
         team: bool,
+        /// Start from a named Claude preset (e.g. `intent`); see `ocgen fields`.
+        #[arg(long, value_name = "NAME")]
+        preset: Option<String>,
     },
     /// Add something to an existing project.
     Add {

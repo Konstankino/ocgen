@@ -24,13 +24,26 @@ pub fn load(path: &str) -> Result<String> {
     if let Some(dir) = override_dir() {
         let p = dir.join(path);
         if p.is_file() {
-            return fs::read_to_string(&p)
-                .with_context(|| format!("reading override template {}", p.display()));
+            let src = fs::read_to_string(&p)
+                .with_context(|| format!("reading override template {}", p.display()))?;
+            return Ok(normalize_newlines(src));
         }
     }
     let file = Assets::get(path).ok_or_else(|| anyhow!("template not found: {path}"))?;
-    String::from_utf8(file.data.into_owned())
-        .with_context(|| format!("template {path} is not valid UTF-8"))
+    let src = String::from_utf8(file.data.into_owned())
+        .with_context(|| format!("template {path} is not valid UTF-8"))?;
+    Ok(normalize_newlines(src))
+}
+
+/// Normalize CRLF to LF. Templates checked out on Windows (git autocrlf) or an
+/// override edited on Windows arrive with `\r\n`; the generator must always emit
+/// LF so rendered files — and `\n`-based assertions — behave the same everywhere.
+fn normalize_newlines(s: String) -> String {
+    if s.contains('\r') {
+        s.replace("\r\n", "\n")
+    } else {
+        s
+    }
 }
 
 /// Names of every available archetype (embedded ∪ override), sorted.
@@ -46,6 +59,32 @@ pub fn archetype_names() -> Vec<String> {
     }
     if let Some(dir) = override_dir() {
         if let Ok(entries) = fs::read_dir(dir.join("archetypes")) {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if p.extension().and_then(|e| e.to_str()) == Some("toml") {
+                    if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
+                        set.insert(stem.to_string());
+                    }
+                }
+            }
+        }
+    }
+    set.into_iter().collect()
+}
+
+/// Names of every available project preset (embedded ∪ override), sorted.
+pub fn preset_names() -> Vec<String> {
+    let mut set = BTreeSet::new();
+    for path in Assets::iter() {
+        if let Some(name) = path
+            .strip_prefix("presets/")
+            .and_then(|n| n.strip_suffix(".toml"))
+        {
+            set.insert(name.to_string());
+        }
+    }
+    if let Some(dir) = override_dir() {
+        if let Ok(entries) = fs::read_dir(dir.join("presets")) {
             for entry in entries.flatten() {
                 let p = entry.path();
                 if p.extension().and_then(|e| e.to_str()) == Some("toml") {
@@ -137,6 +176,25 @@ fn collect_files(root: &std::path::Path, dir: &std::path::Path, out: &mut BTreeS
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn crlf_template_content_is_normalized_to_lf() {
+        // Reproduces the Windows autocrlf failure: a CRLF-checked-out template
+        // (what `all_opencode_agent_fields_render` renders) must read as LF, so
+        // `options:\n  reasoningEffort: high` matches on every platform.
+        let crlf = "options:\r\n  reasoningEffort: high\r\n".to_string();
+        assert!(
+            !crlf.contains("options:\n  reasoningEffort: high"),
+            "precondition: CRLF content fails the LF assertion (the bug)"
+        );
+
+        let lf = normalize_newlines(crlf);
+        assert!(lf.contains("options:\n  reasoningEffort: high"));
+        assert!(!lf.contains('\r'), "no carriage returns survive");
+
+        // Already-LF content is returned unchanged.
+        assert_eq!(normalize_newlines("a\nb\n".to_string()), "a\nb\n");
+    }
 
     #[test]
     fn merge_paths_unions_embedded_and_override() {

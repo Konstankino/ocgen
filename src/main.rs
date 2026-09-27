@@ -19,6 +19,7 @@ fn main() -> Result<()> {
         output: OutputArg::Project,
         repo: None,
         team: false,
+        preset: None,
     }) {
         Command::New {
             path,
@@ -27,7 +28,8 @@ fn main() -> Result<()> {
             output,
             repo,
             team,
-        } => wizard::run_new(path, target, base_url, output, repo, team)?,
+            preset,
+        } => wizard::run_new(path, target, base_url, output, repo, team, preset)?,
         Command::Add { what } => match what {
             AddWhat::Agent { path } => wizard::run_add_agent(path)?,
             AddWhat::Provider { path } => wizard::run_add_provider(path)?,

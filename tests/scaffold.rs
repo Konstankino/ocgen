@@ -1445,3 +1445,91 @@ fn skill_presets_load_and_seed_skills() {
     assert!(forked.context_fork);
     assert_eq!(forked.agent, "Explore");
 }
+
+// ---- Named presets: the `intent` workflow preset (phase 9) ----
+
+#[test]
+fn intent_preset_loads_and_builds() {
+    let preset = ocgen::preset::Preset::load("intent").unwrap();
+    assert!(preset.team.enabled);
+    assert_eq!(preset.model, "opus");
+    assert_eq!(preset.skills, vec!["write-intent".to_string()]);
+    assert_eq!(preset.commands, vec!["intent".to_string()]);
+    let archs: Vec<&str> = preset
+        .pipeline
+        .iter()
+        .map(|p| p.archetype.as_str())
+        .collect();
+    assert_eq!(
+        archs,
+        vec!["intent-lead", "explorer", "researcher", "intent-writer"]
+    );
+    assert!(ocgen::preset::names().contains(&"intent".to_string()));
+
+    let proj = preset.build("English").unwrap();
+    assert_eq!(proj.target, Target::ClaudeCode);
+    assert!(proj.claude.team.enabled);
+    assert_eq!(proj.claude.commands, vec!["intent".to_string()]);
+    assert_eq!(proj.claude.model, "opus");
+    assert_eq!(
+        proj.agents.iter().filter(|a| a.mode == "primary").count(),
+        1
+    );
+
+    let researcher = proj.agents.iter().find(|a| a.name == "researcher").unwrap();
+    assert!(researcher.tools.contains("WebFetch"));
+    assert!(!researcher.tools.contains("WebSearch")); // explicit URLs only
+    assert_eq!(researcher.model, "opus");
+    assert!(proj.skills.iter().any(|s| s.name == "write-intent"));
+}
+
+#[test]
+fn intent_preset_scaffolds_command_skill_and_team() {
+    let preset = ocgen::preset::Preset::load("intent").unwrap();
+    let mut proj = preset.build("English").unwrap();
+    proj.project_name = "intent-kit".into();
+
+    let dir = tempdir().unwrap();
+    proj.scaffold(dir.path(), false).unwrap();
+
+    let intent_cmd = read(dir.path(), ".claude/commands/intent.md");
+    assert!(intent_cmd.contains("$ARGUMENTS"));
+    assert!(intent_cmd.contains("URLs"));
+    assert!(
+        !intent_cmd.contains("{% for"),
+        "unrendered Jinja in intent.md"
+    );
+
+    assert!(dir
+        .path()
+        .join(".claude/skills/write-intent/SKILL.md")
+        .is_file());
+
+    let s: serde_json::Value =
+        serde_json::from_str(&read(dir.path(), ".claude/settings.json")).unwrap();
+    assert_eq!(s["env"]["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"], "1");
+    assert!(s["hooks"]["TaskCompleted"].is_array());
+
+    assert!(read(dir.path(), "CLAUDE.md").contains("intent"));
+
+    let r = read(dir.path(), ".claude/agents/researcher.md");
+    assert!(r.contains("tools: WebFetch"));
+    assert!(!r.contains("WebSearch"));
+    // The coordinator is CLAUDE.md, not an agent file.
+    assert!(!dir.path().join(".claude/agents/intent-lead.md").exists());
+}
+
+#[test]
+fn preset_without_model_defaults_to_sonnet() {
+    let toml = r#"
+description = "minimal"
+[[pipeline]]
+name = "r"
+archetype = "reviewer"
+"#;
+    let preset: ocgen::preset::Preset = toml::from_str(toml).unwrap();
+    let proj = preset.build("English").unwrap();
+    assert_eq!(proj.claude.model, "sonnet"); // empty preset model → sonnet
+    assert!(!proj.claude.team.enabled); // team defaults off
+    assert!(proj.claude.commands.is_empty());
+}

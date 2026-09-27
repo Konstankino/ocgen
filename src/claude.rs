@@ -103,6 +103,9 @@ pub struct ClaudeConfig {
     pub workflow: Workflow,
     pub plugin: PluginMeta,
     pub team: Team,
+    /// Extra command templates to emit, by name (`claude/commands/<name>.md.j2`).
+    /// Used by presets (e.g. the `intent` preset adds `intent`).
+    pub commands: Vec<String>,
 }
 
 /// Claude Code Agent Teams settings (experimental, opt-in). When enabled, the

@@ -50,3 +50,31 @@ Ukrainian = """Досліди $ARGUMENTS ретельно:
 1. Знайди релевантні файли через Glob і Grep.
 2. Прочитай і проаналізуй код.
 3. Зведи висновки з посиланнями на конкретні файли."""
+
+[[preset]]
+name = "write-intent"
+description = "Produce a formatted implementation intent document before any coding."
+allowed_tools = "Read, Write"
+[preset.body]
+English = """Write an INTENT document for $ARGUMENTS with these sections, then save it (e.g. INTENT.md) and report the path:
+
+1. Problem & goal — what we're solving and the outcome we want.
+2. How it works today — the current implementation, with file:line references (from the explorer).
+3. Best practices & references — findings from the researchers, each with a source URL.
+4. Resolved questions — the answers from both question rounds.
+5. Proposed approach — the plan, at a high level.
+6. Acceptance criteria — how we'll know it's done.
+7. Out of scope & risks.
+
+Be concise and concrete. Do not start implementation."""
+Ukrainian = """Напиши документ НАМІРУ для $ARGUMENTS із такими розділами, потім збережи (напр. INTENT.md) і повідом шлях:
+
+1. Проблема і мета — що вирішуємо і який результат хочемо.
+2. Як це працює зараз — поточна реалізація з посиланнями file:line (від explorer).
+3. Найкращі практики і джерела — знахідки researchers, кожна з URL джерела.
+4. Розвʼязані питання — відповіді з обох раундів запитань.
+5. Запропонований підхід — план високого рівня.
+6. Критерії приймання — як зрозуміємо, що готово.
+7. Поза межами і ризики.
+
+Будь стислим і конкретним. Не починай реалізацію."""

@@ -281,6 +281,7 @@ pub fn run_new(
     output: OutputArg,
     repo: Option<String>,
     team: bool,
+    preset: Option<String>,
 ) -> Result<()> {
     let theme = ColorfulTheme::default();
     let manifest = Manifest::load().context("loading manifest.toml")?;
@@ -288,6 +289,16 @@ pub fn run_new(
     // Validate --base-url up front (OpenCode only) so a bad value fails before prompts.
     if let (TargetArg::Opencode, Some(u)) = (target, &base_url) {
         validate::url(u).map_err(|e| anyhow!("--base-url {u}: {e}"))?;
+    }
+    // Validate --preset up front (Claude only) so a bad name fails before prompts.
+    if let (TargetArg::Claude, Some(name)) = (target, &preset) {
+        let available = ocgen::preset::names();
+        if !available.iter().any(|n| n == name) {
+            bail!(
+                "unknown preset '{name}' (available: {})",
+                available.join(", ")
+            );
+        }
     }
 
     let kind = match target {
@@ -363,6 +374,7 @@ pub fn run_new(
             output,
             repo,
             team,
+            preset.as_deref(),
         )?,
     };
 
@@ -400,6 +412,7 @@ pub fn run_new(
 
 /// Build the Claude Code project: agents (aliases + tools), CLAUDE.md, power-ups,
 /// workflow commands, and output/plugin selection.
+#[allow(clippy::too_many_arguments)]
 fn build_claude_project(
     theme: &ColorfulTheme,
     manifest: &Manifest,
@@ -408,7 +421,11 @@ fn build_claude_project(
     output: OutputArg,
     repo: Option<String>,
     team: bool,
+    preset: Option<&str>,
 ) -> Result<Project> {
+    if let Some(name) = preset {
+        return build_claude_from_preset(theme, language, project_name, name, output, repo);
+    }
     let mut p = Project::from_manifest(manifest, language);
     p.target = Target::ClaudeCode;
     p.project_name = project_name.to_string();
@@ -497,6 +514,73 @@ fn build_claude_project(
         let (owner, name) = slug.split_once('/').unwrap();
         p.claude.plugin.repo_owner = owner.to_string();
         p.claude.plugin.repo_name = name.to_string();
+        p.claude.plugin.version = "0.1.0".to_string();
+        p.claude.plugin.display_name = project_name.to_string();
+    }
+
+    Ok(p)
+}
+
+/// Build a Claude project from a named preset (non-interactive apart from the
+/// CLAUDE.md edit + output/plugin prompts).
+fn build_claude_from_preset(
+    theme: &ColorfulTheme,
+    language: &str,
+    project_name: &str,
+    name: &str,
+    output: OutputArg,
+    repo: Option<String>,
+) -> Result<Project> {
+    let available = ocgen::preset::names();
+    if !available.iter().any(|n| n == name) {
+        bail!(
+            "unknown preset '{name}' (available: {})",
+            available.join(", ")
+        );
+    }
+    let preset = ocgen::preset::Preset::load(name)?;
+    println!(
+        "Using preset {} — {}\n",
+        style(name).bold(),
+        ui::muted(&preset.description)
+    );
+    let mut p = preset.build(language)?;
+    p.project_name = project_name.to_string();
+
+    ui::section("Project instructions (CLAUDE.md)");
+    p.claude.instructions = edit_multiline(
+        theme,
+        "CLAUDE.md",
+        "Preset instructions — edit as you like before writing.",
+        &p.claude.instructions,
+    )?;
+
+    let (project_out, plugin_out) = match output {
+        OutputArg::Project => (true, false),
+        OutputArg::Plugin => (false, true),
+        OutputArg::Both => (true, true),
+    };
+    p.claude.output = Output {
+        project: project_out,
+        plugin: plugin_out,
+    };
+    if plugin_out {
+        let slug = match repo {
+            Some(r) => {
+                validate::owner_repo(&r).map_err(|e| anyhow!("--repo {r}: {e}"))?;
+                r
+            }
+            None => ask_v(
+                theme,
+                "GitHub owner/repo",
+                "For the plugin marketplace and release workflow.",
+                None,
+                validate::owner_repo,
+            )?,
+        };
+        let (owner, repo_name) = slug.split_once('/').unwrap();
+        p.claude.plugin.repo_owner = owner.to_string();
+        p.claude.plugin.repo_name = repo_name.to_string();
         p.claude.plugin.version = "0.1.0".to_string();
         p.claude.plugin.display_name = project_name.to_string();
     }

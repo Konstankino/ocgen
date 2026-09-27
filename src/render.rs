@@ -272,6 +272,17 @@ impl Project {
             ));
         }
 
+        // Extra commands from a preset (e.g. `intent`).
+        for cmd in &self.claude.commands {
+            let rendered = env
+                .render_str(
+                    &templates::load(&format!("claude/commands/{cmd}.md.j2"))?,
+                    context! { subagents => &subs, language => lang },
+                )
+                .with_context(|| format!("rendering command '{cmd}'"))?;
+            components.push((format!("commands/{cmd}.md"), rendered));
+        }
+
         let skill_tmpl = templates::load("claude/skill/SKILL.md.j2")?;
         for skill in &self.skills {
             let md = env

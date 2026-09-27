@@ -1,0 +1,46 @@
+# Preset: intent-first workflow for Claude Code.
+#   ocgen new <dir> --target claude --preset intent
+# Explore the codebase + research user-provided URLs in parallel (Agent Teams),
+# ask two question rounds, then emit a formatted intent document before coding.
+# Editable: copy out with `ocgen templates init` and change anything here.
+#
+# NOTE: all root keys (below) must precede the [table] sections that follow.
+
+description = "Intent-first: parallel explore + explicit-URL research, two question rounds, formatted intent doc."
+model = "opus"
+skills = ["write-intent"]
+commands = ["intent"]
+
+[team]
+enabled = true
+mode = "in-process"
+hooks = true
+
+# The agent roster (name -> archetype). intent-lead is the coordinator (CLAUDE.md).
+[[pipeline]]
+name = "intent-lead"
+archetype = "intent-lead"
+
+[[pipeline]]
+name = "explorer"
+archetype = "explorer"
+
+[[pipeline]]
+name = "researcher"
+archetype = "researcher"
+
+[[pipeline]]
+name = "intent-writer"
+archetype = "intent-writer"
+
+[instructions]
+English = """Work intent-first: for any non-trivial change, produce an approved intent document before implementing.
+
+Run `/intent <problem>` to start. It explores the codebase, researches the source URLs you provide (explicitly — no implicit web search), asks two rounds of questions, and writes a formatted intent doc for your approval. Only implement after the intent is approved.
+
+Agent Teams are enabled so the explorer and per-URL researchers run in parallel."""
+Ukrainian = """Працюй за принципом «спершу намір»: для будь-якої нетривіальної зміни спочатку створи затверджений документ наміру, і лише потім реалізуй.
+
+Запусти `/intent <проблема>`. Він дослідить код, опрацює надані тобою URL джерел (явно — без неявного пошуку в вебі), поставить два раунди запитань і напише відформатований документ наміру на затвердження. Реалізуй лише після затвердження наміру.
+
+Agent Teams увімкнено, тож explorer і researchers (по одному на URL) працюють паралельно."""

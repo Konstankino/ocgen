@@ -1,0 +1,29 @@
+---
+description: {% if language == "Ukrainian" %}Скласти намір реалізації (перед кодуванням){% else %}Draft an implementation intent before coding{% endif %}
+argument-hint: "[problem] + source URLs"
+---
+{% if language == "Ukrainian" -%}
+Задача: $ARGUMENTS
+
+Склади **намір реалізації** перед кодуванням. Не починай реалізацію, доки я не затверджу намір.
+
+1. Спавни `explorer`, щоб зрозуміти, як зараз реалізована відповідна частина коду (лише читання).
+2. **Запитай у мене URL-адреси джерел** для дослідження. Спавни по одному `researcher` на кожен URL — кожен завантажує саме свій URL через WebFetch і звітує з цитатами. Не шукай у вебі самостійно; якщо URL не надано — попроси їх.
+3. Постав мені перший раунд КОНКРЕТНИХ запитань на основі знахідок explorer.
+4. Постав другий раунд ДОМЕННИХ запитань, щоб уточнити намір.
+5. Передай `intent-writer`, щоб створити відформатований документ наміру (навичка write-intent), покажи шлях і чекай мого затвердження.
+
+Запускай explorer і researchers паралельно (Agent Team).
+{%- else -%}
+Task: $ARGUMENTS
+
+Draft an **implementation intent** before coding. Do not start implementation until I approve the intent.
+
+1. Spawn `explorer` to map how the codebase implements the relevant area today (read-only).
+2. **Ask me for the source URLs** to research. Spawn one `researcher` teammate per URL — each fetches exactly its URL with WebFetch and reports cited findings. Do not search the web yourself; if I give no URLs, ask for them.
+3. Ask me a first round of SPECIFIC questions grounded in the explorer's findings.
+4. Ask a second round of DOMAIN-SPECIFIC questions to clarify intent.
+5. Hand off to `intent-writer` to produce the formatted intent document (write-intent skill), show me the path, and wait for my approval.
+
+Run the explorer and researchers in parallel (an Agent Team).
+{%- endif %}
