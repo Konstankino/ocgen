@@ -14,17 +14,27 @@ fn main() -> anyhow::Result<()> {
     let manifest = Manifest::load()?;
 
     // Claude Code target: render a full .claude/ project non-interactively.
-    if roster == "claude" || roster == "claude-plugin" {
+    if roster == "claude" || roster == "claude-plugin" || roster == "claude-team" {
         let mut cp = Project::from_manifest(&manifest, &language);
         cp.target = ocgen::target::Target::ClaudeCode;
         cp.project_name = "demo-claude".into();
         cp.providers.clear();
         if roster == "claude-plugin" {
-            cp.claude.output = ocgen::claude::Output { project: true, plugin: true };
+            cp.claude.output = ocgen::claude::Output {
+                project: true,
+                plugin: true,
+            };
             cp.claude.plugin.repo_owner = "demo-owner".into();
             cp.claude.plugin.repo_name = "demo-claude".into();
             cp.claude.plugin.version = "0.1.0".into();
             cp.claude.plugin.display_name = "Demo Claude".into();
+        }
+        if roster == "claude-team" {
+            cp.claude.team = ocgen::claude::Team {
+                enabled: true,
+                mode: "in-process".into(),
+                hooks: true,
+            };
         }
         cp.claude.instructions =
             "Conventions:\n- Write tests first.\n- Keep changes small and focused.\n".into();

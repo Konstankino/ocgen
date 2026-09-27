@@ -13,7 +13,10 @@ pub fn ident(s: &str) -> Result<(), String> {
     if !s.chars().next().unwrap().is_ascii_alphanumeric() {
         return Err("must start with a letter or digit".into());
     }
-    if !s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+    if !s
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
         return Err("use only letters, digits, '-' or '_' (no spaces or '/')".into());
     }
     Ok(())
@@ -89,6 +92,17 @@ pub fn owner_repo(s: &str) -> Result<(), String> {
     }
 }
 
+/// A Claude Code Agent Teams display mode.
+pub fn teammate_mode(s: &str) -> Result<(), String> {
+    const ALLOWED: [&str; 4] = ["in-process", "auto", "tmux", "iterm2"];
+    let t = s.trim();
+    if ALLOWED.contains(&t) {
+        Ok(())
+    } else {
+        Err(format!("must be one of: {}", ALLOWED.join(", ")))
+    }
+}
+
 /// A non-empty value that contains no whitespace (e.g. an npm package name).
 pub fn nonempty_nospace(s: &str) -> Result<(), String> {
     if s.is_empty() {
@@ -101,10 +115,7 @@ pub fn nonempty_nospace(s: &str) -> Result<(), String> {
 }
 
 /// Build a validator that enforces [`ident`] and rejects anything already in `taken`.
-pub fn unique_ident(
-    taken: Vec<String>,
-    noun: &'static str,
-) -> impl Fn(&str) -> Result<(), String> {
+pub fn unique_ident(taken: Vec<String>, noun: &'static str) -> impl Fn(&str) -> Result<(), String> {
     move |s: &str| {
         ident(s)?;
         if taken.iter().any(|t| t == s) {
@@ -198,6 +209,16 @@ mod tests {
         assert!(owner_repo("/repo").is_err());
         assert!(owner_repo("owner/").is_err());
         assert!(owner_repo("own er/repo").is_err());
+    }
+
+    #[test]
+    fn teammate_modes() {
+        for ok in ["in-process", "auto", "tmux", "iterm2"] {
+            assert!(teammate_mode(ok).is_ok(), "{ok}");
+        }
+        assert!(teammate_mode(" tmux ").is_ok()); // trimmed
+        assert!(teammate_mode("").is_err());
+        assert!(teammate_mode("split").is_err());
     }
 
     #[test]

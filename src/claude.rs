@@ -20,6 +20,20 @@ pub struct ClaudeConfig {
     pub powerups: Powerups,
     pub workflow: Workflow,
     pub plugin: PluginMeta,
+    pub team: Team,
+}
+
+/// Claude Code Agent Teams settings (experimental, opt-in). When enabled, the
+/// generated settings.json sets `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` and a
+/// `teammateMode`, and a `/team` command + CLAUDE.md guidance are emitted.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Team {
+    pub enabled: bool,
+    /// Teammate display mode: in-process (default) / auto / tmux / iterm2.
+    pub mode: String,
+    /// Emit commented TeammateIdle/TaskCreated/TaskCompleted hook stubs.
+    pub hooks: bool,
 }
 
 /// Which artifact trees to write.

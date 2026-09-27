@@ -2,17 +2,17 @@
   ocgen Windows installer / updater.
 
   Install or update to the latest release:
-    irm https://raw.githubusercontent.com/OWNER/REPO/main/install.ps1 | iex
+    irm https://raw.githubusercontent.com/Konstankino/ocgen/main/install.ps1 | iex
 
   Or a specific version:
-    & ([scriptblock]::Create((irm https://raw.githubusercontent.com/OWNER/REPO/main/install.ps1))) -Version v0.2.0
+    & ([scriptblock]::Create((irm https://raw.githubusercontent.com/Konstankino/ocgen/main/install.ps1))) -Version v0.2.0
 
   Re-run any time to update — it always fetches the requested (default: latest) release.
 #>
 [CmdletBinding()]
 param(
-  # GitHub owner/repo that hosts the releases. TODO: set this to your project.
-  [string]$Repo = 'OWNER/REPO',
+  # GitHub owner/repo that hosts the releases.
+  [string]$Repo = 'Konstankino/ocgen',
   # Release tag to install; 'latest' resolves the newest release.
   [string]$Version = 'latest',
   # Where to install ocgen.exe.

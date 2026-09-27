@@ -6,11 +6,11 @@ use std::path::Path;
 
 use ocgen::agent::{self, Agent};
 use ocgen::archetype::Archetype;
+use ocgen::claude::{Output, Powerups, Skill, Team, Workflow};
 use ocgen::manifest::{Manifest, Model, Provider};
 use ocgen::render::Project;
-use ocgen::templates;
 use ocgen::target::Target;
-use ocgen::claude::{Output, Powerups, Skill, Workflow};
+use ocgen::templates;
 use tempfile::tempdir;
 
 fn base_project(language: &str) -> Project {
@@ -34,8 +34,7 @@ fn default_pipeline_scaffolds_and_matches_sample() {
     // 4 agents + orchestrator prompt + opencode.json + multi command = 7.
     assert_eq!(written.len(), 7);
 
-    let json: serde_json::Value =
-        serde_json::from_str(&read(dir.path(), "opencode.json")).unwrap();
+    let json: serde_json::Value = serde_json::from_str(&read(dir.path(), "opencode.json")).unwrap();
     assert_eq!(json["model"], "mac/qwen3-35b-a3b");
     assert_eq!(json["provider"]["mac"]["name"], "M4 Pro 24GB");
     // Utility agents are now provider-qualified.
@@ -46,7 +45,10 @@ fn default_pipeline_scaffolds_and_matches_sample() {
     assert!(orch.contains("model: mac/qwen3-35b-a3b"));
     assert!(orch.contains("prompt: \"{file:../prompts/orchestrator.txt}\""));
     for sub in ["structure", "editor", "grammar"] {
-        assert!(orch.contains(&format!("\"{sub}\": allow")), "task perm for {sub}");
+        assert!(
+            orch.contains(&format!("\"{sub}\": allow")),
+            "task perm for {sub}"
+        );
     }
 
     let structure = read(dir.path(), ".opencode/agents/structure.md");
@@ -90,8 +92,7 @@ fn multiple_providers_render_and_agents_pick_one() {
     let dir = tempdir().unwrap();
     project.scaffold(dir.path(), false).unwrap();
 
-    let json: serde_json::Value =
-        serde_json::from_str(&read(dir.path(), "opencode.json")).unwrap();
+    let json: serde_json::Value = serde_json::from_str(&read(dir.path(), "opencode.json")).unwrap();
     // Both providers present; top-level model is the primary's provider/model.
     assert!(json["provider"]["mac"].is_object());
     assert!(json["provider"]["cloud"].is_object());
@@ -181,7 +182,10 @@ fn omitted_optional_fields_are_absent() {
     project.scaffold(dir.path(), false).unwrap();
     let md = read(dir.path(), ".opencode/agents/grammar.md");
     for absent in ["variant:", "top_p:", "disable:", "hidden:", "options:"] {
-        assert!(!md.contains(absent), "unexpected `{absent}` in default agent");
+        assert!(
+            !md.contains(absent),
+            "unexpected `{absent}` in default agent"
+        );
     }
 }
 
@@ -220,7 +224,10 @@ fn custom_named_roster_drives_cross_references() {
     project.scaffold(dir.path(), false).unwrap();
 
     for name in ["lead", "proofer", "critic"] {
-        assert!(dir.path().join(format!(".opencode/agents/{name}.md")).exists());
+        assert!(dir
+            .path()
+            .join(format!(".opencode/agents/{name}.md"))
+            .exists());
     }
     assert!(!dir.path().join(".opencode/agents/orchestrator.md").exists());
 
@@ -323,13 +330,16 @@ fn add_provider_then_rename_key_propagates_to_agents() {
             name: "GPT Omni".into(),
         }],
     });
-    let ed = reloaded.agents.iter_mut().find(|a| a.name == "editor").unwrap();
+    let ed = reloaded
+        .agents
+        .iter_mut()
+        .find(|a| a.name == "editor")
+        .unwrap();
     ed.provider = "cloud".into();
     ed.model = "gpt-omni".into();
     reloaded.scaffold(dir.path(), true).unwrap();
 
-    let json: serde_json::Value =
-        serde_json::from_str(&read(dir.path(), "opencode.json")).unwrap();
+    let json: serde_json::Value = serde_json::from_str(&read(dir.path(), "opencode.json")).unwrap();
     assert!(json["provider"]["cloud"].is_object());
     assert!(read(dir.path(), ".opencode/agents/editor.md").contains("model: cloud/gpt-omni"));
 
@@ -411,7 +421,11 @@ fn loads_legacy_single_provider_state() {
     assert_eq!(project.providers[0].key, "mac");
     assert_eq!(project.utility_provider, "mac");
 
-    let orch = project.agents.iter().find(|a| a.name == "orchestrator").unwrap();
+    let orch = project
+        .agents
+        .iter()
+        .find(|a| a.name == "orchestrator")
+        .unwrap();
     assert_eq!(orch.provider, "mac"); // backfilled
     assert_eq!(orch.role, "orchestrator"); // from legacy archetype
     assert!(!orch.permissions.is_empty()); // from archetype
@@ -419,10 +433,11 @@ fn loads_legacy_single_provider_state() {
 
     // And it re-renders into a valid current-schema project.
     project.scaffold(dir.path(), true).unwrap();
-    let json: serde_json::Value =
-        serde_json::from_str(&read(dir.path(), "opencode.json")).unwrap();
+    let json: serde_json::Value = serde_json::from_str(&read(dir.path(), "opencode.json")).unwrap();
     assert_eq!(json["model"], "mac/qwen3-35b-a3b");
-    assert!(read(dir.path(), ".opencode/agents/orchestrator.md").contains("model: mac/qwen3-35b-a3b"));
+    assert!(
+        read(dir.path(), ".opencode/agents/orchestrator.md").contains("model: mac/qwen3-35b-a3b")
+    );
 }
 
 #[test]
@@ -463,7 +478,11 @@ fn doctor_repairs_broken_references() {
     assert!(fixes.iter().any(|f| f.contains("not in 'mac'")));
     // After doctor, everything references a real provider/model.
     for ag in &project.agents {
-        let prov = project.providers.iter().find(|p| p.key == ag.provider).unwrap();
+        let prov = project
+            .providers
+            .iter()
+            .find(|p| p.key == ag.provider)
+            .unwrap();
         assert!(prov.models.iter().any(|m| m.id == ag.model));
     }
 
@@ -538,7 +557,9 @@ fn project_issues_detects_problems() {
     p.agents[2].mode = "primary".into(); // now two primaries
     p.utility_provider = "nope".into();
     let issues = p.issues();
-    assert!(issues.iter().any(|s| s.contains("unknown provider 'ghost'")));
+    assert!(issues
+        .iter()
+        .any(|s| s.contains("unknown provider 'ghost'")));
     assert!(issues.iter().any(|s| s.contains("primary agents")));
     assert!(issues.iter().any(|s| s.contains("utility provider 'nope'")));
 
@@ -561,8 +582,7 @@ fn render_without_primary_skips_multi_and_prompt() {
     assert!(!dir.path().join(".opencode/prompts/solo.txt").exists());
 
     // Top-level model falls back to utility_provider/default_primary_model.
-    let json: serde_json::Value =
-        serde_json::from_str(&read(dir.path(), "opencode.json")).unwrap();
+    let json: serde_json::Value = serde_json::from_str(&read(dir.path(), "opencode.json")).unwrap();
     assert!(json["model"].as_str().unwrap().starts_with("mac/"));
 }
 
@@ -626,7 +646,9 @@ fn seeds_load_and_pick_by_language_with_english_fallback() {
     assert_eq!(seeds.body_for("Klingon"), seeds.body_for("English"));
 
     // Prompt seed: non-empty per language, unknown falls back, keeps the Jinja loop.
-    assert!(seeds.prompt_for("English").contains("{% for sub in subagents %}"));
+    assert!(seeds
+        .prompt_for("English")
+        .contains("{% for sub in subagents %}"));
     assert!(!seeds.prompt_for("Ukrainian").is_empty());
     assert_ne!(seeds.prompt_for("Ukrainian"), seeds.prompt_for("English"));
     assert_eq!(seeds.prompt_for("Klingon"), seeds.prompt_for("English"));
@@ -715,14 +737,19 @@ fn default_pipeline_is_driven_by_the_manifest() {
     }
 }
 
-
 // ---- Claude Code target: state plumbing (phase 1) ----
 
 #[test]
 fn target_default_is_opencode_and_serde_roundtrips() {
     assert_eq!(Target::default(), Target::OpenCode);
-    assert_eq!(serde_json::to_string(&Target::ClaudeCode).unwrap(), "\"claude\"");
-    assert_eq!(serde_json::to_string(&Target::OpenCode).unwrap(), "\"opencode\"");
+    assert_eq!(
+        serde_json::to_string(&Target::ClaudeCode).unwrap(),
+        "\"claude\""
+    );
+    assert_eq!(
+        serde_json::to_string(&Target::OpenCode).unwrap(),
+        "\"opencode\""
+    );
     let t: Target = serde_json::from_str("\"claude\"").unwrap();
     assert_eq!(t, Target::ClaudeCode);
 }
@@ -763,7 +790,7 @@ fn claude_project_state_roundtrips_and_is_back_compat() {
     assert_eq!(back.target, Target::ClaudeCode);
     assert_eq!(back.claude.model, "sonnet");
     assert_eq!(back.claude.instructions, "Be excellent.");
-    assert_eq!(back.claude.output.project, true); // default preserved
+    assert!(back.claude.output.project); // default preserved
     assert_eq!(back.skills.len(), 1);
     assert_eq!(back.skills[0].name, "commit");
     assert_eq!(back.agents[0].tools, "Read, Grep, Glob");
@@ -787,7 +814,6 @@ fn discover_finds_a_claude_project_by_its_state_file() {
     assert_eq!(loaded.target, Target::ClaudeCode);
     assert_eq!(loaded.project_name, "demo");
 }
-
 
 // ---- Claude Code target: project renderer (phase 2) ----
 
@@ -814,8 +840,12 @@ fn claude_project_renders_agents_command_settings_and_claude_md() {
 
     let dir = tempdir().unwrap();
     let written = p.scaffold(dir.path(), false).unwrap();
-    assert!(written.iter().any(|w| w.ends_with(".claude/agents/reviewer.md")));
-    assert!(!written.iter().any(|w| w.ends_with(".claude/agents/boss.md")));
+    assert!(written
+        .iter()
+        .any(|w| w.ends_with(".claude/agents/reviewer.md")));
+    assert!(!written
+        .iter()
+        .any(|w| w.ends_with(".claude/agents/boss.md")));
 
     let rev_md = read(dir.path(), ".claude/agents/reviewer.md");
     assert!(rev_md.contains("name: reviewer"));
@@ -843,7 +873,6 @@ fn claude_project_renders_agents_command_settings_and_claude_md() {
     let reloaded = Project::load_state(dir.path()).unwrap();
     assert_eq!(reloaded.target, Target::ClaudeCode);
 }
-
 
 // ---- Claude Code target: workflow, skills, hooks (phase 3) ----
 
@@ -907,7 +936,10 @@ fn claude_default_pipeline_scaffolds_a_full_project() {
     assert!(claude_md.contains("# writing"));
     assert!(claude_md.contains("**structure**"));
     // The coordinator's prompt template is fully rendered — no raw Jinja leaks.
-    assert!(!claude_md.contains("{% for"), "unrendered Jinja in CLAUDE.md");
+    assert!(
+        !claude_md.contains("{% for"),
+        "unrendered Jinja in CLAUDE.md"
+    );
     assert!(!claude_md.contains("{{ sub.name }}"));
 
     let multi = read(dir.path(), ".claude/commands/multi.md");
@@ -1023,7 +1055,10 @@ fn claude_plugin_output_emits_manifest_marketplace_and_workflow() {
     let mut p = base_project("English");
     p.target = Target::ClaudeCode;
     p.project_name = "Writing Kit".into();
-    p.claude.output = Output { project: true, plugin: true };
+    p.claude.output = Output {
+        project: true,
+        plugin: true,
+    };
     p.claude.plugin.repo_owner = "acme".into();
     p.claude.plugin.repo_name = "writing-kit".into();
     p.claude.plugin.version = "1.2.0".into();
@@ -1141,7 +1176,9 @@ fn claude_issues_flags_bad_alias_and_multiple_coordinators() {
     p.agents = vec![a, b];
 
     let issues = p.issues();
-    assert!(issues.iter().any(|i| i.contains("unknown model alias 'gpt-4'")));
+    assert!(issues
+        .iter()
+        .any(|i| i.contains("unknown model alias 'gpt-4'")));
     assert!(issues.iter().any(|i| i.contains("coordinators")));
     // No OpenCode provider/utility noise.
     assert!(!issues.iter().any(|i| i.contains("utility provider")));
@@ -1158,8 +1195,12 @@ fn claude_doctor_repairs_alias_colour_and_role() {
     p.agents = vec![a];
 
     let fixes = p.doctor();
-    assert!(fixes.iter().any(|f| f.contains("model alias") && f.contains("sonnet")));
-    assert!(fixes.iter().any(|f| f.contains("colour") && f.contains("blue")));
+    assert!(fixes
+        .iter()
+        .any(|f| f.contains("model alias") && f.contains("sonnet")));
+    assert!(fixes
+        .iter()
+        .any(|f| f.contains("colour") && f.contains("blue")));
     assert!(fixes.iter().any(|f| f.contains("empty role")));
     assert_eq!(p.agents[0].model, "sonnet");
     assert_eq!(p.agents[0].color, "blue");
@@ -1200,4 +1241,122 @@ fn claude_rename_cleanup_helpers_remove_files() {
     // Removing something that isn't there is a no-op.
     Project::remove_claude_agent_file(dir.path(), "nope").unwrap();
     Project::remove_claude_skill_dir(dir.path(), "nope").unwrap();
+}
+
+// ---- Claude Code target: Agent Teams (phase 7) ----
+
+#[test]
+fn claude_team_enabled_wires_settings_command_hooks_and_guidance() {
+    let mut p = base_project("English");
+    p.target = Target::ClaudeCode;
+    p.project_name = "team-kit".into();
+    p.claude.team = Team {
+        enabled: true,
+        mode: "in-process".into(),
+        hooks: true,
+    };
+    p.agents = agent::claude_default_pipeline("English").unwrap();
+
+    let dir = tempdir().unwrap();
+    p.scaffold(dir.path(), false).unwrap();
+
+    let s: serde_json::Value =
+        serde_json::from_str(&read(dir.path(), ".claude/settings.json")).unwrap();
+    assert_eq!(s["env"]["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"], "1");
+    assert_eq!(s["teammateMode"], "in-process");
+    assert!(s["hooks"]["TeammateIdle"].is_array());
+    assert!(s["hooks"]["TaskCreated"].is_array());
+    assert!(s["hooks"]["TaskCompleted"].is_array());
+
+    let team_md = read(dir.path(), ".claude/commands/team.md");
+    assert!(team_md.contains("$ARGUMENTS"));
+    assert!(team_md.contains("structure"));
+    assert!(!team_md.contains("{% for"), "unrendered Jinja in team.md");
+    assert!(dir.path().join(".claude/commands/multi.md").is_file());
+
+    for h in [
+        "team-teammate-idle.sh",
+        "team-task-created.sh",
+        "team-task-completed.sh",
+    ] {
+        assert!(
+            dir.path().join(format!(".claude/hooks/{h}")).is_file(),
+            "{h}"
+        );
+    }
+
+    assert!(read(dir.path(), "CLAUDE.md").contains("Agent Teams"));
+}
+
+#[test]
+fn claude_team_disabled_by_default_adds_nothing() {
+    let mut p = base_project("English");
+    p.target = Target::ClaudeCode;
+    p.project_name = "plain".into();
+    p.agents = agent::claude_default_pipeline("English").unwrap();
+    let dir = tempdir().unwrap();
+    p.scaffold(dir.path(), false).unwrap();
+
+    let s: serde_json::Value =
+        serde_json::from_str(&read(dir.path(), ".claude/settings.json")).unwrap();
+    assert!(s.get("teammateMode").is_none());
+    assert!(s.get("env").is_none());
+    assert!(!dir.path().join(".claude/commands/team.md").exists());
+    assert!(!dir
+        .path()
+        .join(".claude/hooks/team-task-created.sh")
+        .exists());
+    assert!(!read(dir.path(), "CLAUDE.md").contains("Agent Teams"));
+}
+
+#[test]
+fn claude_doctor_repairs_bad_teammate_mode() {
+    let mut p = base_project("English");
+    p.target = Target::ClaudeCode;
+    p.claude.team = Team {
+        enabled: true,
+        mode: "split".into(),
+        hooks: false,
+    };
+    let mut a = Agent::blank("w", "custom", "");
+    a.mode = "subagent".into();
+    a.model = "sonnet".into();
+    p.agents = vec![a];
+
+    let fixes = p.doctor();
+    assert!(fixes
+        .iter()
+        .any(|f| f.contains("teammate mode") && f.contains("in-process")));
+    assert_eq!(p.claude.team.mode, "in-process");
+}
+
+#[test]
+fn claude_team_enabled_without_hook_stubs() {
+    let mut p = base_project("English");
+    p.target = Target::ClaudeCode;
+    p.project_name = "th".into();
+    p.claude.team = Team {
+        enabled: true,
+        mode: "auto".into(),
+        hooks: false,
+    };
+    let mut a = Agent::blank("w", "custom", "");
+    a.mode = "subagent".into();
+    a.model = "sonnet".into();
+    a.description = "d".into();
+    a.body = "b".into();
+    p.agents = vec![a];
+
+    let dir = tempdir().unwrap();
+    p.scaffold(dir.path(), false).unwrap();
+
+    let s: serde_json::Value =
+        serde_json::from_str(&read(dir.path(), ".claude/settings.json")).unwrap();
+    assert_eq!(s["env"]["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"], "1");
+    assert_eq!(s["teammateMode"], "auto");
+    // Hooks disabled → no team hook events, and no hook scripts on disk…
+    assert!(s["hooks"].get("TaskCreated").is_none());
+    assert!(!dir.path().join(".claude/hooks").exists());
+    // …but the /team command is still emitted.
+    assert!(dir.path().join(".claude/commands/team.md").is_file());
 }

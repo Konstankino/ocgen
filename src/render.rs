@@ -170,7 +170,10 @@ impl Project {
             if agent.prompt_file {
                 if let Some(prompt_src) = &agent.prompt_body {
                     let txt = env
-                        .render_str(prompt_src, context! { subagents => &subs, language => lang })
+                        .render_str(
+                            prompt_src,
+                            context! { subagents => &subs, language => lang },
+                        )
                         .with_context(|| format!("rendering prompt for '{}'", agent.name))?;
                     out.push((
                         PathBuf::from(format!(".opencode/prompts/{}.txt", agent.name)),
@@ -286,9 +289,33 @@ impl Project {
         if self.claude.powerups.output_style {
             components.push((
                 "output-styles/concise.md".to_string(),
-                env.render_str(&templates::load("claude/output-styles/concise.md.j2")?, context! {})
-                    .context("rendering output style")?,
+                env.render_str(
+                    &templates::load("claude/output-styles/concise.md.j2")?,
+                    context! {},
+                )
+                .context("rendering output style")?,
             ));
+        }
+
+        // Agent Teams: a /team command plus optional quality-gate hook scripts.
+        if self.claude.team.enabled {
+            let team_cmd = env
+                .render_str(
+                    &templates::load("claude/commands/team.md.j2")?,
+                    context! { subagents => &subs, language => lang },
+                )
+                .context("rendering team command")?;
+            components.push(("commands/team.md".to_string(), team_cmd));
+            if self.claude.team.hooks {
+                for h in [
+                    "team-teammate-idle.sh",
+                    "team-task-created.sh",
+                    "team-task-completed.sh",
+                ] {
+                    let body = templates::load(&format!("claude/hooks/{h}"))?;
+                    components.push((format!("hooks/{h}"), body));
+                }
+            }
         }
 
         // Coordinator body may itself be a template (the orchestrator prompt loops
@@ -308,6 +335,8 @@ impl Project {
                     coordinator => coordinator,
                     subagents => &subs,
                     language => lang,
+                    team => self.claude.team.enabled,
+                    team_mode => self.teammate_mode(),
                 },
             )
             .context("rendering CLAUDE.md")?;
@@ -358,7 +387,10 @@ impl Project {
                 refine => self.claude.workflow.refine,
             };
             let plugin_json = env
-                .render_str(&templates::load("claude/plugin/plugin.json.j2")?, mctx.clone())
+                .render_str(
+                    &templates::load("claude/plugin/plugin.json.j2")?,
+                    mctx.clone(),
+                )
                 .context("rendering plugin.json")?;
             serde_json::from_str::<Value>(&plugin_json)
                 .context("rendered plugin.json is not valid JSON (check your template)")?;
@@ -367,7 +399,10 @@ impl Project {
                 plugin_json,
             ));
             let market = env
-                .render_str(&templates::load("claude/plugin/marketplace.json.j2")?, mctx.clone())
+                .render_str(
+                    &templates::load("claude/plugin/marketplace.json.j2")?,
+                    mctx.clone(),
+                )
                 .context("rendering marketplace.json")?;
             serde_json::from_str::<Value>(&market)
                 .context("rendered marketplace.json is not valid JSON (check your template)")?;
@@ -377,8 +412,11 @@ impl Project {
             ));
             out.push((
                 PathBuf::from(format!("{base}/README.md")),
-                env.render_str(&templates::load("claude/plugin/README.md.j2")?, mctx.clone())
-                    .context("rendering plugin README")?,
+                env.render_str(
+                    &templates::load("claude/plugin/README.md.j2")?,
+                    mctx.clone(),
+                )
+                .context("rendering plugin README")?,
             ));
             out.push((
                 PathBuf::from(format!("{base}/.github/workflows/release.yml")),
@@ -395,6 +433,16 @@ impl Project {
 
         Ok(out)
     }
+    /// The effective teammate display mode (defaults to in-process).
+    fn teammate_mode(&self) -> String {
+        let m = self.claude.team.mode.trim();
+        if m.is_empty() {
+            "in-process".to_string()
+        } else {
+            m.to_string()
+        }
+    }
+
     /// Build `.claude/settings.json` as validated JSON from the power-up toggles.
     fn claude_settings_json(&self) -> Result<String> {
         let model = if self.claude.model.trim().is_empty() {
@@ -423,16 +471,41 @@ impl Project {
                 json!({ "type": "command", "command": "echo \"[$(basename \"$PWD\")]\"" }),
             );
         }
-        if self.claude.powerups.hooks && self.claude.workflow.intake {
+        if self.claude.team.enabled {
             obj.insert(
-                "hooks".into(),
-                json!({
-                    "SessionStart": [ { "hooks": [ {
-                        "type": "command",
-                        "command": "echo 'Tip: run /intake to gather requirements, then /refine to iterate before approval.'"
-                    } ] } ]
-                }),
+                "env".into(),
+                json!({ "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1" }),
             );
+            obj.insert("teammateMode".into(), json!(self.teammate_mode()));
+        }
+
+        let mut hooks = serde_json::Map::new();
+        if self.claude.powerups.hooks && self.claude.workflow.intake {
+            hooks.insert(
+                "SessionStart".into(),
+                json!([ { "hooks": [ {
+                    "type": "command",
+                    "command": "echo 'Tip: run /intake to gather requirements, then /refine to iterate before approval.'"
+                } ] } ]),
+            );
+        }
+        if self.claude.team.enabled && self.claude.team.hooks {
+            for (event, script) in [
+                ("TeammateIdle", "team-teammate-idle.sh"),
+                ("TaskCreated", "team-task-created.sh"),
+                ("TaskCompleted", "team-task-completed.sh"),
+            ] {
+                hooks.insert(
+                    event.to_string(),
+                    json!([ { "hooks": [ {
+                        "type": "command",
+                        "command": format!("sh \"${{CLAUDE_PROJECT_DIR}}/.claude/hooks/{script}\"")
+                    } ] } ]),
+                );
+            }
+        }
+        if !hooks.is_empty() {
+            obj.insert("hooks".into(), Value::Object(hooks));
         }
         Ok(format!("{}\n", serde_json::to_string_pretty(&root)?))
     }
@@ -504,8 +577,9 @@ impl Project {
     /// Model aliases Claude Code accepts for an agent.
     const CLAUDE_ALIASES: [&'static str; 5] = ["opus", "sonnet", "haiku", "fable", "inherit"];
     /// Named colours Claude Code accepts.
-    const CLAUDE_COLORS: [&'static str; 8] =
-        ["red", "blue", "green", "yellow", "purple", "orange", "pink", "cyan"];
+    const CLAUDE_COLORS: [&'static str; 8] = [
+        "red", "blue", "green", "yellow", "purple", "orange", "pink", "cyan",
+    ];
 
     /// Consistency checks for a Claude Code project (aliases + coordinators).
     fn claude_issues(&self) -> Vec<String> {
@@ -538,7 +612,10 @@ impl Project {
         for a in &mut self.agents {
             let m = a.model.trim().to_string();
             if m.is_empty() || !Self::CLAUDE_ALIASES.contains(&m.as_str()) {
-                fixes.push(format!("agent '{}': model alias '{}' → sonnet", a.name, a.model));
+                fixes.push(format!(
+                    "agent '{}': model alias '{}' → sonnet",
+                    a.name, a.model
+                ));
                 a.model = "sonnet".into();
             }
             let c = a.color.trim().to_string();
@@ -549,6 +626,16 @@ impl Project {
             if a.role.trim().is_empty() {
                 a.role = "custom".into();
                 fixes.push(format!("agent '{}': empty role → 'custom'", a.name));
+            }
+        }
+        if self.claude.team.enabled {
+            let m = self.claude.team.mode.trim().to_string();
+            if m.is_empty() || !["in-process", "auto", "tmux", "iterm2"].contains(&m.as_str()) {
+                fixes.push(format!(
+                    "teammate mode '{}' → in-process",
+                    self.claude.team.mode
+                ));
+                self.claude.team.mode = "in-process".into();
             }
         }
         fixes
@@ -640,8 +727,8 @@ impl Project {
                 Target::OpenCode.state_file()
             )
         })?;
-        let data = fs::read_to_string(&path)
-            .with_context(|| format!("reading {}", path.display()))?;
+        let data =
+            fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
         let mut value: Value =
             serde_json::from_str(&data).with_context(|| format!("parsing {}", path.display()))?;
         migrate_state(&mut value)?;
@@ -688,7 +775,10 @@ impl Project {
 
         for a in &mut self.agents {
             if !matches!(a.mode.as_str(), "primary" | "subagent" | "all") {
-                fixes.push(format!("agent '{}': invalid mode '{}' → subagent", a.name, a.mode));
+                fixes.push(format!(
+                    "agent '{}': invalid mode '{}' → subagent",
+                    a.name, a.mode
+                ));
                 a.mode = "subagent".into();
             }
             if a.role.trim().is_empty() {
@@ -723,7 +813,10 @@ impl Project {
             }
             if a.permissions.trim().is_empty() {
                 a.permissions = "  edit: ask\n  bash:\n    \"*\": ask".into();
-                fixes.push(format!("agent '{}': empty permissions → default block", a.name));
+                fixes.push(format!(
+                    "agent '{}': empty permissions → default block",
+                    a.name
+                ));
             }
             let empty_prompt = a
                 .prompt_body
@@ -775,7 +868,11 @@ fn migrate_state(value: &mut Value) -> Result<()> {
         .map(|a| !a.is_empty())
         .unwrap_or(false);
     if !has_providers {
-        if let Some(key) = value.get("provider_key").and_then(Value::as_str).map(str::to_string) {
+        if let Some(key) = value
+            .get("provider_key")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+        {
             let name = value
                 .get("provider_name")
                 .and_then(Value::as_str)
@@ -833,8 +930,15 @@ fn migrate_state(value: &mut Value) -> Result<()> {
 /// Backfill a single agent's newer fields, using its legacy `archetype` as the
 /// source of truth for permissions/body/etc. where those fields are absent.
 fn migrate_agent(agent: &mut Value, language: &str, default_provider: &str) -> Result<()> {
-    let archetype = agent.get("archetype").and_then(Value::as_str).map(str::to_string);
-    let name = agent.get("name").and_then(Value::as_str).unwrap_or("agent").to_string();
+    let archetype = agent
+        .get("archetype")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let name = agent
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or("agent")
+        .to_string();
     let provider = agent
         .get("provider")
         .and_then(Value::as_str)

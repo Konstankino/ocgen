@@ -1,11 +1,11 @@
 #!/bin/sh
 # ocgen installer / updater for macOS and Linux.
-#   curl -fsSL https://raw.githubusercontent.com/OWNER/REPO/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/Konstankino/ocgen/main/install.sh | sh
 # Env overrides: OCGEN_REPO, OCGEN_VERSION (default: latest), OCGEN_INSTALL_DIR.
 # Re-run any time to update to the latest release.
 set -eu
 
-REPO="${OCGEN_REPO:-OWNER/REPO}"
+REPO="${OCGEN_REPO:-Konstankino/ocgen}"
 VERSION="${OCGEN_VERSION:-latest}"
 INSTALL_DIR="${OCGEN_INSTALL_DIR:-$HOME/.local/bin}"
 

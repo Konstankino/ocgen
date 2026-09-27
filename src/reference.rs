@@ -111,7 +111,8 @@ const AGENT_FIELDS: &[Field] = &[
                  todowrite, question, webfetch, websearch, doom_loop. For a primary agent ocgen \
                  additionally manages the task: block listing which subagents it may call. (The \
                  older tools: map is deprecated — use permission.)",
-        example: "edit: allow\nbash:\n  \"*\": ask\n  \"git *\": allow\nwebfetch: deny\nwebsearch: allow",
+        example:
+            "edit: allow\nbash:\n  \"*\": ask\n  \"git *\": allow\nwebfetch: deny\nwebsearch: allow",
     },
     Field {
         label: "system prompt (body)",
@@ -197,6 +198,14 @@ const CLAUDE_FIELDS: &[Field] = &[
         detail: "The Claude target can emit a project .claude/ tree, a distributable plugin                  (.claude-plugin/ + a GitHub release workflow), or both. A plugin needs a GitHub                  owner/repo so users can install it with `claude plugin marketplace add`.",
         example: "both  (--output both --repo owner/repo)",
     },
+    Field {
+        label: "agent teams",
+        detail: "Opt-in (experimental). Enables Claude Code Agent Teams: sets \
+                 CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 and teammateMode in settings.json, \
+                 emits a /team command, CLAUDE.md guidance, and commented quality-gate hook \
+                 stubs. Your subagent roles double as reusable teammates.",
+        example: "--team  (mode: in-process)",
+    },
 ];
 
 pub fn run() {
@@ -273,7 +282,10 @@ mod tests {
         let lines = wrap("the quick brown fox jumps over the lazy dog", 15);
         assert!(lines.len() > 1);
         assert!(lines.iter().all(|l| l.chars().count() <= 15));
-        assert_eq!(lines.join(" "), "the quick brown fox jumps over the lazy dog");
+        assert_eq!(
+            lines.join(" "),
+            "the quick brown fox jumps over the lazy dog"
+        );
     }
 
     #[test]

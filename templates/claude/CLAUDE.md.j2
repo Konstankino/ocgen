@@ -16,4 +16,19 @@ on one task at once.
 ## Coordination
 
 {{ coordinator }}
+{% endif -%}
+{% if team %}
+## Agent Teams
+
+Agent Teams are enabled (`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`, mode `{{ team_mode }}`).
+For work that benefits from parallel exploration, spawn a team instead of delegating
+sequentially: run `/team <task>`, or ask in natural language — e.g. "spawn 3 teammates to
+review this from security, performance and test-coverage angles". Each teammate reuses one
+of the agent roles above, runs in its own context, and coordinates through the shared task
+list and direct messages.
+
+- Give each teammate an independent slice; don't let two edit the same files.
+- 3–5 teammates is the sweet spot; teams use more tokens than a single session.
+- Experimental. `teammateMode` is set in this project's `settings.json`, but it's a
+  user-level preference — move it to `~/.claude/settings.json` if it isn't honored here.
 {% endif %}

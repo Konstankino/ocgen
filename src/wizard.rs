@@ -8,10 +8,10 @@ use console::style;
 use dialoguer::{theme::ColorfulTheme, Confirm, Editor, Input, Select};
 
 use ocgen::agent::{self, Agent};
-use ocgen::claude::{Output, Powerups, Skill, Workflow};
-use ocgen::target::Target;
+use ocgen::claude::{Output, Powerups, Skill, Team, Workflow};
 use ocgen::manifest::{Manifest, Model, Provider};
 use ocgen::render::Project;
+use ocgen::target::Target;
 use ocgen::templates;
 use ocgen::validate::{self, unique_ident};
 
@@ -21,26 +21,34 @@ use crate::ui;
 // Per-field help, shown dimmed above each prompt so the user is reminded what it means.
 const HELP_NAME: &str = "Identifier → file name and @mention. Lowercase, no spaces (e.g. editor).";
 const HELP_PRESET: &str = "A starting point that fills the fields below; 'blank' starts empty.";
-const HELP_ROLE: &str = "Free-text job label (e.g. reviewer). Informational; not written to the file.";
+const HELP_ROLE: &str =
+    "Free-text job label (e.g. reviewer). Informational; not written to the file.";
 const HELP_MODE: &str =
     "primary = invoked directly & delegates; subagent = only called by others; all = both.";
-const HELP_TOPP: &str = "Nucleus sampling 0.0–1.0; alternative to temperature. Enter keeps, '-' clears.";
-const HELP_VARIANT: &str = "Model variant when the provider offers one (e.g. thinking). Enter keeps, '-' clears.";
+const HELP_TOPP: &str =
+    "Nucleus sampling 0.0–1.0; alternative to temperature. Enter keeps, '-' clears.";
+const HELP_VARIANT: &str =
+    "Model variant when the provider offers one (e.g. thinking). Enter keeps, '-' clears.";
 const HELP_DISABLE: &str = "Turn the agent off without deleting it (it won't be loaded).";
 const HELP_HIDDEN: &str = "Hide this subagent from the @ autocomplete menu (subagents only).";
 const HELP_OPTIONS: &str =
     "Provider-specific model options as YAML (e.g. reasoningEffort: high). Blank = none.";
-const HELP_PROVIDER: &str = "Which provider hosts this model → reference becomes <provider>/<model>.";
+const HELP_PROVIDER: &str =
+    "Which provider hosts this model → reference becomes <provider>/<model>.";
 const HELP_MODEL: &str = "The model id to run on, from the chosen provider.";
-const HELP_TEMP: &str = "Randomness 0.0–2.0: lower = focused/repeatable, higher = creative. Coding ~0.2.";
-const HELP_STEPS: &str = "Cap on tool-call cycles (safety limit). Enter keeps, '-' = unlimited. e.g. 30.";
+const HELP_TEMP: &str =
+    "Randomness 0.0–2.0: lower = focused/repeatable, higher = creative. Coding ~0.2.";
+const HELP_STEPS: &str =
+    "Cap on tool-call cycles (safety limit). Enter keeps, '-' = unlimited. e.g. 30.";
 const HELP_COLOR: &str = "Cosmetic UI accent: a name (accent, warning) or a hex like #4ec9b0.";
-const HELP_DESC: &str = "One-line summary; shown in lists and used by the coordinator to route work.";
+const HELP_DESC: &str =
+    "One-line summary; shown in lists and used by the coordinator to route work.";
 const HELP_PERMS: &str =
     "What it may do (YAML): edit, bash rules, webfetch. Primary agents also get a task block.";
 const HELP_BODY: &str = "The agent's system prompt/persona; $ARGUMENTS = the user's task.";
 const HELP_PROMPTFILE: &str = "Keep the prompt in prompts/<name>.txt (good for long coordinators).";
-const HELP_PROMPTBODY: &str = "External prompt content; may reference {{ subagents }} to list the team.";
+const HELP_PROMPTBODY: &str =
+    "External prompt content; may reference {{ subagents }} to list the team.";
 const HELP_PKEY: &str = "Short id used in model refs, e.g. <key>/<model>.";
 const HELP_PNAME: &str = "Human-readable provider name shown in opencode.json.";
 const HELP_PNPM: &str = "The @ai-sdk adapter package for this endpoint.";
@@ -236,8 +244,7 @@ pub fn run_templates_edit(path_arg: Option<String>) -> Result<()> {
         }
     };
 
-    let current =
-        templates::load(&path).with_context(|| format!("loading template {path}"))?;
+    let current = templates::load(&path).with_context(|| format!("loading template {path}"))?;
 
     // Give the editor the file's real extension so it highlights sensibly.
     let ext = Path::new(&path)
@@ -273,6 +280,7 @@ pub fn run_new(
     base_url: Option<String>,
     output: OutputArg,
     repo: Option<String>,
+    team: bool,
 ) -> Result<()> {
     let theme = ColorfulTheme::default();
     let manifest = Manifest::load().context("loading manifest.toml")?;
@@ -297,7 +305,11 @@ pub fn run_new(
     for var in &manifest.variables {
         let value = match var.r#type.as_str() {
             "select" => {
-                let default_idx = var.choices.iter().position(|c| c == &var.default).unwrap_or(0);
+                let default_idx = var
+                    .choices
+                    .iter()
+                    .position(|c| c == &var.default)
+                    .unwrap_or(0);
                 let idx = ask_select(&theme, &var.prompt, &var.help, &var.choices, default_idx)?;
                 var.choices[idx].clone()
             }
@@ -343,9 +355,15 @@ pub fn run_new(
             p.agents = agents;
             p
         }
-        TargetArg::Claude => {
-            build_claude_project(&theme, &manifest, &language, &project_name, output, repo)?
-        }
+        TargetArg::Claude => build_claude_project(
+            &theme,
+            &manifest,
+            &language,
+            &project_name,
+            output,
+            repo,
+            team,
+        )?,
     };
 
     match project.target {
@@ -361,7 +379,12 @@ pub fn run_new(
     let files = project.render_all()?;
     let conflict = files.iter().any(|(rel, _)| target_path.join(rel).exists());
     let force = if conflict {
-        ask_confirm(&theme, "Some files already exist. Overwrite them?", "", false)?
+        ask_confirm(
+            &theme,
+            "Some files already exist. Overwrite them?",
+            "",
+            false,
+        )?
     } else {
         false
     };
@@ -384,6 +407,7 @@ fn build_claude_project(
     project_name: &str,
     output: OutputArg,
     repo: Option<String>,
+    team: bool,
 ) -> Result<Project> {
     let mut p = Project::from_manifest(manifest, language);
     p.target = Target::ClaudeCode;
@@ -426,6 +450,24 @@ fn build_claude_project(
         p.claude.workflow = Workflow {
             intake: false,
             refine: false,
+        };
+    }
+    if ask_confirm(
+        theme,
+        "Enable Agent Teams (experimental)?",
+        "Adds CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1, a /team command, and CLAUDE.md guidance.",
+        team,
+    )? {
+        let hooks = ask_confirm(
+            theme,
+            "Include team quality-gate hook stubs?",
+            "TeammateIdle/TaskCreated/TaskCompleted no-op scripts you can fill in.",
+            true,
+        )?;
+        p.claude.team = Team {
+            enabled: true,
+            mode: "in-process".to_string(),
+            hooks,
         };
     }
 
@@ -478,14 +520,20 @@ fn collect_claude_agents(
             .join("/");
         if ask_confirm(
             theme,
-            &format!("Start from the default {}-agent pipeline?", manifest.pipeline.len()),
+            &format!(
+                "Start from the default {}-agent pipeline?",
+                manifest.pipeline.len()
+            ),
             &format!("Loads {names}, which you can then extend."),
             true,
         )? {
             let a = agent::claude_default_pipeline(language)?;
             println!(
                 "  Loaded: {}",
-                a.iter().map(|x| x.name.clone()).collect::<Vec<_>>().join(", ")
+                a.iter()
+                    .map(|x| x.name.clone())
+                    .collect::<Vec<_>>()
+                    .join(", ")
             );
             a
         } else {
@@ -567,7 +615,11 @@ fn configure_claude_agent(
         theme,
         "  Model alias",
         "opus / sonnet / haiku / inherit",
-        Some(if a.model.trim().is_empty() { "sonnet" } else { a.model.trim() }),
+        Some(if a.model.trim().is_empty() {
+            "sonnet"
+        } else {
+            a.model.trim()
+        }),
         validate::claude_model,
     )?;
     a.tools = ask(
@@ -577,7 +629,13 @@ fn configure_claude_agent(
         Some(&a.tools),
         true,
     )?;
-    a.description = ask(theme, "  Description", HELP_DESC, Some(&a.description), true)?;
+    a.description = ask(
+        theme,
+        "  Description",
+        HELP_DESC,
+        Some(&a.description),
+        true,
+    )?;
     let body_seed = if a.body.is_empty() {
         ocgen::seeds::Seeds::load()?.body_for(language)
     } else {
@@ -597,7 +655,11 @@ fn print_claude_summary(project: &Project, target_dir: &str) {
         .agents
         .iter()
         .map(|a| {
-            let m = if a.mode == "primary" { "coordinator" } else { a.model.as_str() };
+            let m = if a.mode == "primary" {
+                "coordinator"
+            } else {
+                a.model.as_str()
+            };
             format!("{} [{}]", a.name, m)
         })
         .collect::<Vec<_>>()
@@ -606,7 +668,12 @@ fn print_claude_summary(project: &Project, target_dir: &str) {
     if !project.skills.is_empty() {
         ui::kv(
             "skills",
-            &project.skills.iter().map(|s| s.name.clone()).collect::<Vec<_>>().join(", "),
+            &project
+                .skills
+                .iter()
+                .map(|s| s.name.clone())
+                .collect::<Vec<_>>()
+                .join(", "),
         );
     }
     let mut out = Vec::new();
@@ -692,7 +759,13 @@ pub fn run_edit_agent(path: String, name_arg: Option<String>) -> Result<()> {
         .map(|(_, a)| a.name.clone())
         .collect();
     let edited = if project.target == Target::ClaudeCode {
-        configure_claude_agent(&theme, &project.language, project.agents[idx].clone(), true, &taken)?
+        configure_claude_agent(
+            &theme,
+            &project.language,
+            project.agents[idx].clone(),
+            true,
+            &taken,
+        )?
     } else {
         configure_agent(
             &theme,
@@ -931,7 +1004,13 @@ fn configure_provider(
     } else {
         seed.name.clone()
     };
-    let name = ask(theme, "  Provider display name", HELP_PNAME, Some(&name_default), false)?;
+    let name = ask(
+        theme,
+        "  Provider display name",
+        HELP_PNAME,
+        Some(&name_default),
+        false,
+    )?;
     let npm_default = if seed.npm.is_empty() {
         "@ai-sdk/openai-compatible".to_string()
     } else {
@@ -949,7 +1028,13 @@ fn configure_provider(
     } else {
         seed.base_url.clone()
     };
-    let base_url = ask_v(theme, "  Base URL", HELP_PURL, Some(&url_default), validate::url)?;
+    let base_url = ask_v(
+        theme,
+        "  Base URL",
+        HELP_PURL,
+        Some(&url_default),
+        validate::url,
+    )?;
 
     let models = if seed.models.is_empty() {
         add_models(theme, Vec::new())?
@@ -988,7 +1073,13 @@ fn edit_models(theme: &ColorfulTheme, existing: Vec<Model>) -> Result<Vec<Model>
                     Some(&m.id),
                     unique_ident(taken, "model id"),
                 )?;
-                let name = ask(theme, "    Model display name", HELP_MNAME, Some(&m.name), false)?;
+                let name = ask(
+                    theme,
+                    "    Model display name",
+                    HELP_MNAME,
+                    Some(&m.name),
+                    false,
+                )?;
                 result.push(Model { id, name });
             }
             2 => {} // remove
@@ -1006,7 +1097,12 @@ fn add_models(theme: &ColorfulTheme, mut models: Vec<Model>) -> Result<Vec<Model
         } else {
             "  Add another model?"
         };
-        if !ask_confirm(theme, prompt, "Models this provider serves.", models.is_empty())? {
+        if !ask_confirm(
+            theme,
+            prompt,
+            "Models this provider serves.",
+            models.is_empty(),
+        )? {
             if models.is_empty() {
                 println!("    A provider needs at least one model.");
                 continue;
@@ -1021,7 +1117,13 @@ fn add_models(theme: &ColorfulTheme, mut models: Vec<Model>) -> Result<Vec<Model
             None,
             unique_ident(taken, "model id"),
         )?;
-        let name = ask(theme, "    Model display name", HELP_MNAME, Some(&id), false)?;
+        let name = ask(
+            theme,
+            "    Model display name",
+            HELP_MNAME,
+            Some(&id),
+            false,
+        )?;
         models.push(Model { id, name });
     }
     Ok(models)
@@ -1249,12 +1351,23 @@ fn configure_agent(
     // Visibility.
     agent.disable = ask_confirm(theme, "  Disable this agent?", HELP_DISABLE, agent.disable)?;
     agent.hidden = if agent.mode == "subagent" {
-        ask_confirm(theme, "  Hide from @ autocomplete?", HELP_HIDDEN, agent.hidden)?
+        ask_confirm(
+            theme,
+            "  Hide from @ autocomplete?",
+            HELP_HIDDEN,
+            agent.hidden,
+        )?
     } else {
         false
     };
 
-    agent.description = ask(theme, "  Description", HELP_DESC, Some(&agent.description), true)?;
+    agent.description = ask(
+        theme,
+        "  Description",
+        HELP_DESC,
+        Some(&agent.description),
+        true,
+    )?;
 
     // Multi-line fields (hybrid $EDITOR).
     agent.permissions = edit_multiline(theme, "Permissions", HELP_PERMS, &agent.permissions)?;
@@ -1295,7 +1408,12 @@ fn configure_agent(
             Some(existing) => existing,
             None => ocgen::seeds::Seeds::load()?.prompt_for(language),
         };
-        agent.prompt_body = Some(edit_multiline(theme, "External prompt", HELP_PROMPTBODY, &seed)?);
+        agent.prompt_body = Some(edit_multiline(
+            theme,
+            "External prompt",
+            HELP_PROMPTBODY,
+            &seed,
+        )?);
     } else {
         agent.prompt_body = None;
     }
@@ -1355,7 +1473,10 @@ pub fn run_add_skill(path_arg: Option<String>) -> Result<()> {
     if project.target != Target::ClaudeCode {
         bail!("skills are a Claude Code feature — open a Claude project (`ocgen new --target claude`)");
     }
-    println!("Adding a skill to {}.\n", style(&project.project_name).bold());
+    println!(
+        "Adding a skill to {}.\n",
+        style(&project.project_name).bold()
+    );
     let taken: Vec<String> = project.skills.iter().map(|s| s.name.clone()).collect();
     let seed = Skill {
         body: "Describe the steps this skill performs.\n".to_string(),
@@ -1384,7 +1505,12 @@ pub fn run_edit_skill(path: String, name_arg: Option<String>) -> Result<()> {
             .iter()
             .position(|s| s.name == n)
             .ok_or_else(|| {
-                let have = project.skills.iter().map(|s| s.name.clone()).collect::<Vec<_>>().join(", ");
+                let have = project
+                    .skills
+                    .iter()
+                    .map(|s| s.name.clone())
+                    .collect::<Vec<_>>()
+                    .join(", ");
                 anyhow!("no skill named '{n}' (have: {have})")
             })?,
         None => {
@@ -1397,7 +1523,10 @@ pub fn run_edit_skill(path: String, name_arg: Option<String>) -> Result<()> {
         }
     };
     let old_name = project.skills[idx].name.clone();
-    println!("\nEditing skill {} — Enter keeps each value.\n", style(&old_name).bold());
+    println!(
+        "\nEditing skill {} — Enter keeps each value.\n",
+        style(&old_name).bold()
+    );
     let taken: Vec<String> = project
         .skills
         .iter()
@@ -1428,7 +1557,11 @@ fn configure_skill(
             theme,
             "  Skill name",
             "Identifier → /skill-name and its folder.",
-            if s.name.is_empty() { None } else { Some(s.name.as_str()) },
+            if s.name.is_empty() {
+                None
+            } else {
+                Some(s.name.as_str())
+            },
             unique_ident(taken.to_vec(), "skill name"),
         )?;
     }
@@ -1436,7 +1569,11 @@ fn configure_skill(
         theme,
         "  Description",
         "Guides when Claude should invoke the skill.",
-        if s.description.is_empty() { None } else { Some(&s.description) },
+        if s.description.is_empty() {
+            None
+        } else {
+            Some(&s.description)
+        },
         false,
     )?;
     s.allowed_tools = ask(

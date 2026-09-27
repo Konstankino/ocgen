@@ -177,7 +177,10 @@ mod tests {
     fn claude_default_pipeline_uses_manifest() {
         let team = claude_default_pipeline("English").unwrap();
         let names: Vec<&str> = team.iter().map(|a| a.name.as_str()).collect();
-        assert_eq!(names, vec!["orchestrator", "structure", "editor", "grammar"]);
+        assert_eq!(
+            names,
+            vec!["orchestrator", "structure", "editor", "grammar"]
+        );
         assert!(team.iter().any(|a| a.mode == "primary"));
     }
 }

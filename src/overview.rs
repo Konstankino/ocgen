@@ -86,7 +86,9 @@ pub fn run(path: String) -> Result<()> {
                 mode,
                 format!("{}/{}", style(&a.provider).cyan(), a.model),
                 a.temperature.clone(),
-                a.steps.map(|s| s.to_string()).unwrap_or_else(|| ui::muted("-")),
+                a.steps
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| ui::muted("-")),
                 color_swatch,
                 prompt,
                 ui::muted(&ui::truncate(&a.description, 38)),
@@ -114,7 +116,11 @@ pub fn run(path: String) -> Result<()> {
         .filter(|a| a.mode == "subagent")
         .map(|a| a.name.as_str())
         .collect();
-    let primaries: Vec<&Agent> = project.agents.iter().filter(|a| a.mode == "primary").collect();
+    let primaries: Vec<&Agent> = project
+        .agents
+        .iter()
+        .filter(|a| a.mode == "primary")
+        .collect();
     if !primaries.is_empty() {
         ui::section("Topology");
         for p in &primaries {
@@ -154,7 +160,9 @@ pub fn run(path: String) -> Result<()> {
         }
     }
 
-    ui::tip("update with `ocgen edit agent <name>`, `ocgen edit provider <key>`, or `ocgen doctor`");
+    ui::tip(
+        "update with `ocgen edit agent <name>`, `ocgen edit provider <key>`, or `ocgen doctor`",
+    );
     Ok(())
 }
 
@@ -239,13 +247,18 @@ fn print_agent(project: &Project, root: &Path, idx: usize) {
         _ => a.mode.clone(),
     };
     ui::kv("mode", &mode);
-    ui::kv("model", &format!("{}/{}", style(&a.provider).cyan(), a.model));
+    ui::kv(
+        "model",
+        &format!("{}/{}", style(&a.provider).cyan(), a.model),
+    );
     ui::kv("variant", &dash(&a.variant));
     ui::kv("temperature", &a.temperature);
     ui::kv("top_p", &dash(&a.top_p));
     ui::kv(
         "steps",
-        &a.steps.map(|s| s.to_string()).unwrap_or_else(|| ui::muted("—")),
+        &a.steps
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| ui::muted("—")),
     );
     ui::kv("color", &color_cell(&a.color));
     if a.disable {
@@ -303,7 +316,10 @@ fn print_agent(project: &Project, root: &Path, idx: usize) {
                 .join(", ")
         };
         ui::kv("delegates to", &list);
-        ui::kv("command", &format!("{} → {}", style("/multi").cyan(), a.name));
+        ui::kv(
+            "command",
+            &format!("{} → {}", style("/multi").cyan(), a.name),
+        );
     }
     if is_sub {
         match project.agents.iter().find(|x| x.mode == "primary") {
@@ -433,6 +449,14 @@ fn run_claude(root: &Path, project: &Project) -> Result<()> {
             project.claude.model.clone()
         },
     );
+    if project.claude.team.enabled {
+        let mode = if project.claude.team.mode.trim().is_empty() {
+            "in-process"
+        } else {
+            project.claude.team.mode.trim()
+        };
+        ui::kv("agent teams", &format!("enabled ({mode})"));
+    }
 
     let subs: Vec<&str> = project
         .agents
@@ -509,7 +533,10 @@ fn print_agent_claude(project: &Project, root: &Path, idx: usize) {
         },
     );
     if a.mode == "primary" {
-        ui::kv("model", &ui::muted("— (coordinator runs as the main session)"));
+        ui::kv(
+            "model",
+            &ui::muted("— (coordinator runs as the main session)"),
+        );
     } else {
         let m = if a.model.trim().is_empty() {
             "sonnet"
@@ -557,7 +584,10 @@ fn print_agent_claude(project: &Project, root: &Path, idx: usize) {
                 .join(", ")
         };
         ui::kv("delegates to", &list);
-        ui::kv("command", &format!("{} → coordinator", style("/multi").cyan()));
+        ui::kv(
+            "command",
+            &format!("{} → coordinator", style("/multi").cyan()),
+        );
     } else {
         match project.agents.iter().find(|x| x.mode == "primary") {
             Some(p) => ui::kv("coordinated by", &style(&p.name).magenta().to_string()),

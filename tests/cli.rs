@@ -6,10 +6,10 @@ use std::path::Path;
 
 use assert_cmd::Command;
 use ocgen::agent::{self, Agent};
+use ocgen::claude::{Output, Skill, Team, Workflow};
 use ocgen::manifest::Manifest;
 use ocgen::render::Project;
 use ocgen::target::Target;
-use ocgen::claude::{Output, Skill, Workflow};
 use predicates::str::contains;
 use tempfile::tempdir;
 
@@ -37,7 +37,11 @@ fn scaffold_claude(dir: &Path) {
 
 #[test]
 fn help_and_version() {
-    ocgen().arg("--help").assert().success().stdout(contains("landscape"));
+    ocgen()
+        .arg("--help")
+        .assert()
+        .success()
+        .stdout(contains("landscape"));
     ocgen().arg("--version").assert().success();
     ocgen().args(["templates", "--help"]).assert().success();
     ocgen().args(["add", "--help"]).assert().success();
@@ -127,6 +131,8 @@ fn discover_from_subdirectory_and_missing_project() {
         .stderr(contains("no ocgen project"));
 }
 
+// Redirects the config dir via HOME, which only `dirs` honors on Unix.
+#[cfg(unix)]
 #[test]
 fn templates_path_init_list() {
     let home = tempdir().unwrap();
@@ -211,9 +217,7 @@ fn templates_edit_saves_changes_to_override() {
         .stdout(contains("seeds.toml"));
 
     // The override now exists and holds the edit on top of the embedded content.
-    let overridden = home
-        .path()
-        .join(".config/ocgen/templates/seeds.toml");
+    let overridden = home.path().join(".config/ocgen/templates/seeds.toml");
     let body = std::fs::read_to_string(&overridden).unwrap();
     assert!(body.contains("# edited-by-test"), "edit was saved");
     assert!(body.contains("[body]"), "seeded from the embedded default");
@@ -393,7 +397,8 @@ fn fields_includes_claude_section() {
         .success()
         .stdout(contains("Claude Code target fields"))
         .stdout(contains("model (alias)"))
-        .stdout(contains("tools"));
+        .stdout(contains("tools"))
+        .stdout(contains("agent teams"));
 }
 
 #[test]
@@ -412,8 +417,16 @@ fn add_skill_requires_a_claude_project() {
 
 #[test]
 fn add_and_edit_help_list_skill() {
-    ocgen().args(["add", "--help"]).assert().success().stdout(contains("skill"));
-    ocgen().args(["edit", "--help"]).assert().success().stdout(contains("skill"));
+    ocgen()
+        .args(["add", "--help"])
+        .assert()
+        .success()
+        .stdout(contains("skill"));
+    ocgen()
+        .args(["edit", "--help"])
+        .assert()
+        .success()
+        .stdout(contains("skill"));
 }
 
 #[test]
@@ -521,11 +534,17 @@ fn claude_landscape_plugin_opus_and_no_workflow_no_subagents() {
     p.target = Target::ClaudeCode;
     p.project_name = "kit".into();
     p.providers.clear();
-    p.claude.output = Output { project: true, plugin: true };
+    p.claude.output = Output {
+        project: true,
+        plugin: true,
+    };
     p.claude.plugin.repo_owner = "me".into();
     p.claude.plugin.repo_name = "kit".into();
     p.claude.model = "opus".into();
-    p.claude.workflow = Workflow { intake: false, refine: false };
+    p.claude.workflow = Workflow {
+        intake: false,
+        refine: false,
+    };
     let mut boss = Agent::blank("boss", "custom", "");
     boss.mode = "primary".into();
     boss.body = "coordinate".into();
@@ -557,7 +576,12 @@ fn claude_landscape_and_show_empty_model_defaults_to_sonnet() {
     p.agents = vec![a];
     p.scaffold(dir.path(), false).unwrap();
 
-    ocgen().arg("landscape").arg(dir.path()).assert().success().stdout(contains("sonnet"));
+    ocgen()
+        .arg("landscape")
+        .arg(dir.path())
+        .assert()
+        .success()
+        .stdout(contains("sonnet"));
     ocgen()
         .args(["show", "agent", "w", "-p"])
         .arg(dir.path())
@@ -565,4 +589,38 @@ fn claude_landscape_and_show_empty_model_defaults_to_sonnet() {
         .success()
         .stdout(contains("model: sonnet"))
         .stdout(contains("(none)")); // empty body
+}
+
+#[test]
+fn new_advertises_team_flag() {
+    ocgen()
+        .args(["new", "--help"])
+        .assert()
+        .success()
+        .stdout(contains("--team"));
+}
+
+#[test]
+fn landscape_shows_agent_teams_when_enabled() {
+    let dir = tempdir().unwrap();
+    let m = Manifest::load().unwrap();
+    let mut p = Project::from_manifest(&m, "English");
+    p.target = Target::ClaudeCode;
+    p.project_name = "teamed".into();
+    p.providers.clear();
+    p.claude.team = Team {
+        enabled: true,
+        mode: "in-process".into(),
+        hooks: true,
+    };
+    p.agents = agent::claude_default_pipeline("English").unwrap();
+    p.scaffold(dir.path(), false).unwrap();
+
+    ocgen()
+        .arg("landscape")
+        .arg(dir.path())
+        .assert()
+        .success()
+        .stdout(contains("agent teams"))
+        .stdout(contains("in-process"));
 }

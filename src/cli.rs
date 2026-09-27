@@ -32,6 +32,9 @@ pub enum Command {
         /// GitHub owner/repo for the Claude plugin distribution.
         #[arg(long, value_name = "OWNER/REPO")]
         repo: Option<String>,
+        /// Enable Claude Code Agent Teams (experimental) in the generated project.
+        #[arg(long)]
+        team: bool,
     },
     /// Add something to an existing project.
     Add {
