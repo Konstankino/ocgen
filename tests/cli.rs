@@ -546,6 +546,7 @@ fn claude_landscape_plugin_opus_and_no_workflow_no_subagents() {
         intake: false,
         refine: false,
         improve_prompt: false,
+        fanout: false,
     };
     let mut boss = Agent::blank("boss", "custom", "");
     boss.mode = "primary".into();

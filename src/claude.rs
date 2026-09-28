@@ -180,6 +180,9 @@ pub struct Workflow {
     /// Anthropic's prompt-engineering technique). The matching skill preset is
     /// available via `ocgen add skill`.
     pub improve_prompt: bool,
+    /// Emit the `/fanout` command + `.worktreeinclude` + CLAUDE.md protocol for
+    /// fanning work out to worktree-isolated subagents.
+    pub fanout: bool,
 }
 
 impl Default for Workflow {
@@ -188,6 +191,7 @@ impl Default for Workflow {
             intake: true,
             refine: true,
             improve_prompt: true,
+            fanout: true,
         }
     }
 }

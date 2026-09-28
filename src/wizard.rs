@@ -468,6 +468,12 @@ fn build_claude_project(
         "Improves a prompt (or an agent's system prompt) in-session using Anthropic's technique.",
         true,
     )?;
+    p.claude.workflow.fanout = ask_confirm(
+        theme,
+        "Include the /fanout worktree command?",
+        "Fans work out to worktree-isolated subagents (parallel edits never collide); adds .worktreeinclude.",
+        true,
+    )?;
     if ask_confirm(
         theme,
         "Enable Agent Teams (experimental)?",

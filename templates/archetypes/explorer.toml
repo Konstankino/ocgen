@@ -10,12 +10,13 @@ permissions = """
     "*": deny
     "git diff*": allow
     "git log*": allow
-  webfetch: deny
+  webfetch: allow
 """
 
-# Claude Code defaults for this role.
+# Claude Code defaults for this role. The explorer researches, so it can fetch
+# web pages and search the web in addition to reading the codebase.
 claude_model = "opus"
-tools = "Read, Grep, Glob"
+tools = "Read, Grep, Glob, WebFetch, WebSearch"
 
 [description]
 Ukrainian = "Досліджує код та вхідні дані, звітує про знахідки; тільки читання"

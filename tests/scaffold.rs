@@ -936,7 +936,9 @@ fn claude_default_pipeline_scaffolds_a_full_project() {
     assert!(!dir.path().join(".claude/agents/coordinator.md").exists());
     let structure = read(dir.path(), ".claude/agents/explorer.md");
     assert!(structure.contains("model: opus"));
+    // The explorer can fetch web pages and search — needed for parallel research.
     assert!(structure.contains("tools: Read, Grep, Glob"));
+    assert!(structure.contains("WebFetch") && structure.contains("WebSearch"));
     let grammar = read(dir.path(), ".claude/agents/reviewer.md");
     assert!(grammar.contains("model: opus"));
 
@@ -973,6 +975,7 @@ fn claude_powerups_and_workflow_can_be_disabled() {
         intake: false,
         refine: false,
         improve_prompt: false,
+        fanout: false,
     };
     let mut a = Agent::blank("w", "custom", "");
     a.mode = "subagent".into();
@@ -1318,7 +1321,8 @@ fn claude_team_disabled_by_default_adds_nothing() {
         .path()
         .join(".claude/hooks/team-task-created.sh")
         .exists());
-    assert!(!read(dir.path(), "CLAUDE.md").contains("Agent Teams"));
+    // The Agent Teams guidance *section* is absent (prose elsewhere may mention the term).
+    assert!(!read(dir.path(), "CLAUDE.md").contains("## Agent Teams"));
 }
 
 #[test]
@@ -1691,6 +1695,83 @@ fn skill_presets_load_and_seed_skills() {
         .to_skill("research", "English");
     assert!(forked.context_fork);
     assert_eq!(forked.agent, "Explore");
+}
+
+#[test]
+fn claude_md_instructs_parallel_exploration() {
+    let mut p = base_project("English");
+    p.target = Target::ClaudeCode;
+    p.project_name = "px".into();
+    p.agents = agent::claude_default_pipeline("English").unwrap();
+    let dir = tempdir().unwrap();
+    p.scaffold(dir.path(), false).unwrap();
+
+    let md = read(dir.path(), "CLAUDE.md");
+    assert!(md.contains("Parallel exploration"));
+    assert!(md.contains("in parallel"));
+    assert!(md.contains("web page") && md.contains("PDF"));
+    // The Claude coordination guidance must not mandate serial delegation.
+    assert!(
+        !md.contains("do not run in parallel"),
+        "Claude coordination should not carry the local-server serial note"
+    );
+    assert!(!md.contains("{{") && !md.contains("{%"), "unrendered Jinja");
+}
+
+#[test]
+fn opencode_coordinator_prompt_stays_serial() {
+    // The local-single-server serial note is preserved for OpenCode (prompt file).
+    let mut p = base_project("English");
+    p.agents = agent::default_pipeline("English", "mac").unwrap();
+    let dir = tempdir().unwrap();
+    p.scaffold(dir.path(), false).unwrap();
+    let prompt = read(dir.path(), ".opencode/prompts/coordinator.txt");
+    assert!(prompt.contains("do not run in parallel"));
+}
+
+#[test]
+fn fanout_scaffolds_worktree_isolation_command_and_include() {
+    let mut p = base_project("English");
+    p.target = Target::ClaudeCode;
+    p.project_name = "wt".into();
+    p.agents = agent::claude_default_pipeline("English").unwrap();
+    let dir = tempdir().unwrap();
+    p.scaffold(dir.path(), false).unwrap();
+
+    // The writer runs isolated; read-only roles do not.
+    let implementer = read(dir.path(), ".claude/agents/implementer.md");
+    assert!(implementer.contains("isolation: worktree"));
+    assert!(!read(dir.path(), ".claude/agents/explorer.md").contains("isolation:"));
+    assert!(!read(dir.path(), ".claude/agents/reviewer.md").contains("isolation:"));
+
+    // The /fanout command and .worktreeinclude are emitted.
+    let fanout = read(dir.path(), ".claude/commands/fanout.md");
+    assert!(fanout.contains("worktree") && fanout.contains("merge") && fanout.contains("clean up"));
+    assert!(
+        !fanout.contains("{{") && !fanout.contains("{%"),
+        "unrendered Jinja"
+    );
+    let wti = read(dir.path(), ".worktreeinclude"); // project root, not under .claude/
+    assert!(wti.contains(".env"));
+
+    // CLAUDE.md documents the protocol.
+    assert!(read(dir.path(), "CLAUDE.md").contains("Parallel worktrees"));
+}
+
+#[test]
+fn fanout_disabled_omits_command_and_include() {
+    let mut p = base_project("English");
+    p.target = Target::ClaudeCode;
+    p.project_name = "nowt".into();
+    p.claude.workflow.fanout = false;
+    p.agents = agent::claude_default_pipeline("English").unwrap();
+    let dir = tempdir().unwrap();
+    p.scaffold(dir.path(), false).unwrap();
+    assert!(!dir.path().join(".claude/commands/fanout.md").exists());
+    assert!(!dir.path().join(".worktreeinclude").exists());
+    assert!(!read(dir.path(), "CLAUDE.md").contains("Parallel worktrees"));
+    // Isolation is archetype-driven, so it stays on the implementer regardless.
+    assert!(read(dir.path(), ".claude/agents/implementer.md").contains("isolation: worktree"));
 }
 
 #[test]

@@ -8,5 +8,8 @@ model: {{ agent.model }}
 {% if agent.color -%}
 color: {{ agent.color }}
 {% endif -%}
+{% if agent.isolation -%}
+isolation: {{ agent.isolation }}
+{% endif -%}
 ---
 {{ agent.body }}

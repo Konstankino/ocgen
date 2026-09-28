@@ -1,0 +1,4 @@
+# Gitignored files copied into each new Claude Code worktree (.gitignore syntax).
+# A worktree is a fresh checkout, so local-only config must be carried in explicitly.
+.env
+.env.local

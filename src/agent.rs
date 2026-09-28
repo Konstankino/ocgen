@@ -37,6 +37,9 @@ pub struct Agent {
     pub tools: String,
     /// Raw YAML block of provider-specific model options (empty = omit).
     pub options: String,
+    /// Claude Code isolation mode (Claude target only). `worktree` runs the
+    /// subagent in its own enforced git worktree; empty = no isolation.
+    pub isolation: String,
     /// Markdown system-prompt body.
     pub body: String,
     /// Whether to emit an external `.opencode/prompts/<name>.txt` file.
@@ -102,6 +105,7 @@ impl Agent {
             color: claude_color(&arch.color),
             description: arch.description_for(lang),
             body,
+            isolation: arch.claude_isolation(),
             ..Default::default()
         })
     }
@@ -171,6 +175,16 @@ mod tests {
         assert_eq!(boss.mode, "primary");
         assert_eq!(boss.model, "opus");
         assert!(!boss.body.is_empty());
+    }
+
+    #[test]
+    fn from_archetype_claude_sets_worktree_isolation_for_the_writer() {
+        // The implementer edits, so it runs in its own worktree.
+        let imp = Agent::from_archetype_claude("impl", "implementer", "English").unwrap();
+        assert_eq!(imp.isolation, "worktree");
+        // Read-only roles are not isolated.
+        let rev = Agent::from_archetype_claude("rev", "reviewer", "English").unwrap();
+        assert_eq!(rev.isolation, "");
     }
 
     #[test]

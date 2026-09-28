@@ -1,6 +1,29 @@
 # {{ project_name }}
 
 {{ instructions }}
+
+## Parallel exploration
+
+Gather information concurrently, not step by step. When the next action does not depend on a
+previous result, do it in parallel: batch multiple tool calls in a single turn, and for larger
+investigations spawn several exploration agents at once — e.g. one fetching a web page, one
+reading a PDF, one scanning the codebase. Exploration is read-only and side-effect-free, so
+running it in parallel is safe and finishes faster; serialize only on genuine dependencies.
+{% if fanout %}
+## Parallel worktrees
+
+For parallel work that **writes** files, fan it out to worktree-isolated subagents so edits never
+collide. Run `/fanout <task>`, or delegate to the `implementer` role (it runs with
+`isolation: worktree`): each worker gets its own checkout under `.claude/worktrees/<name>/` on its
+own branch, and Claude Code enforces the isolation — a worktree subagent cannot touch the main
+checkout. Give each worker a disjoint set of files, then merge each branch back and remove the
+worktree (`git worktree remove`) when done. Keep `.claude/worktrees/` git-ignored;
+`.worktreeinclude` carries local files like `.env` into each new worktree.
+
+Isolation is the *subagent* path. If Agent Teams is enabled, a named delegation becomes a
+shared-directory teammate instead — for conflict-free parallel writes, use the worktree/subagent
+route above.
+{% endif %}
 {% if subagents %}
 ## Agent team
 
@@ -28,6 +51,7 @@ of the agent roles above, runs in its own context, and coordinates through the s
 list and direct messages.
 
 - Give each teammate an independent slice; don't let two edit the same files.
+- Put read-only exploration (web pages, PDFs, code scans) on parallel teammates; serialize only on real dependencies.
 - 3–5 teammates is the sweet spot; teams use more tokens than a single session.
 - Experimental. `teammateMode` is set in this project's `settings.json`, but it's a
   user-level preference — move it to `~/.claude/settings.json` if it isn't honored here.

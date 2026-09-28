@@ -172,7 +172,7 @@ impl Project {
                     let txt = env
                         .render_str(
                             prompt_src,
-                            context! { subagents => &subs, language => lang },
+                            context! { subagents => &subs, language => lang, parallel => false },
                         )
                         .with_context(|| format!("rendering prompt for '{}'", agent.name))?;
                     out.push((
@@ -234,6 +234,7 @@ impl Project {
                 tools => agent.tools.trim(),
                 model => model,
                 color => agent.color,
+                isolation => agent.isolation.trim(),
                 body => agent.body,
             };
             let md = env
@@ -279,6 +280,16 @@ impl Project {
                     context! { language => lang },
                 )
                 .context("rendering improve-prompt command")?,
+            ));
+        }
+        if self.claude.workflow.fanout {
+            components.push((
+                "commands/fanout.md".to_string(),
+                env.render_str(
+                    &templates::load("claude/commands/fanout.md.j2")?,
+                    context! { language => lang },
+                )
+                .context("rendering fanout command")?,
             ));
         }
 
@@ -349,7 +360,10 @@ impl Project {
         // over subagents), so render it with that context for CLAUDE.md.
         let coordinator = match self.primary() {
             Some(p) => env
-                .render_str(&p.body, context! { subagents => &subs, language => lang })
+                .render_str(
+                    &p.body,
+                    context! { subagents => &subs, language => lang, parallel => true },
+                )
                 .context("rendering coordinator instructions")?,
             None => String::new(),
         };
@@ -367,6 +381,7 @@ impl Project {
                     plan_gate => self.claude.team.plan_gate,
                     confidence_threshold => self.claude.team.confidence_threshold,
                     risk_rounds => self.claude.team.risk_rounds,
+                    fanout => self.claude.workflow.fanout,
                     approval_gate => self.claude.team.approval_gate,
                 },
             )
@@ -385,6 +400,14 @@ impl Project {
             }
             out.push((PathBuf::from(".claude/settings.json"), settings.clone()));
             out.push((PathBuf::from("CLAUDE.md"), claude_md));
+            if self.claude.workflow.fanout {
+                // Root-level file (not under .claude/): gitignored files copied into
+                // each new worktree so isolated subagents carry local config.
+                out.push((
+                    PathBuf::from(".worktreeinclude"),
+                    templates::load("claude/worktreeinclude")?,
+                ));
+            }
         }
 
         if want_plugin {

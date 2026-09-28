@@ -1,0 +1,27 @@
+---
+description: Fan work out to worktree-isolated subagents so parallel edits never collide
+argument-hint: "[the task to parallelize]"
+---
+Parallelize this work across isolated worktrees: $ARGUMENTS
+
+## 1. Split into independent slices
+Break the task into slices that touch **disjoint sets of files** and have no cross-dependencies.
+If two slices would edit the same file, keep them in one slice (or sequence them). List the
+slices before spawning anything.
+
+## 2. Spawn one worktree-isolated subagent per slice
+Delegate each slice to a subagent that runs in its **own git worktree** (use the `implementer`
+role, or tell the agent to "use worktrees for your agents"). Each worktree lives under
+`.claude/worktrees/<name>/` on its own branch, and Claude Code enforces the isolation — a
+worktree subagent cannot edit the main checkout. Give each subagent only its slice's files.
+
+Note: if Agent Teams is enabled, a *named* delegation becomes a shared-directory teammate, not an
+isolated subagent. For isolated parallel *writes*, use this subagent/worktree path.
+
+## 3. Consolidate and merge back
+When the subagents finish, review their results, then **merge each worktree's branch** back into
+your working branch (resolve conflicts if any), and **clean up**: `git worktree remove` each one.
+
+## 4. Hygiene
+Ensure `.claude/worktrees/` is git-ignored (add the line if it is missing). `.worktreeinclude`
+already copies local files like `.env` into each new worktree.

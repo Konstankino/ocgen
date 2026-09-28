@@ -33,6 +33,9 @@ pub struct Archetype {
     /// Claude Code tool allow-list default for this role.
     #[serde(default)]
     pub tools: Option<String>,
+    /// Claude Code isolation default for this role (e.g. `worktree`).
+    #[serde(default)]
+    pub claude_isolation: Option<String>,
 }
 
 impl Archetype {
@@ -63,6 +66,11 @@ impl Archetype {
     /// Claude tool allow-list for this role (empty = inherit all).
     pub fn tools(&self) -> String {
         self.tools.clone().unwrap_or_default()
+    }
+
+    /// Claude isolation mode for this role (empty = none).
+    pub fn claude_isolation(&self) -> String {
+        self.claude_isolation.clone().unwrap_or_default()
     }
 }
 
