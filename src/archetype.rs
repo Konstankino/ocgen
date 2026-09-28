@@ -53,11 +53,11 @@ impl Archetype {
         self.prompt.as_ref().map(|m| pick(m, lang))
     }
 
-    /// Claude model alias for this role, defaulting to `sonnet`.
+    /// Claude model alias for this role, defaulting to `opus`.
     pub fn claude_model(&self) -> String {
         self.claude_model
             .clone()
-            .unwrap_or_else(|| "sonnet".to_string())
+            .unwrap_or_else(|| "opus".to_string())
     }
 
     /// Claude tool allow-list for this role (empty = inherit all).
@@ -80,7 +80,7 @@ mod tests {
 
     #[test]
     fn claude_accessors_default_when_absent() {
-        // A minimal archetype without claude_model/tools falls back to sonnet / empty.
+        // A minimal archetype without claude_model/tools falls back to opus / empty.
         let src = r#"
 mode = "subagent"
 default_model = "m"
@@ -93,7 +93,7 @@ English = "d"
 English = "b"
 "#;
         let a: Archetype = toml::from_str(src).unwrap();
-        assert_eq!(a.claude_model(), "sonnet");
+        assert_eq!(a.claude_model(), "opus");
         assert_eq!(a.tools(), "");
 
         // And when present, they are returned verbatim.

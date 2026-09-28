@@ -176,6 +176,10 @@ impl Default for Powerups {
 pub struct Workflow {
     pub intake: bool,
     pub refine: bool,
+    /// Emit the `/improve-prompt` command (improves a prompt in-session using
+    /// Anthropic's prompt-engineering technique). The matching skill preset is
+    /// available via `ocgen add skill`.
+    pub improve_prompt: bool,
 }
 
 impl Default for Workflow {
@@ -183,6 +187,7 @@ impl Default for Workflow {
         Self {
             intake: true,
             refine: true,
+            improve_prompt: true,
         }
     }
 }

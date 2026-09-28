@@ -1,0 +1,28 @@
+# Role: implementer. Makes the requested change and reports the edits. May edit files.
+mode = "subagent"
+default_model = "qwen3-coder-30b"
+temperature = "0.2"
+color = "#4ec9b0"
+steps = 30
+permissions = """
+  edit: allow
+  bash:
+    "*": ask
+    "cargo *": allow
+    "pytest*": allow
+    "git push*": deny
+"""
+
+# Claude Code defaults for this role.
+claude_model = "opus"
+tools = "Read, Edit, Write, Grep, Glob"
+
+[description]
+Ukrainian = "Реалізує зміну відповідно до задачі та перелічує внесені правки"
+English = "Implements the requested change and lists the edits made"
+
+[body]
+Ukrainian = """Ти виконавець. Отримуєш конкретну задачу і доводиш її до робочого стану.
+Мінімум пояснень, максимум роботи. У кінці — короткий список внесених змін."""
+English = """You are the implementer. You take a concrete task and bring it to a working state.
+Minimum explanation, maximum work. At the end — a short list of the changes you made."""

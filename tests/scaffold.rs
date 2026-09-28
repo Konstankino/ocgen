@@ -31,7 +31,7 @@ fn default_pipeline_scaffolds_and_matches_sample() {
 
     let dir = tempdir().unwrap();
     let written = project.scaffold(dir.path(), false).unwrap();
-    // 4 agents + orchestrator prompt + opencode.json + multi command = 7.
+    // 4 agents + coordinator prompt + opencode.json + multi command = 7.
     assert_eq!(written.len(), 7);
 
     let json: serde_json::Value = serde_json::from_str(&read(dir.path(), "opencode.json")).unwrap();
@@ -40,26 +40,26 @@ fn default_pipeline_scaffolds_and_matches_sample() {
     // Utility agents are now provider-qualified.
     assert_eq!(json["agent"]["compaction"]["model"], "mac/qwen3.5-9b");
 
-    let orch = read(dir.path(), ".opencode/agents/orchestrator.md");
+    let orch = read(dir.path(), ".opencode/agents/coordinator.md");
     assert!(orch.contains("mode: primary"));
     assert!(orch.contains("model: mac/qwen3-35b-a3b"));
-    assert!(orch.contains("prompt: \"{file:../prompts/orchestrator.txt}\""));
-    for sub in ["structure", "editor", "grammar"] {
+    assert!(orch.contains("prompt: \"{file:../prompts/coordinator.txt}\""));
+    for sub in ["explorer", "implementer", "reviewer"] {
         assert!(
             orch.contains(&format!("\"{sub}\": allow")),
             "task perm for {sub}"
         );
     }
 
-    let structure = read(dir.path(), ".opencode/agents/structure.md");
-    assert!(structure.contains("edit: deny"));
-    let editor = read(dir.path(), ".opencode/agents/editor.md");
-    assert!(editor.contains("steps: 30"));
-    assert!(editor.contains("color: \"#4ec9b0\""));
+    let explorer = read(dir.path(), ".opencode/agents/explorer.md");
+    assert!(explorer.contains("edit: deny"));
+    let implementer = read(dir.path(), ".opencode/agents/implementer.md");
+    assert!(implementer.contains("steps: 30"));
+    assert!(implementer.contains("color: \"#4ec9b0\""));
 
     let multi = read(dir.path(), ".opencode/commands/multi.md");
-    assert!(multi.contains("agent: orchestrator"));
-    assert!(multi.contains("@structure"));
+    assert!(multi.contains("agent: coordinator"));
+    assert!(multi.contains("@explorer"));
 
     for (rel, _) in project.render_all().unwrap() {
         let content = read(dir.path(), rel.to_str().unwrap());
@@ -82,11 +82,11 @@ fn multiple_providers_render_and_agents_pick_one() {
     });
 
     // A coordinator on the cloud provider, a subagent on the local one.
-    let mut lead = Agent::from_archetype("lead", "orchestrator", "English", "cloud").unwrap();
+    let mut lead = Agent::from_archetype("lead", "coordinator", "English", "cloud").unwrap();
     lead.model = "gpt-omni".into();
     project.agents = vec![
         lead,
-        Agent::from_archetype("grammar", "corrector", "English", "mac").unwrap(),
+        Agent::from_archetype("grammar", "verifier", "English", "mac").unwrap(),
     ];
 
     let dir = tempdir().unwrap();
@@ -177,7 +177,7 @@ fn all_opencode_agent_fields_render() {
 fn omitted_optional_fields_are_absent() {
     // A plain agent must not emit variant/top_p/disable/hidden/options lines.
     let mut project = base_project("English");
-    project.agents = vec![Agent::from_archetype("grammar", "corrector", "English", "mac").unwrap()];
+    project.agents = vec![Agent::from_archetype("grammar", "verifier", "English", "mac").unwrap()];
     let dir = tempdir().unwrap();
     project.scaffold(dir.path(), false).unwrap();
     let md = read(dir.path(), ".opencode/agents/grammar.md");
@@ -212,11 +212,11 @@ fn custom_named_roster_drives_cross_references() {
     let mut project = base_project("English");
     project.agents = vec![
         {
-            let mut lead = Agent::from_archetype("lead", "orchestrator", "English", "mac").unwrap();
+            let mut lead = Agent::from_archetype("lead", "coordinator", "English", "mac").unwrap();
             lead.description = "coordinator".into();
             lead
         },
-        Agent::from_archetype("proofer", "corrector", "English", "mac").unwrap(),
+        Agent::from_archetype("proofer", "verifier", "English", "mac").unwrap(),
         Agent::from_archetype("critic", "reviewer", "English", "mac").unwrap(),
     ];
 
@@ -261,9 +261,9 @@ fn add_agent_reloads_state_and_updates_references() {
     reloaded.scaffold(dir.path(), true).unwrap();
 
     assert!(dir.path().join(".opencode/agents/factcheck.md").exists());
-    let orch = read(dir.path(), ".opencode/agents/orchestrator.md");
+    let orch = read(dir.path(), ".opencode/agents/coordinator.md");
     assert!(orch.contains("\"factcheck\": allow"));
-    let prompt = read(dir.path(), ".opencode/prompts/orchestrator.txt");
+    let prompt = read(dir.path(), ".opencode/prompts/coordinator.txt");
     assert!(prompt.contains("factcheck"));
 }
 
@@ -281,33 +281,33 @@ fn edit_agent_field_and_rename_updates_and_cleans_up() {
     reloaded
         .agents
         .iter_mut()
-        .find(|a| a.name == "editor")
+        .find(|a| a.name == "implementer")
         .unwrap()
         .temperature = "0.5".into();
     // Rename another agent.
     reloaded
         .agents
         .iter_mut()
-        .find(|a| a.name == "grammar")
+        .find(|a| a.name == "reviewer")
         .unwrap()
         .name = "proof".into();
 
     reloaded.scaffold(dir.path(), true).unwrap();
-    Project::remove_agent_artifacts(dir.path(), "grammar").unwrap();
+    Project::remove_agent_artifacts(dir.path(), "reviewer").unwrap();
 
     // Field change took effect.
-    let editor = read(dir.path(), ".opencode/agents/editor.md");
+    let editor = read(dir.path(), ".opencode/agents/implementer.md");
     assert!(editor.contains("temperature: 0.5"));
 
     // Rename: new file exists, old removed, references follow.
     assert!(dir.path().join(".opencode/agents/proof.md").exists());
-    assert!(!dir.path().join(".opencode/agents/grammar.md").exists());
-    let orch = read(dir.path(), ".opencode/agents/orchestrator.md");
+    assert!(!dir.path().join(".opencode/agents/reviewer.md").exists());
+    let orch = read(dir.path(), ".opencode/agents/coordinator.md");
     assert!(orch.contains("\"proof\": allow"));
-    assert!(!orch.contains("\"grammar\": allow"));
-    let prompt = read(dir.path(), ".opencode/prompts/orchestrator.txt");
-    // The subagent is listed by its new name (description text may still mention "grammar").
-    assert!(prompt.contains("- proof —") && !prompt.contains("- grammar —"));
+    assert!(!orch.contains("\"reviewer\": allow"));
+    let prompt = read(dir.path(), ".opencode/prompts/coordinator.txt");
+    // The subagent is listed by its new name (description text may still mention "reviewer").
+    assert!(prompt.contains("- proof —") && !prompt.contains("- reviewer —"));
 }
 
 #[test]
@@ -333,7 +333,7 @@ fn add_provider_then_rename_key_propagates_to_agents() {
     let ed = reloaded
         .agents
         .iter_mut()
-        .find(|a| a.name == "editor")
+        .find(|a| a.name == "implementer")
         .unwrap();
     ed.provider = "cloud".into();
     ed.model = "gpt-omni".into();
@@ -341,7 +341,7 @@ fn add_provider_then_rename_key_propagates_to_agents() {
 
     let json: serde_json::Value = serde_json::from_str(&read(dir.path(), "opencode.json")).unwrap();
     assert!(json["provider"]["cloud"].is_object());
-    assert!(read(dir.path(), ".opencode/agents/editor.md").contains("model: cloud/gpt-omni"));
+    assert!(read(dir.path(), ".opencode/agents/implementer.md").contains("model: cloud/gpt-omni"));
 
     // Rename provider key cloud -> vllm; propagate to the agent that used it.
     let mut reloaded2 = Project::load_state(dir.path()).unwrap();
@@ -364,7 +364,7 @@ fn add_provider_then_rename_key_propagates_to_agents() {
         serde_json::from_str(&read(dir.path(), "opencode.json")).unwrap();
     assert!(json2["provider"]["vllm"].is_object());
     assert!(json2["provider"]["cloud"].is_null());
-    assert!(read(dir.path(), ".opencode/agents/editor.md").contains("model: vllm/gpt-omni"));
+    assert!(read(dir.path(), ".opencode/agents/implementer.md").contains("model: vllm/gpt-omni"));
 }
 
 #[test]
@@ -410,8 +410,8 @@ fn loads_legacy_single_provider_state() {
           "models": [{"id":"qwen3-35b-a3b","name":"Q"},{"id":"qwen3.5-9b","name":"Q9"}],
           "utility_model": "qwen3.5-9b",
           "agents": [
-            {"name":"orchestrator","archetype":"orchestrator","model":"qwen3-35b-a3b","mode":"primary","description":"boss"},
-            {"name":"grammar","archetype":"corrector","model":"qwen3.5-9b","mode":"subagent","description":"fix"}
+            {"name":"coordinator","archetype":"coordinator","model":"qwen3-35b-a3b","mode":"primary","description":"boss"},
+            {"name":"grammar","archetype":"verifier","model":"qwen3.5-9b","mode":"subagent","description":"fix"}
           ]
         }"#,
     );
@@ -424,19 +424,19 @@ fn loads_legacy_single_provider_state() {
     let orch = project
         .agents
         .iter()
-        .find(|a| a.name == "orchestrator")
+        .find(|a| a.name == "coordinator")
         .unwrap();
     assert_eq!(orch.provider, "mac"); // backfilled
-    assert_eq!(orch.role, "orchestrator"); // from legacy archetype
+    assert_eq!(orch.role, "coordinator"); // from archetype
     assert!(!orch.permissions.is_empty()); // from archetype
-    assert!(orch.prompt_file); // orchestrator archetype uses a prompt file
+    assert!(orch.prompt_file); // coordinator archetype uses a prompt file
 
     // And it re-renders into a valid current-schema project.
     project.scaffold(dir.path(), true).unwrap();
     let json: serde_json::Value = serde_json::from_str(&read(dir.path(), "opencode.json")).unwrap();
     assert_eq!(json["model"], "mac/qwen3-35b-a3b");
     assert!(
-        read(dir.path(), ".opencode/agents/orchestrator.md").contains("model: mac/qwen3-35b-a3b")
+        read(dir.path(), ".opencode/agents/coordinator.md").contains("model: mac/qwen3-35b-a3b")
     );
 }
 
@@ -511,7 +511,13 @@ fn templates_embedded_access() {
     assert!(templates::load("does/not/exist").is_err());
 
     let names = templates::archetype_names();
-    for n in ["orchestrator", "reviewer", "editor", "corrector"] {
+    for n in [
+        "coordinator",
+        "explorer",
+        "implementer",
+        "reviewer",
+        "verifier",
+    ] {
         assert!(names.contains(&n.to_string()), "missing archetype {n}");
     }
 
@@ -535,7 +541,7 @@ fn manifest_and_archetype_helpers() {
     assert_eq!(prov.model_index("qwen3.5-9b"), 0);
     assert_eq!(prov.model_index("does-not-exist"), 0); // fallback to 0
 
-    let orch = Archetype::load("orchestrator").unwrap();
+    let orch = Archetype::load("coordinator").unwrap();
     assert_eq!(orch.mode, "primary");
     assert!(orch.prompt_file);
     assert!(orch.prompt_for("English").is_some());
@@ -710,10 +716,10 @@ fn manifest_declares_the_default_pipeline() {
     assert_eq!(
         pairs,
         vec![
-            ("orchestrator", "orchestrator"),
-            ("structure", "reviewer"),
-            ("editor", "editor"),
-            ("grammar", "corrector"),
+            ("coordinator", "coordinator"),
+            ("explorer", "explorer"),
+            ("implementer", "implementer"),
+            ("reviewer", "reviewer"),
         ]
     );
 }
@@ -867,7 +873,7 @@ fn claude_project_renders_agents_command_settings_and_claude_md() {
 
     let settings: serde_json::Value =
         serde_json::from_str(&read(dir.path(), ".claude/settings.json")).unwrap();
-    assert_eq!(settings["model"], "sonnet");
+    assert_eq!(settings["model"], "opus");
     assert!(settings["permissions"]["allow"].is_array());
     assert_eq!(settings["outputStyle"], "Concise");
 
@@ -926,17 +932,17 @@ fn claude_default_pipeline_scaffolds_a_full_project() {
     let dir = tempdir().unwrap();
     p.scaffold(dir.path(), false).unwrap();
 
-    // orchestrator is primary → coordinator (CLAUDE.md), not an agent file.
-    assert!(!dir.path().join(".claude/agents/orchestrator.md").exists());
-    let structure = read(dir.path(), ".claude/agents/structure.md");
-    assert!(structure.contains("model: sonnet"));
+    // coordinator is primary → coordinator (CLAUDE.md), not an agent file.
+    assert!(!dir.path().join(".claude/agents/coordinator.md").exists());
+    let structure = read(dir.path(), ".claude/agents/explorer.md");
+    assert!(structure.contains("model: opus"));
     assert!(structure.contains("tools: Read, Grep, Glob"));
-    let grammar = read(dir.path(), ".claude/agents/grammar.md");
-    assert!(grammar.contains("model: haiku"));
+    let grammar = read(dir.path(), ".claude/agents/reviewer.md");
+    assert!(grammar.contains("model: opus"));
 
     let claude_md = read(dir.path(), "CLAUDE.md");
     assert!(claude_md.contains("# writing"));
-    assert!(claude_md.contains("**structure**"));
+    assert!(claude_md.contains("**explorer**"));
     // The coordinator's prompt template is fully rendered — no raw Jinja leaks.
     assert!(
         !claude_md.contains("{% for"),
@@ -945,11 +951,11 @@ fn claude_default_pipeline_scaffolds_a_full_project() {
     assert!(!claude_md.contains("{{ sub.name }}"));
 
     let multi = read(dir.path(), ".claude/commands/multi.md");
-    assert!(multi.contains("@structure") && multi.contains("@grammar"));
+    assert!(multi.contains("@explorer") && multi.contains("@reviewer"));
 
     let settings: serde_json::Value =
         serde_json::from_str(&read(dir.path(), ".claude/settings.json")).unwrap();
-    assert_eq!(settings["model"], "sonnet");
+    assert_eq!(settings["model"], "opus");
 }
 
 #[test]
@@ -966,6 +972,7 @@ fn claude_powerups_and_workflow_can_be_disabled() {
     p.claude.workflow = Workflow {
         intake: false,
         refine: false,
+        improve_prompt: false,
     };
     let mut a = Agent::blank("w", "custom", "");
     a.mode = "subagent".into();
@@ -981,7 +988,7 @@ fn claude_powerups_and_workflow_can_be_disabled() {
     assert!(!dir.path().join(".claude/commands/refine.md").exists());
     let settings: serde_json::Value =
         serde_json::from_str(&read(dir.path(), ".claude/settings.json")).unwrap();
-    assert_eq!(settings["model"], "sonnet");
+    assert_eq!(settings["model"], "opus");
     assert!(settings.get("permissions").is_none());
     assert!(settings.get("hooks").is_none());
     assert!(settings.get("outputStyle").is_none());
@@ -1026,8 +1033,8 @@ fn claude_settings_honors_explicit_model_and_defaults_empty_alias() {
     let settings: serde_json::Value =
         serde_json::from_str(&read(dir.path(), ".claude/settings.json")).unwrap();
     assert_eq!(settings["model"], "opus");
-    // An agent with no alias falls back to sonnet.
-    assert!(read(dir.path(), ".claude/agents/w.md").contains("model: sonnet"));
+    // An agent with no alias falls back to the default (opus).
+    assert!(read(dir.path(), ".claude/agents/w.md").contains("model: opus"));
 }
 
 #[test]
@@ -1094,7 +1101,7 @@ fn claude_plugin_output_emits_manifest_marketplace_and_workflow() {
     assert_eq!(mk["plugins"][0]["source"], "./");
 
     // Components live at the plugin root (no .claude/ prefix).
-    assert!(base.join("agents/structure.md").is_file());
+    assert!(base.join("agents/explorer.md").is_file());
     assert!(base.join("commands/multi.md").is_file());
     assert!(base.join("commands/intake.md").is_file());
     assert!(base.join("skills/commit/SKILL.md").is_file());
@@ -1110,7 +1117,7 @@ fn claude_plugin_output_emits_manifest_marketplace_and_workflow() {
     assert!(hj["hooks"]["SessionStart"].is_array());
 
     // `both` also wrote the project tree.
-    assert!(dir.path().join(".claude/agents/structure.md").is_file());
+    assert!(dir.path().join(".claude/agents/explorer.md").is_file());
     assert!(dir.path().join("CLAUDE.md").is_file());
 }
 
@@ -1200,12 +1207,12 @@ fn claude_doctor_repairs_alias_colour_and_role() {
     let fixes = p.doctor();
     assert!(fixes
         .iter()
-        .any(|f| f.contains("model alias") && f.contains("sonnet")));
+        .any(|f| f.contains("model alias") && f.contains("opus")));
     assert!(fixes
         .iter()
         .any(|f| f.contains("colour") && f.contains("blue")));
     assert!(fixes.iter().any(|f| f.contains("empty role")));
-    assert_eq!(p.agents[0].model, "sonnet");
+    assert_eq!(p.agents[0].model, "opus");
     assert_eq!(p.agents[0].color, "blue");
     assert_eq!(p.agents[0].role, "custom");
 
@@ -1234,9 +1241,9 @@ fn claude_rename_cleanup_helpers_remove_files() {
     let dir = tempdir().unwrap();
     p.scaffold(dir.path(), false).unwrap();
 
-    assert!(dir.path().join(".claude/agents/structure.md").is_file());
-    Project::remove_claude_agent_file(dir.path(), "structure").unwrap();
-    assert!(!dir.path().join(".claude/agents/structure.md").exists());
+    assert!(dir.path().join(".claude/agents/explorer.md").is_file());
+    Project::remove_claude_agent_file(dir.path(), "explorer").unwrap();
+    assert!(!dir.path().join(".claude/agents/explorer.md").exists());
 
     assert!(dir.path().join(".claude/skills/commit").is_dir());
     Project::remove_claude_skill_dir(dir.path(), "commit").unwrap();
@@ -1275,7 +1282,7 @@ fn claude_team_enabled_wires_settings_command_hooks_and_guidance() {
 
     let team_md = read(dir.path(), ".claude/commands/team.md");
     assert!(team_md.contains("$ARGUMENTS"));
-    assert!(team_md.contains("structure"));
+    assert!(team_md.contains("explorer"));
     assert!(!team_md.contains("{% for"), "unrendered Jinja in team.md");
     assert!(dir.path().join(".claude/commands/multi.md").is_file());
 
@@ -1684,4 +1691,47 @@ fn skill_presets_load_and_seed_skills() {
         .to_skill("research", "English");
     assert!(forked.context_fork);
     assert_eq!(forked.agent, "Explore");
+}
+
+#[test]
+fn improve_prompt_command_and_skill_preset() {
+    // Command is emitted when enabled (default), with the technique markers and no raw Jinja.
+    let mut p = base_project("English");
+    p.target = Target::ClaudeCode;
+    p.project_name = "ip".into();
+    p.agents = agent::claude_default_pipeline("English").unwrap();
+    let dir = tempdir().unwrap();
+    p.scaffold(dir.path(), false).unwrap();
+    let cmd = read(dir.path(), ".claude/commands/improve-prompt.md");
+    assert!(cmd.contains("<instructions>"));
+    assert!(cmd.contains("frontmatter"));
+    assert!(cmd.contains("example"));
+    assert!(
+        !cmd.contains("{{") && !cmd.contains("{%"),
+        "unrendered Jinja"
+    );
+
+    // The matching skill preset is available with edit-capable tools.
+    let presets = ocgen::claude::skill_presets().unwrap();
+    let ip = presets
+        .iter()
+        .find(|p| p.name == "improve-prompt")
+        .expect("improve-prompt preset");
+    assert!(ip.allowed_tools.contains("Edit") && ip.allowed_tools.contains("Read"));
+    assert!(ip.body.contains_key("English"));
+}
+
+#[test]
+fn improve_prompt_disabled_omits_command() {
+    let mut p = base_project("English");
+    p.target = Target::ClaudeCode;
+    p.project_name = "noip".into();
+    p.claude.workflow.improve_prompt = false;
+    p.agents = agent::claude_default_pipeline("English").unwrap();
+    let dir = tempdir().unwrap();
+    p.scaffold(dir.path(), false).unwrap();
+    assert!(!dir
+        .path()
+        .join(".claude/commands/improve-prompt.md")
+        .exists());
 }

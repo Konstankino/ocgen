@@ -280,12 +280,12 @@ fn show_agent_prints_config() {
 
     // A subagent: shows steps, no task block, and "called by" the coordinator.
     ocgen()
-        .args(["show", "agent", "editor", "-p"])
+        .args(["show", "agent", "implementer", "-p"])
         .arg(dir.path())
         .assert()
         .success()
         .stdout(contains("Configuration"))
-        .stdout(contains("mac/qwen3-35b-a3b"))
+        .stdout(contains("mac/qwen3-coder-30b"))
         .stdout(contains("steps"))
         .stdout(contains("Permissions"))
         .stdout(contains("System prompt"))
@@ -293,13 +293,13 @@ fn show_agent_prints_config() {
 
     // The primary: shows its delegates and the /multi command.
     ocgen()
-        .args(["show", "agent", "orchestrator", "-p"])
+        .args(["show", "agent", "coordinator", "-p"])
         .arg(dir.path())
         .assert()
         .success()
         .stdout(contains("delegates to"))
         .stdout(contains("/multi"))
-        .stdout(contains("\"structure\": allow")); // effective task block
+        .stdout(contains("\"explorer\": allow")); // effective task block
 
     // Unknown agent errors clearly.
     ocgen()
@@ -344,11 +344,11 @@ fn landscape_and_show_on_claude_project() {
         .stdout(contains("Topology"))
         .stdout(contains("no problems found"));
     ocgen()
-        .args(["show", "agent", "structure", "-p"])
+        .args(["show", "agent", "explorer", "-p"])
         .arg(dir.path())
         .assert()
         .success()
-        .stdout(contains("model: sonnet"))
+        .stdout(contains("model: opus"))
         .stdout(contains("tools: Read, Grep, Glob"))
         .stdout(contains("coordinated by"));
 }
@@ -380,7 +380,7 @@ fn doctor_repairs_claude_project() {
         .arg(dir.path())
         .assert()
         .success()
-        .stdout(contains("sonnet"));
+        .stdout(contains("opus"));
     ocgen()
         .arg("landscape")
         .arg(dir.path())
@@ -459,7 +459,7 @@ fn show_claude_coordinator_and_landscape_with_skills() {
 
     // Showing the coordinator uses the primary-agent branch.
     ocgen()
-        .args(["show", "agent", "orchestrator", "-p"])
+        .args(["show", "agent", "coordinator", "-p"])
         .arg(dir.path())
         .assert()
         .success()
@@ -545,6 +545,7 @@ fn claude_landscape_plugin_opus_and_no_workflow_no_subagents() {
     p.claude.workflow = Workflow {
         intake: false,
         refine: false,
+        improve_prompt: false,
     };
     let mut boss = Agent::blank("boss", "custom", "");
     boss.mode = "primary".into();
@@ -564,7 +565,7 @@ fn claude_landscape_plugin_opus_and_no_workflow_no_subagents() {
 }
 
 #[test]
-fn claude_landscape_and_show_empty_model_defaults_to_sonnet() {
+fn claude_landscape_and_show_empty_model_defaults_to_opus() {
     let dir = tempdir().unwrap();
     let m = Manifest::load().unwrap();
     let mut p = Project::from_manifest(&m, "English");
@@ -582,13 +583,13 @@ fn claude_landscape_and_show_empty_model_defaults_to_sonnet() {
         .arg(dir.path())
         .assert()
         .success()
-        .stdout(contains("sonnet"));
+        .stdout(contains("opus"));
     ocgen()
         .args(["show", "agent", "w", "-p"])
         .arg(dir.path())
         .assert()
         .success()
-        .stdout(contains("model: sonnet"))
+        .stdout(contains("model: opus"))
         .stdout(contains("(none)")); // empty body
 }
 

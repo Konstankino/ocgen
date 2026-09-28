@@ -1,0 +1,29 @@
+---
+description: Improve a prompt using Anthropic's prompt-engineering best practices
+argument-hint: "[prompt text | file path | agent name]"
+---
+Improve the prompt identified by: $ARGUMENTS
+
+## Resolve the target
+- If `$ARGUMENTS` is a path to a file, read it.
+- If it names an agent, read `.claude/agents/<name>.md`.
+- If it is inline text, use it directly.
+- If it is empty, ask which prompt to improve.
+
+For an agent or skill file, improve **only the system-prompt body** and preserve the YAML
+frontmatter (`name`, `model`, `tools`, `description`, …) **verbatim**.
+
+## Rewrite it applying these techniques
+1. State the role, task, and success criteria explicitly; remove ambiguity.
+2. Structure the sections with XML tags — e.g. `<context>`, `<instructions>`, `<example>`,
+   `<output_format>`.
+3. Add step-by-step reasoning guidance where the task benefits (let the model think first).
+4. Provide 1–3 concrete few-shot examples when they clarify the intent.
+5. Specify the exact output format.
+6. Keep it concise and current: don't over-prescribe, don't hardcode deprecated parameters,
+   and assume a capable modern model.
+
+## Output
+- Show the improved prompt.
+- Give a short bullet rationale: what you changed and why.
+- **Ask before writing changes back** to any file. On approval, write it, preserving frontmatter.

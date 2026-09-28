@@ -159,15 +159,15 @@ mod tests {
     #[test]
     fn from_archetype_claude_maps_role_to_alias_and_tools() {
         // Subagent role: alias + tools from the archetype, provider cleared.
-        let rev = Agent::from_archetype_claude("structure", "reviewer", "English").unwrap();
+        let rev = Agent::from_archetype_claude("explorer", "reviewer", "English").unwrap();
         assert_eq!(rev.mode, "subagent");
-        assert_eq!(rev.model, "sonnet");
+        assert_eq!(rev.model, "opus");
         assert_eq!(rev.tools, "Read, Grep, Glob");
         assert_eq!(rev.provider, "");
         assert!(!rev.description.is_empty());
 
         // Coordinator role: uses the archetype's rich prompt as its body.
-        let boss = Agent::from_archetype_claude("orchestrator", "orchestrator", "English").unwrap();
+        let boss = Agent::from_archetype_claude("coordinator", "coordinator", "English").unwrap();
         assert_eq!(boss.mode, "primary");
         assert_eq!(boss.model, "opus");
         assert!(!boss.body.is_empty());
@@ -179,7 +179,7 @@ mod tests {
         let names: Vec<&str> = team.iter().map(|a| a.name.as_str()).collect();
         assert_eq!(
             names,
-            vec!["orchestrator", "structure", "editor", "grammar"]
+            vec!["coordinator", "explorer", "implementer", "reviewer"]
         );
         assert!(team.iter().any(|a| a.mode == "primary"));
     }

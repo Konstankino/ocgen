@@ -8,7 +8,7 @@ use console::style;
 use dialoguer::{theme::ColorfulTheme, Confirm, Editor, Input, MultiSelect, Select};
 
 use ocgen::agent::{self, Agent};
-use ocgen::claude::{Output, Powerups, Skill, Team, Workflow};
+use ocgen::claude::{Output, Powerups, Skill, Team};
 use ocgen::manifest::{Manifest, Model, Provider};
 use ocgen::render::Project;
 use ocgen::target::Target;
@@ -413,13 +413,25 @@ fn build_claude_project(
     p.target = Target::ClaudeCode;
     p.project_name = project_name.to_string();
     p.providers.clear();
-    p.claude.model = "sonnet".to_string();
+    p.claude.model = "opus".to_string();
 
     ui::section("Agents");
     p.agents = collect_claude_agents(theme, manifest, language)?;
 
     ui::section("Project instructions (CLAUDE.md)");
-    let seed = "Conventions:\n- Write tests before fixes or features.\n- Keep changes small and focused.\n- Explain non-obvious decisions.\n".to_string();
+    // Capture the project's intent up front so the generic team steers toward it.
+    let purpose = ask_v(
+        theme,
+        "What is this project for?",
+        "One or two lines describing the goal; steers the generic team. Enter to skip.",
+        Some(""),
+        |_s: &str| -> Result<(), String> { Ok(()) },
+    )?;
+    let mut seed = String::new();
+    if !purpose.trim().is_empty() {
+        seed.push_str(&format!("## Purpose\n{}\n\n", purpose.trim()));
+    }
+    seed.push_str("Conventions:\n- Write tests before fixes or features.\n- Keep changes small and focused.\n- Explain non-obvious decisions.\n");
     p.claude.instructions = edit_multiline(
         theme,
         "CLAUDE.md",
@@ -447,11 +459,15 @@ fn build_claude_project(
         "A structured interview and a push-back/refine loop.",
         true,
     )? {
-        p.claude.workflow = Workflow {
-            intake: false,
-            refine: false,
-        };
+        p.claude.workflow.intake = false;
+        p.claude.workflow.refine = false;
     }
+    p.claude.workflow.improve_prompt = ask_confirm(
+        theme,
+        "Include the /improve-prompt command?",
+        "Improves a prompt (or an agent's system prompt) in-session using Anthropic's technique.",
+        true,
+    )?;
     if ask_confirm(
         theme,
         "Enable Agent Teams (experimental)?",
@@ -596,21 +612,27 @@ fn collect_claude_agents(
 }
 
 fn prompt_claude_agent(theme: &ColorfulTheme, language: &str, taken: &[String]) -> Result<Agent> {
-    let name = ask_v(
-        theme,
-        "  Agent name",
-        HELP_NAME,
-        None,
-        unique_ident(taken.to_vec(), "agent name"),
-    )?;
+    // Preset first, so the (generic) role name seeds the agent name.
     let mut presets = templates::archetype_names();
     let blank = "blank (custom role)".to_string();
     presets.push(blank.clone());
     let pidx = ask_select(theme, "  Start from preset", HELP_PRESET, &presets, 0)?;
+    let default_name = if presets[pidx] == blank {
+        "agent".to_string()
+    } else {
+        presets[pidx].clone()
+    };
+    let name = ask_v(
+        theme,
+        "  Agent name",
+        HELP_NAME,
+        Some(&default_name),
+        unique_ident(taken.to_vec(), "agent name"),
+    )?;
     let mut seed = if presets[pidx] == blank {
         let mut b = Agent::blank(&name, "custom", "");
         b.color = "blue".to_string();
-        b.model = "sonnet".to_string();
+        b.model = "opus".to_string();
         b
     } else {
         Agent::from_archetype_claude(&name, &presets[pidx], language)?
@@ -651,7 +673,7 @@ fn configure_claude_agent(
         "  Model alias",
         "opus / sonnet / haiku / inherit",
         Some(if a.model.trim().is_empty() {
-            "sonnet"
+            "opus"
         } else {
             a.model.trim()
         }),

@@ -378,7 +378,7 @@ fn run_claude(root: &Path, project: &Project) -> Result<()> {
             let model = if a.mode == "primary" {
                 ui::muted("—")
             } else if a.model.trim().is_empty() {
-                "sonnet".to_string()
+                "opus".to_string()
             } else {
                 a.model.trim().to_string()
             };
@@ -444,7 +444,7 @@ fn run_claude(root: &Path, project: &Project) -> Result<()> {
     ui::kv(
         "default model",
         &if project.claude.model.trim().is_empty() {
-            "sonnet".to_string()
+            "opus".to_string()
         } else {
             project.claude.model.clone()
         },
@@ -552,7 +552,7 @@ fn print_agent_claude(project: &Project, root: &Path, idx: usize) {
         );
     } else {
         let m = if a.model.trim().is_empty() {
-            "sonnet"
+            "opus"
         } else {
             a.model.trim()
         };

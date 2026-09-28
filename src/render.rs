@@ -224,7 +224,7 @@ impl Project {
         let agent_tmpl = templates::load("claude/agent.md.j2")?;
         for agent in self.agents.iter().filter(|a| a.mode != "primary") {
             let model = if agent.model.trim().is_empty() {
-                "sonnet"
+                "opus"
             } else {
                 agent.model.trim()
             };
@@ -269,6 +269,16 @@ impl Project {
                     context! { language => lang },
                 )
                 .context("rendering refine command")?,
+            ));
+        }
+        if self.claude.workflow.improve_prompt {
+            components.push((
+                "commands/improve-prompt.md".to_string(),
+                env.render_str(
+                    &templates::load("claude/commands/improve-prompt.md.j2")?,
+                    context! { language => lang },
+                )
+                .context("rendering improve-prompt command")?,
             ));
         }
 
@@ -467,7 +477,7 @@ impl Project {
     /// Build `.claude/settings.json` as validated JSON from the power-up toggles.
     fn claude_settings_json(&self) -> Result<String> {
         let model = if self.claude.model.trim().is_empty() {
-            "sonnet"
+            "opus"
         } else {
             self.claude.model.trim()
         };
@@ -515,12 +525,25 @@ impl Project {
         }
 
         let mut hooks = serde_json::Map::new();
-        if self.claude.powerups.hooks && self.claude.workflow.intake {
+        if self.claude.powerups.hooks
+            && (self.claude.workflow.intake || self.claude.workflow.improve_prompt)
+        {
+            let mut tip = String::from("Tip:");
+            if self.claude.workflow.intake {
+                tip.push_str(
+                    " run /intake to gather requirements, then /refine to iterate before approval.",
+                );
+            }
+            if self.claude.workflow.improve_prompt {
+                tip.push_str(
+                    " run /improve-prompt to sharpen a prompt or an agent's system prompt.",
+                );
+            }
             hooks.insert(
                 "SessionStart".into(),
                 json!([ { "hooks": [ {
                     "type": "command",
-                    "command": "echo 'Tip: run /intake to gather requirements, then /refine to iterate before approval.'"
+                    "command": format!("echo '{}'", tip.trim())
                 } ] } ]),
             );
         }
@@ -636,7 +659,7 @@ impl Project {
         let mut w = Vec::new();
         for a in &self.agents {
             let m = if a.model.trim().is_empty() {
-                "sonnet"
+                "opus"
             } else {
                 a.model.trim()
             };
@@ -663,10 +686,10 @@ impl Project {
             let m = a.model.trim().to_string();
             if m.is_empty() || !Self::CLAUDE_ALIASES.contains(&m.as_str()) {
                 fixes.push(format!(
-                    "agent '{}': model alias '{}' → sonnet",
+                    "agent '{}': model alias '{}' → opus",
                     a.name, a.model
                 ));
-                a.model = "sonnet".into();
+                a.model = "opus".into();
             }
             let c = a.color.trim().to_string();
             if !c.is_empty() && !Self::CLAUDE_COLORS.contains(&c.as_str()) {

@@ -35,6 +35,32 @@ Ukrainian = """Настанови щодо <теми>:
 - Пастка, якої слід уникати."""
 
 [[preset]]
+name = "improve-prompt"
+description = "Improve a prompt or an agent's system prompt using Anthropic's technique."
+allowed_tools = "Read, Edit, Write, Grep, Glob"
+[preset.body]
+English = """Improve the prompt in $ARGUMENTS (inline text, a file path, or an agent name).
+For an agent/skill file, improve only the system-prompt body and preserve the YAML frontmatter.
+
+Apply Anthropic's technique:
+1. State the role, task, and success criteria; remove ambiguity.
+2. Structure sections with XML tags (<context>, <instructions>, <example>, <output_format>).
+3. Add step-by-step reasoning where it helps; give 1-3 few-shot examples when useful.
+4. Specify the output format; keep it concise and current.
+
+Show the improved prompt and a short rationale, then ask before writing any file back."""
+Ukrainian = """Покращ промпт із $ARGUMENTS (текст, шлях до файлу або імʼя агента).
+Для файлу агента/скіла покращуй лише тіло системного промпту, зберігаючи YAML-фронтметр.
+
+Застосуй техніку Anthropic:
+1. Чітко визнач роль, задачу і критерії успіху; прибери неоднозначність.
+2. Структуруй розділи XML-тегами (<context>, <instructions>, <example>, <output_format>).
+3. Додай покрокові міркування, де це доречно; 1-3 приклади, коли корисно.
+4. Визнач формат виводу; тримай стисло й актуально.
+
+Покажи покращений промпт і коротке обґрунтування, тоді спитай дозволу перед записом у файл."""
+
+[[preset]]
 name = "forked-research"
 description = "Research a topic thoroughly in an isolated subagent."
 context_fork = true

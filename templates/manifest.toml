@@ -9,7 +9,7 @@
 key = "project_name"
 prompt = "Project name"
 help = "A label for this project; not written into OpenCode files."
-default = "my-writing-project"
+default = "my-project"
 
 [[variable]]
 key = "language"
@@ -59,20 +59,20 @@ name = "Qwen38 27B"
 # remove entries — or delete the whole section for no default team — to retarget
 # ocgen at any domain without touching code.
 [[pipeline]]
-name = "orchestrator"
-archetype = "orchestrator"
+name = "coordinator"
+archetype = "coordinator"
 
 [[pipeline]]
-name = "structure"
+name = "explorer"
+archetype = "explorer"
+
+[[pipeline]]
+name = "implementer"
+archetype = "implementer"
+
+[[pipeline]]
+name = "reviewer"
 archetype = "reviewer"
-
-[[pipeline]]
-name = "editor"
-archetype = "editor"
-
-[[pipeline]]
-name = "grammar"
-archetype = "corrector"
 
 # Fallbacks. primary_model is used for the top-level "model" when no agent is
 # primary; utility_provider/utility_model drive the compaction/title/summary agents.
