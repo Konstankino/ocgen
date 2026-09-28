@@ -976,6 +976,7 @@ fn claude_powerups_and_workflow_can_be_disabled() {
         refine: false,
         improve_prompt: false,
         fanout: false,
+        verify_todos: false,
     };
     let mut a = Agent::blank("w", "custom", "");
     a.mode = "subagent".into();
@@ -989,6 +990,8 @@ fn claude_powerups_and_workflow_can_be_disabled() {
 
     assert!(!dir.path().join(".claude/commands/intake.md").exists());
     assert!(!dir.path().join(".claude/commands/refine.md").exists());
+    // verify_todos off → no Verification-first todos guidance in CLAUDE.md.
+    assert!(!read(dir.path(), "CLAUDE.md").contains("Verification-first todos"));
     let settings: serde_json::Value =
         serde_json::from_str(&read(dir.path(), ".claude/settings.json")).unwrap();
     assert_eq!(settings["model"], "opus");
@@ -1727,6 +1730,23 @@ fn opencode_coordinator_prompt_stays_serial() {
     p.scaffold(dir.path(), false).unwrap();
     let prompt = read(dir.path(), ".opencode/prompts/coordinator.txt");
     assert!(prompt.contains("do not run in parallel"));
+}
+
+#[test]
+fn claude_md_instructs_verification_first_todos() {
+    let mut p = base_project("English");
+    p.target = Target::ClaudeCode;
+    p.project_name = "vt".into();
+    p.agents = agent::claude_default_pipeline("English").unwrap();
+    let dir = tempdir().unwrap();
+    p.scaffold(dir.path(), false).unwrap();
+
+    let md = read(dir.path(), "CLAUDE.md");
+    assert!(md.contains("Verification-first todos"));
+    assert!(md.contains("definition of done"));
+    assert!(md.contains("self-review"));
+    assert!(md.contains("confidence"));
+    assert!(!md.contains("{{") && !md.contains("{%"), "unrendered Jinja");
 }
 
 #[test]

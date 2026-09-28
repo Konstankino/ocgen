@@ -474,6 +474,12 @@ fn build_claude_project(
         "Fans work out to worktree-isolated subagents (parallel edits never collide); adds .worktreeinclude.",
         true,
     )?;
+    p.claude.workflow.verify_todos = ask_confirm(
+        theme,
+        "Include verification-first todo guidance?",
+        "CLAUDE.md guidance to build definition-of-done, per-task verification, self-review, and confidence into todos.",
+        true,
+    )?;
     if ask_confirm(
         theme,
         "Enable Agent Teams (experimental)?",

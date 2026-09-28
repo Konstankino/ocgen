@@ -183,6 +183,10 @@ pub struct Workflow {
     /// Emit the `/fanout` command + `.worktreeinclude` + CLAUDE.md protocol for
     /// fanning work out to worktree-isolated subagents.
     pub fanout: bool,
+    /// Emit CLAUDE.md guidance to build self-checking/verification into the todo
+    /// list for complex prompts (definition-of-done, per-task verify, self-review,
+    /// confidence self-rating).
+    pub verify_todos: bool,
 }
 
 impl Default for Workflow {
@@ -192,6 +196,7 @@ impl Default for Workflow {
             refine: true,
             improve_prompt: true,
             fanout: true,
+            verify_todos: true,
         }
     }
 }

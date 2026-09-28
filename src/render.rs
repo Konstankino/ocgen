@@ -382,6 +382,7 @@ impl Project {
                     confidence_threshold => self.claude.team.confidence_threshold,
                     risk_rounds => self.claude.team.risk_rounds,
                     fanout => self.claude.workflow.fanout,
+                    verify_todos => self.claude.workflow.verify_todos,
                     approval_gate => self.claude.team.approval_gate,
                 },
             )

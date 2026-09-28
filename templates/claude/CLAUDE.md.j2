@@ -1,7 +1,22 @@
 # {{ project_name }}
 
 {{ instructions }}
+{% if verify_todos %}
+## Verification-first todos
 
+For any complex or multi-step prompt, build self-checking into the plan — "done" means
+"verified," not "written":
+
+- **State the definition of done first.** Before starting, restate the prompt's acceptance
+  criteria as a short checklist so every later step has something concrete to check against.
+- **Pair every substantive task with a verify step.** After a change, run the relevant
+  test/command and re-read it against the criteria; only then mark the task complete. If the check
+  fails, add a fix task and repeat.
+- **End with a self-review.** Close a complex plan with a final review item: does the result meet
+  the original intent, are edge cases handled, did the checks pass?
+- **Rate your confidence.** State a confidence for each verified task and don't move on below a
+  high bar (~95%) — re-scope or dig deeper instead of guessing.
+{% endif %}
 ## Parallel exploration
 
 Gather information concurrently, not step by step. When the next action does not depend on a
