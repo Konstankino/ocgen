@@ -1733,6 +1733,31 @@ fn opencode_coordinator_prompt_stays_serial() {
 }
 
 #[test]
+fn session_start_tip_is_valid_shell() {
+    use std::process::Command;
+    // The default pipeline enables the improve-prompt tip, whose text contains an
+    // apostrophe ("agent's"); the generated `echo '...'` command must stay valid shell.
+    let mut p = base_project("English");
+    p.target = Target::ClaudeCode;
+    p.project_name = "tip".into();
+    p.agents = agent::claude_default_pipeline("English").unwrap();
+    let dir = tempdir().unwrap();
+    p.scaffold(dir.path(), false).unwrap();
+
+    let s: serde_json::Value =
+        serde_json::from_str(&read(dir.path(), ".claude/settings.json")).unwrap();
+    let cmd = s["hooks"]["SessionStart"][0]["hooks"][0]["command"]
+        .as_str()
+        .expect("SessionStart command");
+    let out = Command::new("sh").arg("-c").arg(cmd).output().unwrap();
+    assert!(
+        out.status.success(),
+        "SessionStart command is not valid shell: {cmd}\nstderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
 fn claude_md_instructs_verification_first_todos() {
     let mut p = base_project("English");
     p.target = Target::ClaudeCode;

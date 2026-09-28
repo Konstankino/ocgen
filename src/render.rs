@@ -563,11 +563,14 @@ impl Project {
                     " run /improve-prompt to sharpen a prompt or an agent's system prompt.",
                 );
             }
+            // Single-quote the echo argument, escaping any apostrophe in the tip
+            // (e.g. "agent's") as '\'' so the command stays valid POSIX shell.
+            let escaped = tip.trim().replace('\'', "'\\''");
             hooks.insert(
                 "SessionStart".into(),
                 json!([ { "hooks": [ {
                     "type": "command",
-                    "command": format!("echo '{}'", tip.trim())
+                    "command": format!("echo '{escaped}'")
                 } ] } ]),
             );
         }
