@@ -1694,6 +1694,35 @@ fn skill_presets_load_and_seed_skills() {
 }
 
 #[test]
+fn rendered_artifacts_use_lf_line_endings() {
+    // Guard against CRLF-corrupted templates (a Windows checkout without a
+    // .gitattributes turns the embedded .j2 templates and generated .sh hooks into
+    // CRLF, which breaks `contains("...\n...")` asserts and Unix shell hooks).
+    // Every rendered artifact must be LF-only, on every platform.
+    let mut oc = base_project("English");
+    oc.agents = agent::default_pipeline("English", "mac").unwrap();
+    for (rel, content) in oc.render_all().unwrap() {
+        assert!(!content.contains('\r'), "CR in {}", rel.display());
+    }
+
+    let mut cc = base_project("English");
+    cc.target = Target::ClaudeCode;
+    cc.claude.team = Team {
+        enabled: true,
+        mode: "in-process".into(),
+        hooks: true,
+        plan_gate: true,
+        confidence_threshold: 96,
+        risk_rounds: true,
+        approval_gate: true,
+    };
+    cc.agents = agent::claude_default_pipeline("English").unwrap();
+    for (rel, content) in cc.render_all().unwrap() {
+        assert!(!content.contains('\r'), "CR in {}", rel.display());
+    }
+}
+
+#[test]
 fn improve_prompt_command_and_skill_preset() {
     // Command is emitted when enabled (default), with the technique markers and no raw Jinja.
     let mut p = base_project("English");

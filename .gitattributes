@@ -1,0 +1,11 @@
+# Normalize all text files to LF in the repo and on checkout (every platform).
+# ocgen embeds its templates with rust-embed and generates POSIX `sh` hooks, so a
+# CRLF checkout (Windows default `core.autocrlf=true`) would corrupt rendered
+# output and break the hooks. Force LF so behavior is identical everywhere.
+* text=auto eol=lf
+
+# Explicitly binary (never normalize).
+*.webp binary
+*.png binary
+*.jpg binary
+*.ico binary
