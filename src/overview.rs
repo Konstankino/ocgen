@@ -455,7 +455,20 @@ fn run_claude(root: &Path, project: &Project) -> Result<()> {
         } else {
             project.claude.team.mode.trim()
         };
-        ui::kv("agent teams", &format!("enabled ({mode})"));
+        let mut tags = vec![mode.to_string()];
+        if project.claude.team.plan_gate {
+            tags.push("plan-gate".to_string());
+        }
+        if project.claude.team.confidence_threshold > 0 {
+            tags.push(format!("≥{}%", project.claude.team.confidence_threshold));
+        }
+        if project.claude.team.risk_rounds {
+            tags.push("risk rounds".to_string());
+        }
+        if project.claude.team.approval_gate {
+            tags.push("approval-gate".to_string());
+        }
+        ui::kv("agent teams", &format!("enabled ({})", tags.join(", ")));
     }
 
     let subs: Vec<&str> = project

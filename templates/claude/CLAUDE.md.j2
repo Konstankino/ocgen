@@ -31,4 +31,35 @@ list and direct messages.
 - 3–5 teammates is the sweet spot; teams use more tokens than a single session.
 - Experimental. `teammateMode` is set in this project's `settings.json`, but it's a
   user-level preference — move it to `~/.claude/settings.json` if it isn't honored here.
+{% if plan_gate or risk_rounds or confidence_threshold or approval_gate %}
+### Governed workflow
+
+This team runs under governance gates. The team keeps its working state under `.claude/team/`:
+`plan.md` (the shared task list, intent, and risk register) and `confidence/<task-id>.txt`
+(a teammate's self-assessed confidence). These are created at runtime — don't pre-author them.
+{% if plan_gate %}
+- **Plan approval first.** Run `/team-plan` before executing: interview, draft the shared task
+  list, present it, and take questions and requested improvements until the user approves. The
+  `TaskCreated` hook blocks execution tasks until `.claude/team/plan.md` contains `Status: APPROVED`.
+{%- endif %}
+{% if confidence_threshold %}
+- **Confidence gate.** Before completing a task, a teammate records its confidence in
+  `.claude/team/confidence/<task-id>.txt`; the `TaskCompleted` hook blocks completion below
+  ≥ {{ confidence_threshold }}%. A teammate may not pick up the next task until the current one clears the gate.
+{%- endif %}
+{% if risk_rounds %}
+- **Risk mitigation rounds.** Every risk in the register gets its own mitigation round; leave it
+  `Mitigation: pending` until addressed, then mark it `done` or `accepted`. The `TeammateIdle`
+  hook keeps teammates working while any risk is still pending.
+{%- endif %}
+{% if approval_gate %}
+- **Execution-approval gate (hard line).** No agent may perform a high-impact external action —
+  `ssh`, cloud mutations (`aws`/`gcloud`/`az`), `git push`/`merge`, `gh pr merge`/`release`,
+  `terraform apply`, `kubectl`/`helm`, deploys, or publishes — until a **human** reviews and
+  unlocks execution. Unlock only from your own terminal (never through a tool call):
+  `touch .claude/team/execution-approved`; delete it to re-lock. A deterministic `PreToolUse`
+  hook enforces this and refuses any attempt by an agent to create the marker itself. Plan and
+  local edits are allowed before the line; crossing it into external side effects is not.
+{%- endif %}
+{%- endif %}
 {% endif %}

@@ -296,10 +296,27 @@ impl Project {
             let team_cmd = env
                 .render_str(
                     &templates::load("claude/commands/team.md.j2")?,
-                    context! { subagents => &subs, language => lang },
+                    context! {
+                        subagents => &subs,
+                        language => lang,
+                        plan_gate => self.claude.team.plan_gate,
+                    },
                 )
                 .context("rendering team command")?;
             components.push(("commands/team.md".to_string(), team_cmd));
+            if self.claude.team.plan_gate {
+                let plan_cmd = env
+                    .render_str(
+                        &templates::load("claude/commands/team-plan.md.j2")?,
+                        context! {
+                            subagents => &subs,
+                            language => lang,
+                            confidence_threshold => self.claude.team.confidence_threshold,
+                        },
+                    )
+                    .context("rendering team-plan command")?;
+                components.push(("commands/team-plan.md".to_string(), plan_cmd));
+            }
             if self.claude.team.hooks {
                 for h in [
                     "team-teammate-idle.sh",
@@ -309,6 +326,12 @@ impl Project {
                     let body = templates::load(&format!("claude/hooks/{h}"))?;
                     components.push((format!("hooks/{h}"), body));
                 }
+            }
+            // The execution-approval gate is emitted independently of `hooks` so
+            // this safety line is never silently disabled.
+            if self.claude.team.approval_gate {
+                let body = templates::load("claude/hooks/team-approval-gate.sh")?;
+                components.push(("hooks/team-approval-gate.sh".to_string(), body));
             }
         }
 
@@ -331,6 +354,10 @@ impl Project {
                     language => lang,
                     team => self.claude.team.enabled,
                     team_mode => self.teammate_mode(),
+                    plan_gate => self.claude.team.plan_gate,
+                    confidence_threshold => self.claude.team.confidence_threshold,
+                    risk_rounds => self.claude.team.risk_rounds,
+                    approval_gate => self.claude.team.approval_gate,
                 },
             )
             .context("rendering CLAUDE.md")?;
@@ -466,10 +493,24 @@ impl Project {
             );
         }
         if self.claude.team.enabled {
-            obj.insert(
-                "env".into(),
-                json!({ "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1" }),
-            );
+            let mut env = serde_json::Map::new();
+            env.insert("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS".into(), json!("1"));
+            if self.claude.team.plan_gate {
+                env.insert("TEAM_PLAN_GATE".into(), json!("1"));
+            }
+            if self.claude.team.confidence_threshold > 0 {
+                env.insert(
+                    "TEAM_CONFIDENCE_THRESHOLD".into(),
+                    json!(self.claude.team.confidence_threshold.to_string()),
+                );
+            }
+            if self.claude.team.risk_rounds {
+                env.insert("TEAM_RISK_ROUNDS".into(), json!("1"));
+            }
+            if self.claude.team.approval_gate {
+                env.insert("TEAM_APPROVAL_GATE".into(), json!("1"));
+            }
+            obj.insert("env".into(), Value::Object(env));
             obj.insert("teammateMode".into(), json!(self.teammate_mode()));
         }
 
@@ -497,6 +538,21 @@ impl Project {
                     } ] } ]),
                 );
             }
+        }
+        // Execution-approval gate: a PreToolUse hook scoped (via `matcher`) to the
+        // tools that can perform or self-approve high-impact actions. Emitted
+        // whenever the gate is on, independent of the `hooks` toggle.
+        if self.claude.team.enabled && self.claude.team.approval_gate {
+            hooks.insert(
+                "PreToolUse".into(),
+                json!([ {
+                    "matcher": "Bash|Write|Edit|MultiEdit|NotebookEdit",
+                    "hooks": [ {
+                        "type": "command",
+                        "command": "sh \"${CLAUDE_PROJECT_DIR}/.claude/hooks/team-approval-gate.sh\""
+                    } ]
+                } ]),
+            );
         }
         if !hooks.is_empty() {
             obj.insert("hooks".into(), Value::Object(hooks));
@@ -630,6 +686,13 @@ impl Project {
                     self.claude.team.mode
                 ));
                 self.claude.team.mode = "in-process".into();
+            }
+            if self.claude.team.confidence_threshold > 100 {
+                fixes.push(format!(
+                    "team confidence threshold {} → 96",
+                    self.claude.team.confidence_threshold
+                ));
+                self.claude.team.confidence_threshold = 96;
             }
         }
         fixes

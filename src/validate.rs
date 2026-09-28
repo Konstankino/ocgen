@@ -103,6 +103,15 @@ pub fn teammate_mode(s: &str) -> Result<(), String> {
     }
 }
 
+/// A team confidence threshold: an integer 0–100 (0 disables the gate).
+pub fn confidence_threshold(s: &str) -> Result<(), String> {
+    match s.trim().parse::<u16>() {
+        Ok(n) if n <= 100 => Ok(()),
+        Ok(_) => Err("must be between 0 and 100".into()),
+        Err(_) => Err("must be a whole number between 0 and 100".into()),
+    }
+}
+
 /// A non-empty value that contains no whitespace (e.g. an npm package name).
 pub fn nonempty_nospace(s: &str) -> Result<(), String> {
     if s.is_empty() {
@@ -219,6 +228,17 @@ mod tests {
         assert!(teammate_mode(" tmux ").is_ok()); // trimmed
         assert!(teammate_mode("").is_err());
         assert!(teammate_mode("split").is_err());
+    }
+
+    #[test]
+    fn confidence_thresholds() {
+        for ok in ["0", "96", "100", " 96 "] {
+            assert!(confidence_threshold(ok).is_ok(), "{ok}");
+        }
+        assert!(confidence_threshold("101").is_err());
+        assert!(confidence_threshold("-1").is_err());
+        assert!(confidence_threshold("").is_err());
+        assert!(confidence_threshold("abc").is_err());
     }
 
     #[test]

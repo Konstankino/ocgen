@@ -15,7 +15,7 @@ use ocgen::target::Target;
 use ocgen::templates;
 use ocgen::validate::{self, unique_ident};
 
-use crate::cli::{OutputArg, TargetArg};
+use crate::cli::{OutputArg, TargetArg, TeamCli};
 use crate::ui;
 
 // Per-field help, shown dimmed above each prompt so the user is reminded what it means.
@@ -280,7 +280,7 @@ pub fn run_new(
     base_url: Option<String>,
     output: OutputArg,
     repo: Option<String>,
-    team: bool,
+    team: TeamCli,
 ) -> Result<()> {
     let theme = ColorfulTheme::default();
     let manifest = Manifest::load().context("loading manifest.toml")?;
@@ -407,7 +407,7 @@ fn build_claude_project(
     project_name: &str,
     output: OutputArg,
     repo: Option<String>,
-    team: bool,
+    team: TeamCli,
 ) -> Result<Project> {
     let mut p = Project::from_manifest(manifest, language);
     p.target = Target::ClaudeCode;
@@ -456,18 +456,53 @@ fn build_claude_project(
         theme,
         "Enable Agent Teams (experimental)?",
         "Adds CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1, a /team command, and CLAUDE.md guidance.",
-        team,
+        team.enabled,
     )? {
         let hooks = ask_confirm(
             theme,
             "Include team quality-gate hook stubs?",
-            "TeammateIdle/TaskCreated/TaskCompleted no-op scripts you can fill in.",
+            "TeammateIdle/TaskCreated/TaskCompleted scripts that enforce the governance gates.",
             true,
+        )?;
+        let plan_gate = ask_confirm(
+            theme,
+            "Require an approved plan before tasks start (/team-plan gate)?",
+            "Emits /team-plan; TaskCreated is blocked until .claude/team/plan.md is APPROVED.",
+            team.plan_gate,
+        )?;
+        let default_conf = team
+            .confidence
+            .map_or_else(|| "96".to_string(), |n| n.to_string());
+        let confidence_threshold = ask_v(
+            theme,
+            "Minimum teammate confidence before the next task (0–100, 0 = off)",
+            "A teammate must record ≥ this % before completing a task; enforced by TaskCompleted.",
+            Some(&default_conf),
+            validate::confidence_threshold,
+        )?
+        .parse::<u8>()
+        .unwrap_or(96);
+        let risk_rounds = ask_confirm(
+            theme,
+            "Require a mitigation round for every identified risk?",
+            "Teammates stay busy until each risk in the plan's register is mitigated or accepted.",
+            team.risk_rounds,
+        )?;
+        let approval_gate = ask_confirm(
+            theme,
+            "Gate high-impact external actions behind human approval?",
+            "Deterministic PreToolUse hook blocks ssh, cloud mutations, git push/merge, deploys \
+             & publishes until a human creates .claude/team/execution-approved.",
+            team.approval_gate,
         )?;
         p.claude.team = Team {
             enabled: true,
             mode: "in-process".to_string(),
             hooks,
+            plan_gate,
+            confidence_threshold,
+            risk_rounds,
+            approval_gate,
         };
     }
 

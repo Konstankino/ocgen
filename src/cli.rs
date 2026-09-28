@@ -35,6 +35,18 @@ pub enum Command {
         /// Enable Claude Code Agent Teams (experimental) in the generated project.
         #[arg(long)]
         team: bool,
+        /// Default minimum teammate confidence (0–100, 0 = off) for the governance gate.
+        #[arg(long, value_name = "N")]
+        team_confidence: Option<u8>,
+        /// Default the plan-approval gate (/team-plan) to off in the wizard.
+        #[arg(long)]
+        no_plan_gate: bool,
+        /// Default risk-mitigation rounds to off in the wizard.
+        #[arg(long)]
+        no_risk_rounds: bool,
+        /// Default the execution approval gate (high-impact external actions) to off.
+        #[arg(long)]
+        no_approval_gate: bool,
     },
     /// Add something to an existing project.
     Add {
@@ -70,6 +82,16 @@ pub enum Command {
         #[command(subcommand)]
         action: TemplatesAction,
     },
+}
+
+/// Team governance defaults gathered from CLI flags, used to seed the wizard's
+/// Agent Teams prompts (the wizard stays interactive; these set the defaults).
+pub struct TeamCli {
+    pub enabled: bool,
+    pub confidence: Option<u8>,
+    pub plan_gate: bool,
+    pub risk_rounds: bool,
+    pub approval_gate: bool,
 }
 
 /// Which platform `ocgen new` generates for.

@@ -598,7 +598,11 @@ fn new_advertises_team_flag() {
         .args(["new", "--help"])
         .assert()
         .success()
-        .stdout(contains("--team"));
+        .stdout(contains("--team"))
+        .stdout(contains("--team-confidence"))
+        .stdout(contains("--no-plan-gate"))
+        .stdout(contains("--no-risk-rounds"))
+        .stdout(contains("--no-approval-gate"));
 }
 
 #[test]
@@ -613,6 +617,10 @@ fn landscape_shows_agent_teams_when_enabled() {
         enabled: true,
         mode: "in-process".into(),
         hooks: true,
+        plan_gate: true,
+        confidence_threshold: 96,
+        risk_rounds: true,
+        approval_gate: true,
     };
     p.agents = agent::claude_default_pipeline("English").unwrap();
     p.scaffold(dir.path(), false).unwrap();
@@ -623,5 +631,9 @@ fn landscape_shows_agent_teams_when_enabled() {
         .assert()
         .success()
         .stdout(contains("agent teams"))
-        .stdout(contains("in-process"));
+        .stdout(contains("in-process"))
+        .stdout(contains("plan-gate"))
+        .stdout(contains("≥96%"))
+        .stdout(contains("risk rounds"))
+        .stdout(contains("approval-gate"));
 }

@@ -1,0 +1,63 @@
+---
+description: {% if language == "Ukrainian" %}Побудувати й затвердити спільний план команди до виконання{% else %}Build and approve the team's shared plan before execution{% endif %}
+argument-hint: "[what the team should accomplish]"
+---
+{% if language == "Ukrainian" -%}
+Мета: $ARGUMENTS
+
+Спроєктуй **спільний план** команди разом із користувачем, перш ніж хтось почне роботу.
+
+## 1. Інтерв'ю
+Став добре продумані питання по одному (2–4 варіанти за замовчуванням, рекомендований першим,
+з однорядковим поясненням). Охопи обсяг, обмеження, критерії успіху, крайні випадки та те, що
+поза межами. Решту виведи самостійно й зазнач, що саме припустив.
+
+## 2. Спільний список задач
+Запиши намір і нумерований список задач у `.claude/team/plan.md`. Дай кожній задачі id та роль-
+виконавця з-поміж: {% for sub in subagents %}{{ sub.name }}{% if not loop.last %}, {% endif %}{% endfor %}.
+Дві задачі не повинні редагувати одні й ті самі файли.
+
+## 3. Реєстр ризиків — раунд пом'якшення для КОЖНОГО ризику
+У тому ж файлі перелічи всі передбачувані ризики. Для кожного додай рядок `Mitigation: pending`
+та конкретну задачу з пом'якшення. Жоден ризик не проходить без власного раунду пом'якшення —
+лишай `pending`, доки не оброблено, потім познач `done` або `accepted`.
+
+## 4. Презентація та доопрацювання
+Презентуй план і **явно запроси заперечення з аргументами**. Відповідай на питання й вноси
+запитані зміни/покращення. Повторюй, доки користувач не схвалить. НЕ спавни виконавців і не
+створюй задач виконання на цьому етапі.
+
+## 5. Схвалення
+Після схвалення додай рядок `Status: APPROVED` до `.claude/team/plan.md`, потім передай роботу
+`/team`. Кожен teammate має зафіксувати впевненість ≥ {{ confidence_threshold }}%
+(у `.claude/team/confidence/<task-id>.txt`) перед завершенням задачі.
+{%- else -%}
+Goal: $ARGUMENTS
+
+Design the team's **shared plan** collaboratively before any teammate starts work.
+
+## 1. Interview
+Ask well-designed questions one at a time (2–4 default options, recommended first, one-line
+reason). Cover scope, constraints, success criteria, edge cases, and out-of-scope items. Infer
+the rest and state what you inferred.
+
+## 2. Draft the shared task list
+Write the intent and a numbered task list to `.claude/team/plan.md`. Give every task an id and
+an owner role from: {% for sub in subagents %}{{ sub.name }}{% if not loop.last %}, {% endif %}{% endfor %}.
+Two tasks must not touch the same files.
+
+## 3. Risk register — a mitigation round for EVERY risk
+In the same file, list every risk you can foresee. For each risk add a line `Mitigation: pending`
+and a concrete mitigation task. No risk ships without its own mitigation round; leave it
+`pending` until it is addressed, then mark it `done` or `accepted`.
+
+## 4. Present and refine
+Present the plan and **explicitly invite push-back with reasons.** Answer questions and fold in
+the updates/improvements requested. Iterate until the user approves. Do NOT spawn execution
+teammates or create execution tasks yet.
+
+## 5. Approve
+Once the user approves, append a line `Status: APPROVED` to `.claude/team/plan.md`, then hand off
+to `/team` to execute. Each teammate must record ≥ {{ confidence_threshold }}% confidence (in
+`.claude/team/confidence/<task-id>.txt`) before completing a task.
+{%- endif %}

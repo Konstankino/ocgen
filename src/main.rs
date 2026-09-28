@@ -7,7 +7,9 @@ mod wizard;
 use anyhow::Result;
 use clap::Parser;
 
-use cli::{AddWhat, Cli, Command, EditWhat, OutputArg, ShowWhat, TargetArg, TemplatesAction};
+use cli::{
+    AddWhat, Cli, Command, EditWhat, OutputArg, ShowWhat, TargetArg, TeamCli, TemplatesAction,
+};
 use ocgen::templates;
 
 fn main() -> Result<()> {
@@ -19,6 +21,10 @@ fn main() -> Result<()> {
         output: OutputArg::Project,
         repo: None,
         team: false,
+        team_confidence: None,
+        no_plan_gate: false,
+        no_risk_rounds: false,
+        no_approval_gate: false,
     }) {
         Command::New {
             path,
@@ -27,7 +33,20 @@ fn main() -> Result<()> {
             output,
             repo,
             team,
-        } => wizard::run_new(path, target, base_url, output, repo, team)?,
+            team_confidence,
+            no_plan_gate,
+            no_risk_rounds,
+            no_approval_gate,
+        } => {
+            let team = TeamCli {
+                enabled: team,
+                confidence: team_confidence,
+                plan_gate: !no_plan_gate,
+                risk_rounds: !no_risk_rounds,
+                approval_gate: !no_approval_gate,
+            };
+            wizard::run_new(path, target, base_url, output, repo, team)?
+        }
         Command::Add { what } => match what {
             AddWhat::Agent { path } => wizard::run_add_agent(path)?,
             AddWhat::Provider { path } => wizard::run_add_provider(path)?,

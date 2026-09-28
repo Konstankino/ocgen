@@ -34,6 +34,10 @@ fn main() -> anyhow::Result<()> {
                 enabled: true,
                 mode: "in-process".into(),
                 hooks: true,
+                plan_gate: true,
+                confidence_threshold: 96,
+                risk_rounds: true,
+                approval_gate: true,
             };
         }
         cp.claude.instructions =

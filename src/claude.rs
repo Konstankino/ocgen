@@ -116,6 +116,20 @@ pub struct Team {
     pub mode: String,
     /// Emit commented TeammateIdle/TaskCreated/TaskCompleted hook stubs.
     pub hooks: bool,
+    /// Emit the `/team-plan` command and gate task creation on an approved plan
+    /// (`.claude/team/plan.md` must contain `Status: APPROVED`).
+    pub plan_gate: bool,
+    /// Minimum self-assessed confidence (0–100) a teammate must record before a
+    /// task may be completed. `0` disables the gate. Defaults to 96 in the wizard.
+    pub confidence_threshold: u8,
+    /// Require a mitigation round for every risk in the plan's risk register
+    /// before teammates may go idle.
+    pub risk_rounds: bool,
+    /// Gate high-impact external / substantial-side-effect actions (ssh, cloud
+    /// mutations, git push/merge, deploys, publishes) behind a human-created
+    /// approval marker, enforced deterministically by a PreToolUse hook. This is
+    /// emitted independently of `hooks` so the safety line is never silently off.
+    pub approval_gate: bool,
 }
 
 /// Which artifact trees to write.

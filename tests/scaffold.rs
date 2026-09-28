@@ -1258,6 +1258,7 @@ fn claude_team_enabled_wires_settings_command_hooks_and_guidance() {
         enabled: true,
         mode: "in-process".into(),
         hooks: true,
+        ..Default::default()
     };
     p.agents = agent::claude_default_pipeline("English").unwrap();
 
@@ -1321,6 +1322,7 @@ fn claude_doctor_repairs_bad_teammate_mode() {
         enabled: true,
         mode: "split".into(),
         hooks: false,
+        ..Default::default()
     };
     let mut a = Agent::blank("w", "custom", "");
     a.mode = "subagent".into();
@@ -1343,6 +1345,7 @@ fn claude_team_enabled_without_hook_stubs() {
         enabled: true,
         mode: "auto".into(),
         hooks: false,
+        ..Default::default()
     };
     let mut a = Agent::blank("w", "custom", "");
     a.mode = "subagent".into();
@@ -1363,6 +1366,243 @@ fn claude_team_enabled_without_hook_stubs() {
     assert!(!dir.path().join(".claude/hooks").exists());
     // …but the /team command is still emitted.
     assert!(dir.path().join(".claude/commands/team.md").is_file());
+}
+
+#[test]
+fn team_governance_wires_settings_command_and_hooks() {
+    let mut p = base_project("English");
+    p.target = Target::ClaudeCode;
+    p.project_name = "gov".into();
+    p.claude.team = Team {
+        enabled: true,
+        mode: "in-process".into(),
+        hooks: true,
+        plan_gate: true,
+        confidence_threshold: 96,
+        risk_rounds: true,
+        approval_gate: true,
+    };
+    p.agents = agent::claude_default_pipeline("English").unwrap();
+
+    let dir = tempdir().unwrap();
+    p.scaffold(dir.path(), false).unwrap();
+
+    // settings.json carries the governance env vars alongside the experiment flag.
+    let s: serde_json::Value =
+        serde_json::from_str(&read(dir.path(), ".claude/settings.json")).unwrap();
+    assert_eq!(s["env"]["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"], "1");
+    assert_eq!(s["env"]["TEAM_CONFIDENCE_THRESHOLD"], "96");
+    assert_eq!(s["env"]["TEAM_PLAN_GATE"], "1");
+    assert_eq!(s["env"]["TEAM_RISK_ROUNDS"], "1");
+    assert_eq!(s["env"]["TEAM_APPROVAL_GATE"], "1");
+
+    // The execution-approval gate is a PreToolUse hook with a tool-name matcher.
+    let pre = &s["hooks"]["PreToolUse"][0];
+    assert!(pre["matcher"].as_str().unwrap().contains("Bash"));
+    assert!(pre["hooks"][0]["command"]
+        .as_str()
+        .unwrap()
+        .contains("team-approval-gate.sh"));
+    let gate = read(dir.path(), ".claude/hooks/team-approval-gate.sh");
+    assert!(gate.contains("TEAM_APPROVAL_GATE"));
+    assert!(gate.contains("execution-approved")); // the human-created marker
+    assert!(gate.contains("git") && gate.contains("push")); // deterministic patterns
+
+    // The collaborative planning command is emitted and fully rendered.
+    let plan_cmd = read(dir.path(), ".claude/commands/team-plan.md");
+    assert!(plan_cmd.contains("Status: APPROVED"));
+    assert!(
+        !plan_cmd.contains("{{") && !plan_cmd.contains("{%"),
+        "unrendered Jinja"
+    );
+
+    // The gate logic lives in the hook scripts.
+    let created = read(dir.path(), ".claude/hooks/team-task-created.sh");
+    assert!(created.contains("TEAM_PLAN_GATE"));
+    assert!(created.contains("Status: APPROVED"));
+    let completed = read(dir.path(), ".claude/hooks/team-task-completed.sh");
+    assert!(completed.contains("TEAM_CONFIDENCE_THRESHOLD"));
+    let idle = read(dir.path(), ".claude/hooks/team-teammate-idle.sh");
+    assert!(idle.contains("TEAM_RISK_ROUNDS"));
+
+    // Guidance documents the governed workflow and the threshold.
+    let claude_md = read(dir.path(), "CLAUDE.md");
+    assert!(claude_md.contains("Governed workflow"));
+    assert!(claude_md.contains("96%"));
+}
+
+#[test]
+fn team_confidence_zero_disables_gate() {
+    let mut p = base_project("English");
+    p.target = Target::ClaudeCode;
+    p.project_name = "noconf".into();
+    p.claude.team = Team {
+        enabled: true,
+        mode: "in-process".into(),
+        hooks: true,
+        plan_gate: false,
+        confidence_threshold: 0,
+        risk_rounds: false,
+        approval_gate: false,
+    };
+    p.agents = agent::claude_default_pipeline("English").unwrap();
+    let dir = tempdir().unwrap();
+    p.scaffold(dir.path(), false).unwrap();
+
+    let s: serde_json::Value =
+        serde_json::from_str(&read(dir.path(), ".claude/settings.json")).unwrap();
+    // Governance env vars are omitted when their features are off…
+    assert!(s["env"].get("TEAM_CONFIDENCE_THRESHOLD").is_none());
+    assert!(s["env"].get("TEAM_PLAN_GATE").is_none());
+    assert!(s["env"].get("TEAM_RISK_ROUNDS").is_none());
+    assert!(s["env"].get("TEAM_APPROVAL_GATE").is_none());
+    assert!(s["hooks"].get("PreToolUse").is_none());
+    assert!(!dir
+        .path()
+        .join(".claude/hooks/team-approval-gate.sh")
+        .exists());
+    // …and the plan command is not emitted when the plan gate is off.
+    assert!(!dir.path().join(".claude/commands/team-plan.md").exists());
+    // The base team command is still emitted.
+    assert!(dir.path().join(".claude/commands/team.md").is_file());
+}
+
+#[test]
+fn approval_gate_emits_even_without_hook_stubs() {
+    // The safety line must never be silently off: approval_gate emits its
+    // PreToolUse hook independently of the `hooks` toggle.
+    let mut p = base_project("English");
+    p.target = Target::ClaudeCode;
+    p.project_name = "gate".into();
+    p.claude.team = Team {
+        enabled: true,
+        mode: "in-process".into(),
+        hooks: false,
+        plan_gate: false,
+        confidence_threshold: 0,
+        risk_rounds: false,
+        approval_gate: true,
+    };
+    let mut a = Agent::blank("w", "custom", "");
+    a.mode = "subagent".into();
+    a.model = "sonnet".into();
+    p.agents = vec![a];
+    let dir = tempdir().unwrap();
+    p.scaffold(dir.path(), false).unwrap();
+
+    let s: serde_json::Value =
+        serde_json::from_str(&read(dir.path(), ".claude/settings.json")).unwrap();
+    assert_eq!(s["env"]["TEAM_APPROVAL_GATE"], "1");
+    assert!(s["hooks"]["PreToolUse"].is_array());
+    // The other team quality-gate hooks stay off (hooks: false).
+    assert!(s["hooks"].get("TaskCreated").is_none());
+    assert!(dir
+        .path()
+        .join(".claude/hooks/team-approval-gate.sh")
+        .is_file());
+    assert!(!dir
+        .path()
+        .join(".claude/hooks/team-task-created.sh")
+        .exists());
+}
+
+#[test]
+fn approval_gate_hook_blocks_high_impact_until_human_unlock() {
+    use std::io::Write as _;
+    use std::process::{Command, Stdio};
+
+    let mut p = base_project("English");
+    p.target = Target::ClaudeCode;
+    p.project_name = "exec".into();
+    p.claude.team = Team {
+        enabled: true,
+        mode: "in-process".into(),
+        hooks: true,
+        plan_gate: true,
+        confidence_threshold: 96,
+        risk_rounds: true,
+        approval_gate: true,
+    };
+    p.agents = agent::claude_default_pipeline("English").unwrap();
+    let dir = tempdir().unwrap();
+    p.scaffold(dir.path(), false).unwrap();
+    let hook = dir.path().join(".claude/hooks/team-approval-gate.sh");
+
+    // Run the generated hook with a PreToolUse payload; return its exit code.
+    let run = |payload: &str| -> i32 {
+        let mut child = Command::new("sh")
+            .arg(&hook)
+            .env("CLAUDE_PROJECT_DIR", dir.path())
+            .env("TEAM_APPROVAL_GATE", "1")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(payload.as_bytes())
+            .unwrap();
+        child.wait().unwrap().code().unwrap()
+    };
+    let bash = |cmd: &str| format!(r#"{{"tool_name":"Bash","tool_input":{{"command":"{cmd}"}}}}"#);
+
+    // Locked (no marker): local/read-only work is allowed…
+    assert_eq!(run(&bash("git status")), 0);
+    assert_eq!(run(&bash("npm test")), 0);
+    // …but every high-impact external action is blocked (exit 2).
+    for cmd in [
+        "git push origin main",
+        "gh pr merge 42 --merge",
+        "aws s3 rm s3://b/x --recursive",
+        "aws ec2 terminate-instances --instance-ids i-1",
+        "ssh prod uptime",
+        "terraform apply -auto-approve",
+        "curl -X POST https://api/x -d @p",
+    ] {
+        assert_eq!(run(&bash(cmd)), 2, "should block: {cmd}");
+    }
+    // An agent may not self-approve by creating the marker (Bash or file write).
+    assert_eq!(run(&bash("touch .claude/team/execution-approved")), 2);
+    assert_eq!(
+        run(
+            r#"{"tool_name":"Write","tool_input":{"file_path":".claude/team/execution-approved","content":"x"}}"#
+        ),
+        2
+    );
+
+    // Human unlocks from outside the agent → high-impact actions proceed.
+    fs::create_dir_all(dir.path().join(".claude/team")).unwrap();
+    fs::write(dir.path().join(".claude/team/execution-approved"), "").unwrap();
+    assert_eq!(run(&bash("git push origin main")), 0);
+    assert_eq!(run(&bash("aws s3 rm s3://b/x")), 0);
+}
+
+#[test]
+fn claude_doctor_repairs_bad_confidence_threshold() {
+    let mut p = base_project("English");
+    p.target = Target::ClaudeCode;
+    p.claude.team = Team {
+        enabled: true,
+        mode: "in-process".into(),
+        hooks: true,
+        plan_gate: true,
+        confidence_threshold: 250,
+        risk_rounds: true,
+        approval_gate: true,
+    };
+    let mut a = Agent::blank("w", "custom", "");
+    a.mode = "subagent".into();
+    a.model = "sonnet".into();
+    p.agents = vec![a];
+
+    let fixes = p.doctor();
+    assert!(fixes
+        .iter()
+        .any(|f| f.contains("confidence") && f.contains("96")));
+    assert_eq!(p.claude.team.confidence_threshold, 96);
 }
 
 // ---- Claude Code target: richer skill authoring (phase 8) ----

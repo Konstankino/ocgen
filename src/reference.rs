@@ -202,9 +202,28 @@ const CLAUDE_FIELDS: &[Field] = &[
         label: "agent teams",
         detail: "Opt-in (experimental). Enables Claude Code Agent Teams: sets \
                  CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 and teammateMode in settings.json, \
-                 emits a /team command, CLAUDE.md guidance, and commented quality-gate hook \
-                 stubs. Your subagent roles double as reusable teammates.",
+                 emits a /team command, CLAUDE.md guidance, and quality-gate hook \
+                 scripts. Your subagent roles double as reusable teammates.",
         example: "--team  (mode: in-process)",
+    },
+    Field {
+        label: "team governance",
+        detail: "Optional gates layered on Agent Teams. Plan gate: /team-plan builds the shared \
+                 task list + risk register and the TaskCreated hook blocks work until \
+                 .claude/team/plan.md is APPROVED. Confidence gate: a teammate must record \
+                 >= N% (0 disables) before completing a task. Risk rounds: every risk gets a \
+                 mitigation round before teammates go idle.",
+        example: "--team-confidence 96  --no-plan-gate  --no-risk-rounds",
+    },
+    Field {
+        label: "execution approval gate",
+        detail: "Deterministic human-approval line for high-impact EXTERNAL actions (ssh, cloud \
+                 mutations, git push/merge, gh pr merge/release, terraform/kubectl/helm, deploys, \
+                 publishes). A PreToolUse hook pattern-matches the command and blocks it until a \
+                 human creates .claude/team/execution-approved from their own terminal; agents are \
+                 refused if they try to create the marker themselves. Emitted independently of the \
+                 quality-gate hook stubs so it is never silently off.",
+        example: "on by default with --team;  --no-approval-gate to disable",
     },
 ];
 

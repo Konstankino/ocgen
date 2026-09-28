@@ -1,7 +1,17 @@
 #!/bin/sh
-# Claude Code Agent Teams — TeammateIdle hook.
-# Runs when a teammate is about to go idle.
-#   exit 0  -> allow the teammate to go idle (default; safe no-op).
-#   exit 2  -> keep it working and send feedback on stderr, e.g.:
-#              echo "You still have open tasks — keep going." >&2; exit 2
+# Claude Code Agent Teams — TeammateIdle hook (risk-mitigation gate).
+# Governance is driven by env vars set in .claude/settings.json:
+#   TEAM_RISK_ROUNDS=1 -> keep teammates working while any risk in the plan's
+#                         register is still pending mitigation.
+# In .claude/team/plan.md, a risk is open while its line reads "Mitigation: pending"
+# (case-insensitive); change it to "Mitigation: done" or "Mitigation: accepted".
+#   exit 0 -> allow idle.   exit 2 -> keep working and send feedback on stderr.
+[ "${TEAM_RISK_ROUNDS:-0}" = "1" ] || exit 0
+
+plan="${CLAUDE_PROJECT_DIR:-.}/.claude/team/plan.md"
+if [ -f "$plan" ] && grep -qi '^[[:space:]]*[-*]\{0,1\}[[:space:]]*Mitigation:[[:space:]]*pending' "$plan"; then
+    echo "Risks still need mitigation rounds. Address each 'Mitigation: pending' entry" >&2
+    echo "in .claude/team/plan.md (mark it done or accepted) before going idle." >&2
+    exit 2
+fi
 exit 0
