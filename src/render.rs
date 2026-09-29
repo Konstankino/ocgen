@@ -462,9 +462,10 @@ impl Project {
             }
             out.push((PathBuf::from(".claude/settings.json"), settings.clone()));
             out.push((PathBuf::from("CLAUDE.md"), claude_md));
-            if self.claude.workflow.fanout {
+            if self.claude.workflow.fanout || self.claude.workflow.deliver {
                 // Root-level file (not under .claude/): gitignored files copied into
-                // each new worktree so isolated subagents carry local config.
+                // each new worktree — `.env` plus, when `.claude/` is ignored, the
+                // settings/hooks/rules that /fanout and multi-session delivery need.
                 out.push((
                     PathBuf::from(".worktreeinclude"),
                     templates::load("claude/worktreeinclude")?,
@@ -587,6 +588,11 @@ impl Project {
         }
         if self.claude.powerups.output_style {
             obj.insert("outputStyle".into(), json!("Concise"));
+        }
+        if self.claude.workflow.fanout {
+            // Worktrees (fanout workers, --worktree sessions) branch from the current
+            // HEAD, so they see unpushed work and merge back cleanly.
+            obj.insert("worktree".into(), json!({ "baseRef": "head" }));
         }
         if self.claude.powerups.statusline {
             obj.insert(

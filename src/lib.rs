@@ -8,6 +8,7 @@
 pub mod agent;
 pub mod archetype;
 pub mod claude;
+pub mod gitcheck;
 pub mod manifest;
 pub mod render;
 pub mod seeds;

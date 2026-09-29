@@ -2,3 +2,14 @@
 # A worktree is a fresh checkout, so local-only config must be carried in explicitly.
 .env
 .env.local
+
+# Claude config — a safety net for projects that git-ignore `.claude/`: only
+# ignored files are copied, so these lines do nothing once `.claude/` is committed
+# (recommended). Without them a worktree session would start with no settings,
+# hooks (approval gate, confidence gates, loop guard) or rules. Agents, commands
+# and skills are deliberately absent: Claude Code reads them live from the main
+# checkout. Runtime state (notes, loop-guard, worktrees) is never copied.
+.claude/settings.json
+.claude/rules/*.md
+.claude/hooks/*.sh
+.claude/output-styles/*.md

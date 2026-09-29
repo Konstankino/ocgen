@@ -1074,6 +1074,12 @@ pub fn run_doctor(path: String) -> Result<()> {
     // Rewrite everything (regenerates files and upgrades the state file schema).
     let written = project.scaffold(&target, true)?;
     report_written(&written);
+    // Not auto-fixable: the project's .gitignore belongs to the user.
+    if project.target == Target::ClaudeCode
+        && ocgen::gitcheck::claude_config_ignored(&target) == Some(true)
+    {
+        ui::warning(ocgen::gitcheck::IGNORED_CONFIG_WARNING);
+    }
     Ok(())
 }
 

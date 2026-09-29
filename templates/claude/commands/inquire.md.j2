@@ -5,11 +5,13 @@ argument-hint: "[topic or first question — empty to resume]"
 Help me understand this codebase: $ARGUMENTS
 
 Be my research partner, not an oracle: answer with evidence, and coach me toward better questions.
-Stay read-only — the only file you write is the ledger.
+Stay read-only — the only file written is the ledger, and a background helper writes it (step 4).
 
 ## 0. Resume or orient
 Each topic has a ledger at `.claude/notes/<topic-slug>.md`; make sure `.claude/notes/` is git-ignored
-(add the line if it is missing).
+(add the line if it is missing). If this session runs inside a worktree (its path is under
+`.claude/worktrees/`), warn me first: notes written here are lost when the worktree is removed, so
+studying — which is read-only — belongs in the main checkout.
 
 - **No arguments** (or `resume`): list the ledgers in `.claude/notes/` — topic, last updated, number
   of open questions — most recent first, and let me pick one. If there are none, ask for a topic.
@@ -57,9 +59,16 @@ map it closes, or the Inferred claim it would verify:
 Prefer lenses I haven't used yet, and concrete traces over "how does X work". If I keep asking
 "what" questions, push me toward "why" and "what if".
 
-## 4. Update the ledger
+## 4. Update the ledger — quietly
 Update it after **every** answer — I may close the session at any moment without saying stop.
-Keep this header at the top, rewritten each time:
+**Don't edit the ledger yourself**: an inline edit shows me a diff that repeats the answer I just
+read. Instead hand the update to a **background subagent** (`model: haiku` is enough) with the exact
+text to write, and carry on with the conversation. Keep one ledger writer at a time — if the
+previous update is still running, wait for it before starting the next, so they never collide.
+Only if subagents are unavailable, edit it directly and keep the change small. Don't mention the
+update in your reply.
+
+The ledger keeps this header at the top, rewritten each time:
 
 ```
 Topic: <human-readable topic>
@@ -71,16 +80,17 @@ Next questions: <the 3 pending suggestions, lens-tagged>
 <≤ 7 bullets: what I understand so far>
 ```
 
-Below it, append the answer to the **Q&A log** (question → short answer → `file:line` evidence →
-Verified or Inferred), and refresh the **Map**, the **Glossary** of project terms, and **Open
-questions / hypotheses**. Keep it terse — a reference, not a transcript.
+Below it, append the answer to the **Q&A log** in ≤ 4 lines: the question, a one-line answer, the key
+`file:line` citations, and Verified or Inferred (discrepancies you found get one extra line each).
+Refresh the **Map**, the **Glossary** of project terms, and **Open questions / hypotheses**. It's a
+reference to resume from, not a transcript — the full answer is already in our conversation.
 
 ## 5. Checkpoint
-Every ~5 questions, or when I ask: summarize my mental model in ≤ 10 bullets (and refresh the
-ledger's **Mental model** from it), list the biggest remaining unknowns, and optionally ask me to explain a piece back in my own words — then point out
+Every ~5 questions, or when I ask: summarize my mental model in ≤ 10 bullets (and have the
+background helper refresh the ledger's **Mental model** from it), list the biggest remaining unknowns, and optionally ask me to explain a piece back in my own words — then point out
 gaps or misconceptions.
 
-Loop steps 1–4 until I say stop. On exit, finalize the ledger (resume point and mental model
-included), list the top open questions, and remind me that `/inquire` with no arguments picks up
-from here. If I
-want to change something, hand off to `/deliver <goal>` with the relevant ledger section as context.
+Loop steps 1–4 until I say stop. On exit, have the helper finalize the ledger (resume point and
+mental model included) and wait for it to finish, list the top open questions, and remind me that
+`/inquire` with no arguments picks up from here. If I want to change something, hand off to
+`/deliver <goal>` with the relevant ledger section as context.

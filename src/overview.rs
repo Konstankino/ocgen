@@ -519,7 +519,10 @@ fn run_claude(root: &Path, project: &Project) -> Result<()> {
         println!("  {} {}", ui::muted("command:"), style("/multi").cyan());
     }
 
-    let warnings = project.issues();
+    let mut warnings = project.issues();
+    if ocgen::gitcheck::claude_config_ignored(root) == Some(true) {
+        warnings.push(ocgen::gitcheck::IGNORED_CONFIG_WARNING.to_string());
+    }
     if warnings.is_empty() {
         ui::section("Checks");
         ui::success("no problems found");

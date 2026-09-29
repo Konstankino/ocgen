@@ -300,6 +300,8 @@ Say "stop" to finish; it finalizes the ledger and lists the open questions. The 
 run `/deliver <change>` — the ledger becomes its starting context.
 
 **Resuming later.** The ledger is saved after every answer, so you can simply close the session.
+It's written quietly by a background subagent (on `haiku`), so you don't get a diff after every
+answer that repeats what you just read. Each Q&A entry is capped at 4 lines.
 To come back hours or days later, start a new session and run `/inquire` with **no arguments**: it
 lists your ledgers, newest first, and you pick one. `/inquire <topic>` resumes that topic directly.
 You get a one-screen **refresher** before continuing:
@@ -375,6 +377,33 @@ unlimited, not recommended). Set a subagent's max turns with `ocgen edit agent`.
 `.claude/loop-guard/` directory git-ignores itself. Projects made by older versions get the
 loop guard from `ocgen doctor`. Their existing agents keep unlimited turns until you set
 max turns with `ocgen edit agent`.
+
+#### Worktrees: commit `.claude/`
+
+A git worktree is a fresh checkout of **tracked** files. `claude --worktree <name>` sessions,
+desktop worktree sessions and ocgen's multi-session delivery all start in one. If your project
+git-ignores `.claude/`, these sessions start **without** its settings, hooks and rules. That
+means no approval gate, confidence gates or loop guard, no permission deny list, and whatever
+model your `~/.claude/settings.json` names. Agents and commands still load, because Claude
+Code reads them from the main checkout. Skills need Claude Code 2.1.277+ for that.
+
+- **Commit `.claude/`** (recommended) and ignore only the local parts: `.claude/settings.local.json`,
+  `.claude/worktrees/`, `.claude/notes/`, `.claude/loop-guard/` and `.claude/team/execution-*`.
+- **Detection:** `ocgen landscape` and `ocgen doctor` warn when `.claude/` is git-ignored.
+- **Safety net:** the generated `.worktreeinclude` copies `.claude/settings.json`, the rules, the
+  hook scripts and the output styles into each new worktree. It only copies files that are
+  git-ignored, so it does nothing once `.claude/` is committed. The copy is a snapshot taken
+  when the worktree is created.
+- **Base branch:** with `/fanout` enabled, `settings.json` sets `"worktree": {"baseRef": "head"}`.
+  `/fanout` workers and `--worktree` sessions then branch from your current commit and include
+  unpushed work, instead of `origin`'s default branch.
+- **Study in the main checkout:** `/inquire` is read-only. Notes written inside a worktree are
+  lost when it's removed, and the isolation checks stop a worktree session from writing to the
+  main checkout. `/inquire` warns if you run it in a worktree.
+
+Subagent isolation (`/fanout`, the implementer's `isolation: worktree`) is not affected by an
+ignored `.claude/`. The parent session in your main checkout owns the settings, and its hooks
+fire for the subagent's tool calls.
 
 Every other command is target-aware. On a Claude project, `ocgen landscape` shows the
 agents' aliases and tools, the skills, the workflow/output setup, the delegation topology
