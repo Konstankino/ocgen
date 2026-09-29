@@ -1561,12 +1561,9 @@ fn approval_gate_hook_blocks_high_impact_until_human_unlock() {
             .stderr(Stdio::null())
             .spawn()
             .unwrap();
-        child
-            .stdin
-            .take()
-            .unwrap()
-            .write_all(payload.as_bytes())
-            .unwrap();
+        // The hook may exit before reading stdin (e.g. threshold 0), closing the
+        // pipe; a BrokenPipe on our write is expected, so ignore the write result.
+        let _ = child.stdin.take().unwrap().write_all(payload.as_bytes());
         child.wait().unwrap().code().unwrap()
     };
     let bash = |cmd: &str| format!(r#"{{"tool_name":"Bash","tool_input":{{"command":"{cmd}"}}}}"#);
@@ -1857,12 +1854,9 @@ fn subagent_confidence_gate_blocks_low_confidence_writers() {
             .stderr(Stdio::null())
             .spawn()
             .unwrap();
-        child
-            .stdin
-            .take()
-            .unwrap()
-            .write_all(payload.as_bytes())
-            .unwrap();
+        // The hook may exit before reading stdin (e.g. threshold 0), closing the
+        // pipe; a BrokenPipe on our write is expected, so ignore the write result.
+        let _ = child.stdin.take().unwrap().write_all(payload.as_bytes());
         child.wait().unwrap().code().unwrap()
     };
     let ev = |msg: &str| {
@@ -1891,12 +1885,12 @@ fn subagent_confidence_gate_blocks_low_confidence_writers() {
         .stderr(Stdio::null())
         .spawn()
         .unwrap();
-    child
+    // Threshold 0 makes the hook exit before reading stdin; ignore the BrokenPipe.
+    let _ = child
         .stdin
         .take()
         .unwrap()
-        .write_all(ev("Confidence: 10%").as_bytes())
-        .unwrap();
+        .write_all(ev("Confidence: 10%").as_bytes());
     assert_eq!(child.wait().unwrap().code().unwrap(), 0);
 }
 
@@ -1989,12 +1983,9 @@ fn confidence_gate_is_parallel_safe_per_completion() {
             .stderr(Stdio::null())
             .spawn()
             .unwrap();
-        child
-            .stdin
-            .take()
-            .unwrap()
-            .write_all(payload.as_bytes())
-            .unwrap();
+        // The hook may exit before reading stdin (e.g. threshold 0), closing the
+        // pipe; a BrokenPipe on our write is expected, so ignore the write result.
+        let _ = child.stdin.take().unwrap().write_all(payload.as_bytes());
         child.wait().unwrap().code().unwrap()
     };
 
