@@ -980,6 +980,7 @@ fn claude_powerups_and_workflow_can_be_disabled() {
         fanout: false,
         verify_todos: false,
         deliver: false,
+        inquire: false,
         subagent_confidence: 0,
     };
     let mut a = Agent::blank("w", "custom", "");
@@ -2053,6 +2054,48 @@ fn deliver_disabled_omits_command_and_guidance() {
     p.scaffold(dir.path(), false).unwrap();
     assert!(!dir.path().join(".claude/commands/deliver.md").exists());
     assert!(!read(dir.path(), ".claude/rules/ocgen-workflow.md").contains("Delivery pipeline"));
+}
+
+#[test]
+fn inquire_command_and_router() {
+    let mut p = base_project("English");
+    p.target = Target::ClaudeCode;
+    p.project_name = "inq".into();
+    p.agents = agent::claude_default_pipeline("English").unwrap();
+    let dir = tempdir().unwrap();
+    p.scaffold(dir.path(), false).unwrap();
+
+    let cmd = read(dir.path(), ".claude/commands/inquire.md");
+    assert!(cmd.contains("Sharpen") && cmd.contains("Verified") && cmd.contains("Inferred"));
+    assert!(cmd.contains(".claude/notes"));
+    assert!(
+        !cmd.contains("{{") && !cmd.contains("{%"),
+        "unrendered Jinja"
+    );
+    let deliver = read(dir.path(), ".claude/commands/deliver.md");
+    assert!(deliver.contains("Route the goal") && deliver.contains("/inquire"));
+    assert!(read(dir.path(), ".claude/rules/ocgen-workflow.md").contains("Codebase inquiry"));
+}
+
+#[test]
+fn inquire_disabled_omits_command_and_router() {
+    let mut p = base_project("English");
+    p.target = Target::ClaudeCode;
+    p.project_name = "noinq".into();
+    p.claude.workflow.inquire = false;
+    p.agents = agent::claude_default_pipeline("English").unwrap();
+    let dir = tempdir().unwrap();
+    p.scaffold(dir.path(), false).unwrap();
+    assert!(!dir.path().join(".claude/commands/inquire.md").exists());
+    let deliver = read(dir.path(), ".claude/commands/deliver.md");
+    assert!(!deliver.contains("/inquire") && !deliver.contains("Route the goal"));
+    assert!(!read(dir.path(), ".claude/rules/ocgen-workflow.md").contains("Codebase inquiry"));
+}
+
+#[test]
+fn workflow_without_inquire_field_backfills_true() {
+    let wf: Workflow = serde_json::from_str(r#"{"deliver": true}"#).unwrap();
+    assert!(wf.inquire);
 }
 
 #[test]

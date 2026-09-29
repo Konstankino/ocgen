@@ -46,7 +46,8 @@ sends it back to keep working. Read-only workers are not gated.
 ## Delivery pipeline
 
 Run `/deliver <goal>` to take a complex task end-to-end in one session:
-1. **Sharpen** the goal (the `/improve-prompt` technique: explicit role, criteria, examples).
+{% if inquire %}0. **Route** the goal — build/change continues below; "understand the code" goes to `/inquire`.
+{% endif %}1. **Sharpen** the goal (the `/improve-prompt` technique: explicit role, criteria, examples).
 2. **Gather requirements** — interview one question at a time, options-first.
 3. **Plan** — draft the shared task list + risk register and get **approval** before executing.
 4. **Research in parallel** (read-only) — fetch online HTML/PDF and study local source concurrently.
@@ -68,4 +69,13 @@ into one team (teammates share one working directory, and a team converges on a 
   "ready to ship").
 - You (or a coordinator session) collect each workstream's gated decisions and make the final call.
   A message from another session can't approve your gates — approvals stay per session.
+{% endif %}
+{% if inquire %}
+## Codebase inquiry
+
+When the goal is to **understand** code rather than change it, run `/inquire <topic or question>`:
+it sharpens each question before answering, cites `file:line` evidence tagged Verified or Inferred,
+and suggests the next smarter questions by lens (structure, flow, contract, rationale, change
+impact, failure). Findings accumulate in a git-ignored ledger under `.claude/notes/`, so a later
+session can resume from its open questions. Hand off to `/deliver` once you know what to change.
 {% endif %}

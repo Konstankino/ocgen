@@ -214,6 +214,8 @@ repo used for a plugin's marketplace and release workflow; `--team` enables
 .claude/commands/multi.md      # fan the whole team out on one task
 .claude/commands/intake.md     # a structured requirements interview (defaulted questions)
 .claude/commands/refine.md     # present a proposal, take reasoned push-back, iterate before approval
+.claude/commands/deliver.md    # end-to-end pipeline: route → sharpen → requirements → plan → research → gated execution
+.claude/commands/inquire.md    # understand a codebase: sharpened questions, file:line evidence, next-question nudges
 .claude/skills/<name>/SKILL.md # reusable skills (optional)
 .claude/settings.json          # model, a permissions allow-list, hooks, output style, statusline
 .claude/output-styles/*.md
@@ -256,6 +258,50 @@ warning (not rejecting) on unrecognized names. The full `SKILL.md` frontmatter i
 `description`, `when_to_use`, `argument-hint`, `allowed-tools`, `disable-model-invocation`,
 `user-invocable`, `context: fork` + `agent`, and `model`. Presets are editable templates
 (`claude/skill-presets.toml`).
+
+#### Delivering and understanding code (`/deliver`, `/inquire`)
+
+Two generated commands cover the two kinds of work you bring to a codebase. Both are on by
+default; the wizard asks about each ("Include the /deliver pipeline command?", "Include the
+/inquire codebase Q&A command?").
+
+**`/deliver <goal>`** takes a change end-to-end in one session. It first **routes** the goal —
+*build/change* runs the pipeline, *understand* hands off to `/inquire`, *mixed* runs a short
+`/inquire` orientation and then continues — and tells you the classification so you can
+override it. The pipeline then: sharpens the goal; skims the relevant code and interviews you
+one question at a time (never asking what the code already answers); drafts a plan + risk
+register for your approval; researches in parallel (re-planning if findings contradict the
+plan); executes with a stated `Confidence: NN%` per decision and no deploys/pushes without
+your approval; and summarizes. Small, clear goals collapse the interview and plan into a
+one-paragraph brief.
+
+**`/inquire <topic or question>`** is a read-only loop for learning a codebase by asking
+questions — and for getting better at asking them:
+
+```
+/inquire how does a request get from the CLI to the renderer?
+```
+
+1. **Orient** — on first use it maps the codebase (entry points, modules, data flow,
+   build/test commands, git hotspots) into a ledger; later runs resume from the ledger.
+2. **Sharpen** — a vague, too-broad or assumption-laden question gets 2–3 sharper variants
+   to choose from (or keep your own).
+3. **Answer with evidence** — every claim cites `file:line` and is tagged **Verified** (read
+   or ran it) or **Inferred** (with a confidence), plus what wasn't checked.
+4. **Nudge** — 3 suggested next questions, each tagged with a lens (structure, flow, contract,
+   rationale, change impact, failure) and why it's worth asking now. Reply with a number to
+   take one.
+5. **Checkpoint** — every ~5 questions (or say "checkpoint") it summarizes your mental model,
+   lists the biggest unknowns, and can ask you to explain a piece back to catch gaps.
+
+Say "stop" to finish; it finalizes the ledger and lists the open questions. The ledger lives in
+`.claude/notes/<topic>.md` and is **git-ignored** (the command adds `.claude/notes/` to
+`.gitignore` if it's missing), so it's personal and resumable: run `/inquire` on the same topic
+in a later session to pick up where you left off. Once you know what to change, run
+`/deliver <change>` — the ledger becomes its starting context.
+
+To add these commands to an existing project, re-render it with `ocgen doctor [dir]` (projects
+created by older versions get `/inquire` switched on automatically).
 
 #### Agent Teams
 
@@ -307,7 +353,7 @@ defaults to `.`.
 
 | Command | What it does |
 |---|---|
-| `ocgen new [dir] --target claude` | Scaffold a new Claude project (agents, `/multi` `/intake` `/refine`, `CLAUDE.md`, `settings.json`). |
+| `ocgen new [dir] --target claude` | Scaffold a new Claude project (agents, `/multi` `/intake` `/refine` `/deliver` `/inquire`, `CLAUDE.md`, `settings.json`). |
 | `ocgen new [dir] --target claude --output plugin` | Emit a distributable plugin instead of the project tree. |
 | `ocgen new [dir] --target claude --output both --repo <owner/repo>` | Emit both the project **and** a plugin (marketplace + release workflow). |
 | `ocgen new [dir] --target claude --team` | Also enable Agent Teams (env flag + `/team` + hooks + guidance). |
@@ -367,7 +413,7 @@ opencode/commands/multi.md.j2     # a command that fans out to the subagents
 seeds.toml               # blank-agent seed text (body + external prompt)
 claude/agent.md.j2              # one generic Claude subagent
 claude/CLAUDE.md.j2             # project instructions + roster
-claude/commands/*.md.j2         # multi / intake / refine / team commands
+claude/commands/*.md.j2         # multi / intake / refine / deliver / inquire / team commands
 claude/skill/SKILL.md.j2        # one generic skill
 claude/skill-presets.toml       # add-skill presets (command / knowledge / forked-research)
 claude/hooks/team-*.sh          # Agent Teams quality-gate hook stubs

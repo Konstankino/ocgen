@@ -190,6 +190,10 @@ pub struct Workflow {
     /// Emit the `/deliver` end-to-end pipeline command + delivery/multi-session
     /// guidance.
     pub deliver: bool,
+    /// Emit the `/inquire` codebase-understanding loop (sharpen each question,
+    /// answer with file:line evidence, suggest next questions, keep a git-ignored
+    /// ledger under `.claude/notes/`) and route `/deliver` "understand" goals to it.
+    pub inquire: bool,
     /// Minimum confidence (0–100) a subagent that wrote files must state before it
     /// may stop, enforced by a `SubagentStop` hook. `0` disables. This pairs with
     /// worktree isolation to give isolated writes + enforced per-worker confidence.
@@ -205,6 +209,7 @@ impl Default for Workflow {
             fanout: true,
             verify_todos: true,
             deliver: true,
+            inquire: true,
             subagent_confidence: 96,
         }
     }

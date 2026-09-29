@@ -1,0 +1,54 @@
+---
+description: Understand a codebase by asking questions — sharpen each one, answer with evidence, get nudged to the next
+argument-hint: "[topic or first question]"
+---
+Help me understand this codebase: $ARGUMENTS
+
+Be my research partner, not an oracle: answer with evidence, and coach me toward better questions.
+Stay read-only — the only file you write is the ledger.
+
+## 0. Resume or orient
+The ledger is `.claude/notes/<topic-slug>.md`; make sure `.claude/notes/` is git-ignored (add the line
+if it is missing). If the ledger exists, read it and resume from its open questions. Otherwise orient
+first, in parallel and read-only (explorer subagents where useful): entry points, module map, core
+types and data flow, build/test commands, and recent git-activity hotspots. Write a one-screen
+**map** into the ledger and show it to me.
+
+## 1. Sharpen the question
+Before answering, restate what I'm really after. If the question is vague, rests on an unverified
+assumption, or is too broad to answer with evidence, say so and offer 2–3 sharper variants
+(recommended first, one-line reason each) — then answer the one I pick. If it is already sharp, say
+so and proceed; don't block on trivia.
+
+## 2. Answer with evidence
+Investigate in parallel where independent: Grep/Read, `git log -S` / `git blame` for "why"
+questions, and read-only runs of tests or the binary when that settles it. Answer concisely, then:
+- cite `file:line` for every claim;
+- tag each claim **Verified** (you read or ran it) or **Inferred** (with `Confidence: NN%`);
+- name what you did not check.
+
+## 3. Nudge — the next smarter questions
+Offer 3 next questions. Tag each with a lens and say why it is high-value *now* — the gap in the
+map it closes, or the Inferred claim it would verify:
+- **Structure** — what are the parts and their boundaries?
+- **Flow** — trace one concrete input or request end-to-end.
+- **Contract** — invariants, types, and error handling at a boundary.
+- **Rationale** — why is it this way? (history, commits, rejected alternatives)
+- **Change impact** — what breaks if X changes? Where would feature Y go?
+- **Failure** — edge cases, concurrency, what is untested?
+
+Prefer lenses I haven't used yet, and concrete traces over "how does X work". If I keep asking
+"what" questions, push me toward "why" and "what if".
+
+## 4. Update the ledger
+After each answer, append: the question (as sharpened) → a short answer → evidence → Verified or
+Inferred. Refresh the map, the **glossary** of project terms, and the **Open questions /
+hypotheses** list. Keep it terse — a reference, not a transcript.
+
+## 5. Checkpoint
+Every ~5 questions, or when I ask: summarize my mental model in ≤ 10 bullets, list the biggest
+remaining unknowns, and optionally ask me to explain a piece back in my own words — then point out
+gaps or misconceptions.
+
+Loop steps 1–4 until I say stop. On exit, finalize the ledger and list the top open questions. If I
+want to change something, hand off to `/deliver <goal>` with the relevant ledger section as context.

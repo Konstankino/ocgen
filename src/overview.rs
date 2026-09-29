@@ -425,6 +425,12 @@ fn run_claude(root: &Path, project: &Project) -> Result<()> {
     if project.claude.workflow.refine {
         wf.push("/refine");
     }
+    if project.claude.workflow.deliver {
+        wf.push("/deliver");
+    }
+    if project.claude.workflow.inquire {
+        wf.push("/inquire");
+    }
     ui::kv(
         "workflow",
         &if wf.is_empty() {

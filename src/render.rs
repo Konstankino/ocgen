@@ -297,9 +297,19 @@ impl Project {
                 "commands/deliver.md".to_string(),
                 env.render_str(
                     &templates::load("claude/commands/deliver.md.j2")?,
-                    context! { language => lang },
+                    context! { language => lang, inquire => self.claude.workflow.inquire },
                 )
                 .context("rendering deliver command")?,
+            ));
+        }
+        if self.claude.workflow.inquire {
+            components.push((
+                "commands/inquire.md".to_string(),
+                env.render_str(
+                    &templates::load("claude/commands/inquire.md.j2")?,
+                    context! { language => lang },
+                )
+                .context("rendering inquire command")?,
             ));
         }
 
@@ -397,6 +407,7 @@ impl Project {
             fanout => self.claude.workflow.fanout,
             verify_todos => self.claude.workflow.verify_todos,
             deliver => self.claude.workflow.deliver,
+            inquire => self.claude.workflow.inquire,
             subagent_confidence => self.claude.workflow.subagent_confidence,
         };
         components.push((

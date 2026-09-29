@@ -486,6 +486,12 @@ fn build_claude_project(
         "One command: sharpen → requirements → plan+approve → parallel research → gated execution; plus multi-session guidance.",
         true,
     )?;
+    p.claude.workflow.inquire = ask_confirm(
+        theme,
+        "Include the /inquire codebase Q&A command?",
+        "Sharpens your questions, answers with file:line evidence, suggests smarter next questions, keeps a git-ignored ledger in .claude/notes/.",
+        true,
+    )?;
     p.claude.workflow.subagent_confidence = ask_v(
         theme,
         "Enforce a minimum confidence on subagents that write files (0–100, 0 = off)",

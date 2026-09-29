@@ -9,3 +9,6 @@
 
 # macOS noise.
 .DS_Store
+
+# Local printable reference (PDF + its generator) — kept out of git.
+/docs/reference/
