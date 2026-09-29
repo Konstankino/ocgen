@@ -1627,7 +1627,7 @@ fn team_readonly_roles_env_lists_read_only_agents() {
 }
 
 #[test]
-fn teammate_idle_gate_exempts_read_only_roles() {
+fn teammate_idle_gate_is_ownership_scoped() {
     use std::io::Write as _;
     use std::process::{Command, Stdio};
 
@@ -1648,11 +1648,8 @@ fn teammate_idle_gate_exempts_read_only_roles() {
     p.scaffold(dir.path(), false).unwrap();
     let hook = dir.path().join(".claude/hooks/team-teammate-idle.sh");
     fs::create_dir_all(dir.path().join(".claude/team")).unwrap();
-    fs::write(
-        dir.path().join(".claude/team/plan.md"),
-        "- Risk: data loss\nMitigation: pending\n",
-    )
-    .unwrap();
+    let plan = dir.path().join(".claude/team/plan.md");
+    let set = |txt: &str| fs::write(&plan, txt).unwrap();
 
     let run = |agent_type: &str| -> i32 {
         let mut child = Command::new("sh")
@@ -1671,18 +1668,39 @@ fn teammate_idle_gate_exempts_read_only_roles() {
         child.wait().unwrap().code().unwrap()
     };
 
-    // Read-only roles are exempt even while a risk is pending (no livelock).
+    // Two risks, each owned by a different role, both pending.
+    set("- Risk: A — Owner: implementer — Mitigation: pending\n\
+         - Risk: B — Owner: dbadmin — Mitigation: pending\n");
+    // A teammate is held only for a risk IT owns.
+    assert_eq!(run("implementer"), 2); // owns A (pending)
+    assert_eq!(run("dbadmin"), 2); // owns B (pending)
+                                   // Read-only roles are exempt regardless of ownership.
     assert_eq!(run("explorer"), 0);
     assert_eq!(run("reviewer"), 0);
-    // A writer is still held while a risk is pending.
-    assert_eq!(run("implementer"), 2);
-    // Once the risk is resolved, the writer may idle.
-    fs::write(
-        dir.path().join(".claude/team/plan.md"),
-        "- Risk: data loss\nMitigation: done\n",
-    )
-    .unwrap();
+
+    // Close only implementer's risk; dbadmin's stays pending.
+    set("- Risk: A — Owner: implementer — Mitigation: done\n\
+         - Risk: B — Owner: dbadmin — Mitigation: pending\n");
+    // The key fix: implementer idles free even though another owner's risk is pending.
     assert_eq!(run("implementer"), 0);
+    assert_eq!(run("dbadmin"), 2);
+
+    // Risk rounds off → never blocks.
+    let mut child = Command::new("sh")
+        .arg(&hook)
+        .env("TEAM_RISK_ROUNDS", "0")
+        .env("CLAUDE_PROJECT_DIR", dir.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let _ = child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(br#"{"agent_type":"dbadmin"}"#);
+    assert_eq!(child.wait().unwrap().code().unwrap(), 0);
 }
 
 #[test]

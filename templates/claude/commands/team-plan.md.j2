@@ -18,9 +18,11 @@ argument-hint: "[what the team should accomplish]"
 Дві задачі не повинні редагувати одні й ті самі файли.
 
 ## 3. Реєстр ризиків — раунд пом'якшення для КОЖНОГО ризику
-У тому ж файлі перелічи всі передбачувані ризики. Для кожного додай рядок `Mitigation: pending`
-та конкретну задачу з пом'якшення. Жоден ризик не проходить без власного раунду пом'якшення —
-лишай `pending`, доки не оброблено, потім познач `done` або `accepted`.
+У тому ж файлі перелічи всі передбачувані ризики. Кожен ризик — **одним рядком** з
+`Owner: <роль>` (роль, відповідальна за пом'якшення) та `Mitigation: pending`, напр.
+`- Risk: втрата даних — Owner: implementer — Mitigation: pending`. Жоден ризик не проходить без
+власника й раунду пом'якшення — лишай `pending`, доки не оброблено, потім `done` або `accepted`.
+Хук `TeammateIdle` тримає teammate лише поки відкритий ризик, що **йому належить**.
 
 ## 4. Презентація та доопрацювання
 Презентуй план і **явно запроси заперечення з аргументами**. Відповідай на питання й вноси
@@ -47,9 +49,11 @@ an owner role from: {% for sub in subagents %}{{ sub.name }}{% if not loop.last 
 Two tasks must not touch the same files.
 
 ## 3. Risk register — a mitigation round for EVERY risk
-In the same file, list every risk you can foresee. For each risk add a line `Mitigation: pending`
-and a concrete mitigation task. No risk ships without its own mitigation round; leave it
-`pending` until it is addressed, then mark it `done` or `accepted`.
+In the same file, list every risk you can foresee. Write each risk on **one line** carrying an
+`Owner: <role>` (the role responsible for mitigating it) and a `Mitigation: pending` status —
+e.g. `- Risk: data loss — Owner: implementer — Mitigation: pending`. No risk ships without an
+owner and its own mitigation round; leave it `pending` until addressed, then mark it `done` or
+`accepted`. The `TeammateIdle` hook holds a teammate only while a risk **it owns** is pending.
 
 ## 4. Present and refine
 Present the plan and **explicitly invite push-back with reasons.** Answer questions and fold in
