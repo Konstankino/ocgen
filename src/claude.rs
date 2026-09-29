@@ -187,6 +187,13 @@ pub struct Workflow {
     /// list for complex prompts (definition-of-done, per-task verify, self-review,
     /// confidence self-rating).
     pub verify_todos: bool,
+    /// Emit the `/deliver` end-to-end pipeline command + delivery/multi-session
+    /// guidance.
+    pub deliver: bool,
+    /// Minimum confidence (0–100) a subagent that wrote files must state before it
+    /// may stop, enforced by a `SubagentStop` hook. `0` disables. This pairs with
+    /// worktree isolation to give isolated writes + enforced per-worker confidence.
+    pub subagent_confidence: u8,
 }
 
 impl Default for Workflow {
@@ -197,6 +204,8 @@ impl Default for Workflow {
             improve_prompt: true,
             fanout: true,
             verify_todos: true,
+            deliver: true,
+            subagent_confidence: 96,
         }
     }
 }

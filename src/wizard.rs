@@ -480,59 +480,32 @@ fn build_claude_project(
         "CLAUDE.md guidance to build definition-of-done, per-task verification, self-review, and confidence into todos.",
         true,
     )?;
-    if ask_confirm(
+    p.claude.workflow.deliver = ask_confirm(
         theme,
-        "Enable Agent Teams (experimental)?",
-        "Adds CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1, a /team command, and CLAUDE.md guidance.",
-        team.enabled,
-    )? {
-        let hooks = ask_confirm(
-            theme,
-            "Include team quality-gate hook stubs?",
-            "TeammateIdle/TaskCreated/TaskCompleted scripts that enforce the governance gates.",
-            true,
-        )?;
-        let plan_gate = ask_confirm(
-            theme,
-            "Require an approved plan before tasks start (/team-plan gate)?",
-            "Emits /team-plan; TaskCreated is blocked until .claude/team/plan.md is APPROVED.",
-            team.plan_gate,
-        )?;
-        let default_conf = team
-            .confidence
-            .map_or_else(|| "96".to_string(), |n| n.to_string());
-        let confidence_threshold = ask_v(
-            theme,
-            "Minimum teammate confidence before the next task (0–100, 0 = off)",
-            "A teammate must record ≥ this % before completing a task; enforced by TaskCompleted.",
-            Some(&default_conf),
-            validate::confidence_threshold,
-        )?
-        .parse::<u8>()
-        .unwrap_or(96);
-        let risk_rounds = ask_confirm(
-            theme,
-            "Require a mitigation round for every identified risk?",
-            "Teammates stay busy until each risk in the plan's register is mitigated or accepted.",
-            team.risk_rounds,
-        )?;
-        let approval_gate = ask_confirm(
-            theme,
-            "Gate high-impact external actions behind human approval?",
-            "Deterministic PreToolUse hook blocks ssh, cloud mutations, git push/merge, deploys \
-             & publishes until a human creates .claude/team/execution-approved.",
-            team.approval_gate,
-        )?;
-        p.claude.team = Team {
-            enabled: true,
-            mode: "in-process".to_string(),
-            hooks,
-            plan_gate,
-            confidence_threshold,
-            risk_rounds,
-            approval_gate,
-        };
-    }
+        "Include the /deliver pipeline command?",
+        "One command: sharpen → requirements → plan+approve → parallel research → gated execution; plus multi-session guidance.",
+        true,
+    )?;
+    p.claude.workflow.subagent_confidence = ask_v(
+        theme,
+        "Enforce a minimum confidence on subagents that write files (0–100, 0 = off)",
+        "SubagentStop hook: a worker that edited files must state Confidence ≥ this % before finishing (pairs with /fanout isolation).",
+        Some("96"),
+        validate::confidence_threshold,
+    )?
+    .parse::<u8>()
+    .unwrap_or(96);
+    // Seed the team prompts from the CLI flags, then reuse the shared editor.
+    let team_seed = Team {
+        enabled: team.enabled,
+        mode: "in-process".to_string(),
+        hooks: true,
+        plan_gate: team.plan_gate,
+        confidence_threshold: team.confidence.unwrap_or(96),
+        risk_rounds: team.risk_rounds,
+        approval_gate: team.approval_gate,
+    };
+    p.claude.team = configure_claude_team(theme, &team_seed)?;
 
     let (project_out, plugin_out) = match output {
         OutputArg::Project => (true, false),
@@ -565,6 +538,96 @@ fn build_claude_project(
     }
 
     Ok(p)
+}
+
+/// Interactively configure Agent Teams + its governance gates, seeded with the
+/// current values. Shared by `new` and `edit team`. Returns an all-off `Team`
+/// when the user declines.
+fn configure_claude_team(theme: &ColorfulTheme, seed: &Team) -> Result<Team> {
+    if !ask_confirm(
+        theme,
+        "Enable Agent Teams (experimental)?",
+        "Adds CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1, a /team command, and .claude/rules guidance.",
+        seed.enabled,
+    )? {
+        return Ok(Team::default());
+    }
+    let hooks = ask_confirm(
+        theme,
+        "Include team quality-gate hooks?",
+        "TeammateIdle/TaskCreated/TaskCompleted scripts that enforce the governance gates.",
+        if seed.enabled { seed.hooks } else { true },
+    )?;
+    let modes: Vec<String> = ["in-process", "auto", "tmux", "iterm2"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let default_idx = modes.iter().position(|m| m == &seed.mode).unwrap_or(0);
+    let mode = modes[ask_select(
+        theme,
+        "Teammate display mode",
+        "in-process (default) / auto / tmux / iterm2.",
+        &modes,
+        default_idx,
+    )?]
+    .clone();
+    let plan_gate = ask_confirm(
+        theme,
+        "Require an approved plan before tasks start (/team-plan gate)?",
+        "Emits /team-plan; TaskCreated is blocked until .claude/team/plan.md is APPROVED.",
+        seed.plan_gate,
+    )?;
+    let default_conf = if seed.confidence_threshold > 0 {
+        seed.confidence_threshold.to_string()
+    } else {
+        "96".to_string()
+    };
+    let confidence_threshold = ask_v(
+        theme,
+        "Minimum teammate confidence before the next task (0–100, 0 = off)",
+        "A teammate must be ≥ this % confident before completing a task; enforced by TaskCompleted.",
+        Some(&default_conf),
+        validate::confidence_threshold,
+    )?
+    .parse::<u8>()
+    .unwrap_or(96);
+    let risk_rounds = ask_confirm(
+        theme,
+        "Require a mitigation round for every identified risk?",
+        "Teammates stay busy until each risk in the plan's register is mitigated or accepted.",
+        seed.risk_rounds,
+    )?;
+    let approval_gate = ask_confirm(
+        theme,
+        "Gate high-impact external actions behind human approval?",
+        "Deterministic PreToolUse hook blocks ssh, cloud mutations, git push/merge, deploys \
+         & publishes until a human creates .claude/team/execution-approved.",
+        seed.approval_gate,
+    )?;
+    Ok(Team {
+        enabled: true,
+        mode,
+        hooks,
+        plan_gate,
+        confidence_threshold,
+        risk_rounds,
+        approval_gate,
+    })
+}
+
+/// `ocgen edit team <dir>`: enable or adjust Agent Teams for an existing Claude
+/// project, then re-render. Preserves the user's CLAUDE.md (create-once).
+pub fn run_edit_team(path: String) -> Result<()> {
+    let (root, mut project) = Project::discover(Path::new(&path))?;
+    if project.target != Target::ClaudeCode {
+        bail!("Agent Teams is a Claude Code feature; this project targets OpenCode.");
+    }
+    ui::banner("edit agent teams");
+    let theme = ColorfulTheme::default();
+    project.claude.team = configure_claude_team(&theme, &project.claude.team)?;
+    let written = project.scaffold(&root, true)?;
+    report_written(&written);
+    Ok(())
 }
 
 fn collect_claude_agents(

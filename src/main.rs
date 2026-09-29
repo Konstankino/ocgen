@@ -56,6 +56,7 @@ fn main() -> Result<()> {
             EditWhat::Agent { name, path } => wizard::run_edit_agent(path, name)?,
             EditWhat::Provider { key, path } => wizard::run_edit_provider(path, key)?,
             EditWhat::Skill { name, path } => wizard::run_edit_skill(path, name)?,
+            EditWhat::Team { path } => wizard::run_edit_team(path)?,
         },
         Command::Show {
             what: ShowWhat::Agent { name, path },

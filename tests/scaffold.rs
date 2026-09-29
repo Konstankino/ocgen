@@ -868,8 +868,10 @@ fn claude_project_renders_agents_command_settings_and_claude_md() {
     let claude_md = read(dir.path(), "CLAUDE.md");
     assert!(claude_md.contains("# team"));
     assert!(claude_md.contains("House rules: be terse."));
-    assert!(claude_md.contains("**reviewer**"));
-    assert!(claude_md.contains("You coordinate the team."));
+    // Roster + coordination live in the ocgen team rule now, not CLAUDE.md.
+    let team_rule = read(dir.path(), ".claude/rules/ocgen-team.md");
+    assert!(team_rule.contains("**reviewer**"));
+    assert!(team_rule.contains("You coordinate the team."));
 
     let settings: serde_json::Value =
         serde_json::from_str(&read(dir.path(), ".claude/settings.json")).unwrap();
@@ -944,7 +946,7 @@ fn claude_default_pipeline_scaffolds_a_full_project() {
 
     let claude_md = read(dir.path(), "CLAUDE.md");
     assert!(claude_md.contains("# writing"));
-    assert!(claude_md.contains("**explorer**"));
+    assert!(read(dir.path(), ".claude/rules/ocgen-team.md").contains("**explorer**"));
     // The coordinator's prompt template is fully rendered — no raw Jinja leaks.
     assert!(
         !claude_md.contains("{% for"),
@@ -977,6 +979,8 @@ fn claude_powerups_and_workflow_can_be_disabled() {
         improve_prompt: false,
         fanout: false,
         verify_todos: false,
+        deliver: false,
+        subagent_confidence: 0,
     };
     let mut a = Agent::blank("w", "custom", "");
     a.mode = "subagent".into();
@@ -990,8 +994,10 @@ fn claude_powerups_and_workflow_can_be_disabled() {
 
     assert!(!dir.path().join(".claude/commands/intake.md").exists());
     assert!(!dir.path().join(".claude/commands/refine.md").exists());
-    // verify_todos off → no Verification-first todos guidance in CLAUDE.md.
-    assert!(!read(dir.path(), "CLAUDE.md").contains("Verification-first todos"));
+    // verify_todos off → no Verification-first todos guidance in the workflow rule.
+    assert!(
+        !read(dir.path(), ".claude/rules/ocgen-workflow.md").contains("Verification-first todos")
+    );
     let settings: serde_json::Value =
         serde_json::from_str(&read(dir.path(), ".claude/settings.json")).unwrap();
     assert_eq!(settings["model"], "opus");
@@ -1060,7 +1066,7 @@ fn claude_project_with_only_coordinator_skips_multi() {
     assert!(!dir.path().join(".claude/agents/boss.md").exists());
     let claude_md = read(dir.path(), "CLAUDE.md");
     assert!(claude_md.contains("# solo"));
-    assert!(claude_md.contains("coordinate"));
+    assert!(read(dir.path(), ".claude/rules/ocgen-team.md").contains("coordinate"));
 }
 
 // ---- Claude Code target: plugin + GitHub release output (phase 4) ----
@@ -1303,7 +1309,7 @@ fn claude_team_enabled_wires_settings_command_hooks_and_guidance() {
         );
     }
 
-    assert!(read(dir.path(), "CLAUDE.md").contains("Agent Teams"));
+    assert!(read(dir.path(), ".claude/rules/ocgen-team.md").contains("Agent Teams"));
 }
 
 #[test]
@@ -1311,6 +1317,7 @@ fn claude_team_disabled_by_default_adds_nothing() {
     let mut p = base_project("English");
     p.target = Target::ClaudeCode;
     p.project_name = "plain".into();
+    p.claude.workflow.subagent_confidence = 0; // isolate team behavior from the SubagentStop gate
     p.agents = agent::claude_default_pipeline("English").unwrap();
     let dir = tempdir().unwrap();
     p.scaffold(dir.path(), false).unwrap();
@@ -1355,6 +1362,7 @@ fn claude_team_enabled_without_hook_stubs() {
     let mut p = base_project("English");
     p.target = Target::ClaudeCode;
     p.project_name = "th".into();
+    p.claude.workflow.subagent_confidence = 0; // isolate team-hook behavior
     p.claude.team = Team {
         enabled: true,
         mode: "auto".into(),
@@ -1439,10 +1447,10 @@ fn team_governance_wires_settings_command_and_hooks() {
     let idle = read(dir.path(), ".claude/hooks/team-teammate-idle.sh");
     assert!(idle.contains("TEAM_RISK_ROUNDS"));
 
-    // Guidance documents the governed workflow and the threshold.
-    let claude_md = read(dir.path(), "CLAUDE.md");
-    assert!(claude_md.contains("Governed workflow"));
-    assert!(claude_md.contains("96%"));
+    // Guidance documents the governed workflow and the threshold (in the team rule).
+    let team_rule = read(dir.path(), ".claude/rules/ocgen-team.md");
+    assert!(team_rule.contains("Governed workflow"));
+    assert!(team_rule.contains("96%"));
 }
 
 #[test]
@@ -1619,6 +1627,18 @@ fn claude_doctor_repairs_bad_confidence_threshold() {
     assert_eq!(p.claude.team.confidence_threshold, 96);
 }
 
+#[test]
+fn doctor_clamps_bad_subagent_confidence() {
+    let mut p = base_project("English");
+    p.target = Target::ClaudeCode;
+    p.claude.workflow.subagent_confidence = 250;
+    let fixes = p.doctor();
+    assert!(fixes
+        .iter()
+        .any(|f| f.contains("subagent confidence") && f.contains("96")));
+    assert_eq!(p.claude.workflow.subagent_confidence, 96);
+}
+
 // ---- Claude Code target: richer skill authoring (phase 8) ----
 
 #[test]
@@ -1709,16 +1729,17 @@ fn claude_md_instructs_parallel_exploration() {
     let dir = tempdir().unwrap();
     p.scaffold(dir.path(), false).unwrap();
 
-    let md = read(dir.path(), "CLAUDE.md");
+    let md = read(dir.path(), ".claude/rules/ocgen-workflow.md");
     assert!(md.contains("Parallel exploration"));
     assert!(md.contains("in parallel"));
     assert!(md.contains("web page") && md.contains("PDF"));
-    // The Claude coordination guidance must not mandate serial delegation.
+    assert!(!md.contains("{{") && !md.contains("{%"), "unrendered Jinja");
+    // The coordination guidance (team rule) must not mandate serial delegation.
+    let team_rule = read(dir.path(), ".claude/rules/ocgen-team.md");
     assert!(
-        !md.contains("do not run in parallel"),
+        !team_rule.contains("do not run in parallel"),
         "Claude coordination should not carry the local-server serial note"
     );
-    assert!(!md.contains("{{") && !md.contains("{%"), "unrendered Jinja");
 }
 
 #[test]
@@ -1758,6 +1779,256 @@ fn session_start_tip_is_valid_shell() {
 }
 
 #[test]
+fn subagent_confidence_gate_wires_independently_of_teams() {
+    let mut p = base_project("English");
+    p.target = Target::ClaudeCode;
+    p.project_name = "sc".into();
+    // No team — the SubagentStop gate must still wire.
+    p.agents = agent::claude_default_pipeline("English").unwrap();
+    let dir = tempdir().unwrap();
+    p.scaffold(dir.path(), false).unwrap();
+
+    let s: serde_json::Value =
+        serde_json::from_str(&read(dir.path(), ".claude/settings.json")).unwrap();
+    assert_eq!(s["env"]["SUBAGENT_CONFIDENCE_THRESHOLD"], "96");
+    assert!(s["env"]
+        .get("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS")
+        .is_none()); // team off
+    let cmd = s["hooks"]["SubagentStop"][0]["hooks"][0]["command"]
+        .as_str()
+        .unwrap();
+    assert!(cmd.contains("subagent-confidence-gate.sh"));
+    assert!(dir
+        .path()
+        .join(".claude/hooks/subagent-confidence-gate.sh")
+        .is_file());
+
+    // Off → nothing.
+    let mut p2 = base_project("English");
+    p2.target = Target::ClaudeCode;
+    p2.project_name = "nosc".into();
+    p2.claude.workflow.subagent_confidence = 0;
+    p2.agents = agent::claude_default_pipeline("English").unwrap();
+    let dir2 = tempdir().unwrap();
+    p2.scaffold(dir2.path(), false).unwrap();
+    let s2: serde_json::Value =
+        serde_json::from_str(&read(dir2.path(), ".claude/settings.json")).unwrap();
+    assert!(s2.get("env").is_none());
+    assert!(s2["hooks"].get("SubagentStop").is_none());
+    assert!(!dir2
+        .path()
+        .join(".claude/hooks/subagent-confidence-gate.sh")
+        .exists());
+}
+
+#[test]
+fn subagent_confidence_gate_blocks_low_confidence_writers() {
+    use std::io::Write as _;
+    use std::process::{Command, Stdio};
+
+    let mut p = base_project("English");
+    p.target = Target::ClaudeCode;
+    p.project_name = "scx".into();
+    p.agents = agent::claude_default_pipeline("English").unwrap();
+    let dir = tempdir().unwrap();
+    p.scaffold(dir.path(), false).unwrap();
+    let hook = dir.path().join(".claude/hooks/subagent-confidence-gate.sh");
+
+    // A real git worktree (the subagent's cwd). Start clean.
+    let wt = dir.path().join("wt");
+    fs::create_dir_all(&wt).unwrap();
+    let git = |args: &[&str]| {
+        Command::new("git")
+            .args(args)
+            .current_dir(&wt)
+            .output()
+            .unwrap();
+    };
+    git(&["init", "-q"]);
+    git(&["config", "user.email", "t@t"]);
+    git(&["config", "user.name", "t"]);
+
+    let run = |payload: &str| -> i32 {
+        let mut child = Command::new("sh")
+            .arg(&hook)
+            .env("SUBAGENT_CONFIDENCE_THRESHOLD", "96")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(payload.as_bytes())
+            .unwrap();
+        child.wait().unwrap().code().unwrap()
+    };
+    let ev = |msg: &str| {
+        format!(
+            r#"{{"hook_event_name":"SubagentStop","cwd":"{}","last_assistant_message":"{}"}}"#,
+            wt.display(),
+            msg
+        )
+    };
+
+    // Clean worktree (read-only worker) → always passes.
+    assert_eq!(run(&ev("explored things, no confidence stated")), 0);
+
+    // The worker writes a file → now it must be confident.
+    fs::write(wt.join("new.rs"), "// change\n").unwrap();
+    assert_eq!(run(&ev("done. Confidence: 97%")), 0);
+    assert_eq!(run(&ev("done. Confidence: 50%")), 2);
+    assert_eq!(run(&ev("done, no rating")), 2);
+
+    // Threshold 0 disables the gate even for a low-confidence writer.
+    let mut child = Command::new("sh")
+        .arg(&hook)
+        .env("SUBAGENT_CONFIDENCE_THRESHOLD", "0")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(ev("Confidence: 10%").as_bytes())
+        .unwrap();
+    assert_eq!(child.wait().unwrap().code().unwrap(), 0);
+}
+
+#[test]
+fn claude_md_is_created_once_and_never_overwritten() {
+    let mut p = base_project("English");
+    p.target = Target::ClaudeCode;
+    p.project_name = "own".into();
+    p.claude.instructions = "## Purpose\nBuild widgets.\n".into();
+    p.agents = agent::claude_default_pipeline("English").unwrap();
+
+    // A pre-existing user CLAUDE.md is preserved — even under force (doctor).
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("CLAUDE.md"), "MY OWN NOTES\n").unwrap();
+    p.scaffold(dir.path(), true).unwrap();
+    assert_eq!(read(dir.path(), "CLAUDE.md"), "MY OWN NOTES\n");
+    // …while the guidance still lands in the rules.
+    assert!(dir.path().join(".claude/rules/ocgen-workflow.md").is_file());
+
+    // A fresh dir gets a slim starter with the purpose, and no guidance inline.
+    let dir2 = tempdir().unwrap();
+    p.scaffold(dir2.path(), false).unwrap();
+    let starter = read(dir2.path(), "CLAUDE.md");
+    assert!(starter.contains("# own") && starter.contains("Build widgets."));
+    assert!(!starter.contains("Parallel exploration"));
+}
+
+#[test]
+fn deliver_pipeline_command_and_guidance() {
+    let mut p = base_project("English");
+    p.target = Target::ClaudeCode;
+    p.project_name = "dl".into();
+    p.agents = agent::claude_default_pipeline("English").unwrap();
+    let dir = tempdir().unwrap();
+    p.scaffold(dir.path(), false).unwrap();
+
+    let cmd = read(dir.path(), ".claude/commands/deliver.md");
+    assert!(cmd.contains("Sharpen") && cmd.contains("requirements") && cmd.contains("Confidence"));
+    assert!(
+        !cmd.contains("{{") && !cmd.contains("{%"),
+        "unrendered Jinja"
+    );
+    let wf = read(dir.path(), ".claude/rules/ocgen-workflow.md");
+    assert!(wf.contains("Delivery pipeline"));
+    assert!(wf.contains("Multi-session delivery") && wf.contains("--worktree"));
+}
+
+#[test]
+fn deliver_disabled_omits_command_and_guidance() {
+    let mut p = base_project("English");
+    p.target = Target::ClaudeCode;
+    p.project_name = "nodl".into();
+    p.claude.workflow.deliver = false;
+    p.agents = agent::claude_default_pipeline("English").unwrap();
+    let dir = tempdir().unwrap();
+    p.scaffold(dir.path(), false).unwrap();
+    assert!(!dir.path().join(".claude/commands/deliver.md").exists());
+    assert!(!read(dir.path(), ".claude/rules/ocgen-workflow.md").contains("Delivery pipeline"));
+}
+
+#[test]
+fn confidence_gate_is_parallel_safe_per_completion() {
+    use std::io::Write as _;
+    use std::process::{Command, Stdio};
+
+    let mut p = base_project("English");
+    p.target = Target::ClaudeCode;
+    p.project_name = "cg".into();
+    p.claude.team = Team {
+        enabled: true,
+        mode: "in-process".into(),
+        hooks: true,
+        plan_gate: true,
+        confidence_threshold: 96,
+        risk_rounds: true,
+        approval_gate: true,
+    };
+    p.agents = agent::claude_default_pipeline("English").unwrap();
+    let dir = tempdir().unwrap();
+    p.scaffold(dir.path(), false).unwrap();
+    let hook = dir.path().join(".claude/hooks/team-task-completed.sh");
+
+    let run = |payload: &str, thr: &str| -> i32 {
+        let mut child = Command::new("sh")
+            .arg(&hook)
+            .env("CLAUDE_PROJECT_DIR", dir.path())
+            .env("TEAM_CONFIDENCE_THRESHOLD", thr)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(payload.as_bytes())
+            .unwrap();
+        child.wait().unwrap().code().unwrap()
+    };
+
+    // Confidence stated in THIS completion — read from its own stdin (race-free).
+    assert_eq!(
+        run(
+            r#"{"task_id":"t1","summary":"done. Confidence: 97%"}"#,
+            "96"
+        ),
+        0
+    );
+    assert_eq!(
+        run(
+            r#"{"task_id":"t2","summary":"done. Confidence: 50%"}"#,
+            "96"
+        ),
+        2
+    );
+    assert_eq!(
+        run(r#"{"task_id":"t3","summary":"done, no rating"}"#, "96"),
+        2
+    );
+    // Fallback: per-task marker keyed by this event's task id.
+    fs::create_dir_all(dir.path().join(".claude/team/confidence")).unwrap();
+    fs::write(dir.path().join(".claude/team/confidence/t5.txt"), "97").unwrap();
+    assert_eq!(run(r#"{"task_id":"t5","summary":"done"}"#, "96"), 0);
+    // Threshold 0 disables the gate.
+    assert_eq!(
+        run(r#"{"task_id":"t6","summary":"Confidence: 10%"}"#, "0"),
+        0
+    );
+}
+
+#[test]
 fn claude_md_instructs_verification_first_todos() {
     let mut p = base_project("English");
     p.target = Target::ClaudeCode;
@@ -1766,7 +2037,7 @@ fn claude_md_instructs_verification_first_todos() {
     let dir = tempdir().unwrap();
     p.scaffold(dir.path(), false).unwrap();
 
-    let md = read(dir.path(), "CLAUDE.md");
+    let md = read(dir.path(), ".claude/rules/ocgen-workflow.md");
     assert!(md.contains("Verification-first todos"));
     assert!(md.contains("definition of done"));
     assert!(md.contains("self-review"));
@@ -1799,8 +2070,8 @@ fn fanout_scaffolds_worktree_isolation_command_and_include() {
     let wti = read(dir.path(), ".worktreeinclude"); // project root, not under .claude/
     assert!(wti.contains(".env"));
 
-    // CLAUDE.md documents the protocol.
-    assert!(read(dir.path(), "CLAUDE.md").contains("Parallel worktrees"));
+    // The workflow rule documents the protocol.
+    assert!(read(dir.path(), ".claude/rules/ocgen-workflow.md").contains("Parallel worktrees"));
 }
 
 #[test]
@@ -1814,7 +2085,7 @@ fn fanout_disabled_omits_command_and_include() {
     p.scaffold(dir.path(), false).unwrap();
     assert!(!dir.path().join(".claude/commands/fanout.md").exists());
     assert!(!dir.path().join(".worktreeinclude").exists());
-    assert!(!read(dir.path(), "CLAUDE.md").contains("Parallel worktrees"));
+    assert!(!read(dir.path(), ".claude/rules/ocgen-workflow.md").contains("Parallel worktrees"));
     // Isolation is archetype-driven, so it stays on the implementer regardless.
     assert!(read(dir.path(), ".claude/agents/implementer.md").contains("isolation: worktree"));
 }

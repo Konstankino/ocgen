@@ -292,6 +292,16 @@ impl Project {
                 .context("rendering fanout command")?,
             ));
         }
+        if self.claude.workflow.deliver {
+            components.push((
+                "commands/deliver.md".to_string(),
+                env.render_str(
+                    &templates::load("claude/commands/deliver.md.j2")?,
+                    context! { language => lang },
+                )
+                .context("rendering deliver command")?,
+            ));
+        }
 
         let skill_tmpl = templates::load("claude/skill/SKILL.md.j2")?;
         for skill in &self.skills {
@@ -355,6 +365,11 @@ impl Project {
                 components.push(("hooks/team-approval-gate.sh".to_string(), body));
             }
         }
+        // Per-worker confidence gate (SubagentStop) — independent of Agent Teams.
+        if self.claude.workflow.subagent_confidence > 0 {
+            let body = templates::load("claude/hooks/subagent-confidence-gate.sh")?;
+            components.push(("hooks/subagent-confidence-gate.sh".to_string(), body));
+        }
 
         // Coordinator body may itself be a template (the orchestrator prompt loops
         // over subagents), so render it with that context for CLAUDE.md.
@@ -367,23 +382,50 @@ impl Project {
                 .context("rendering coordinator instructions")?,
             None => String::new(),
         };
+        // Behavioral guidance lives in .claude/rules/ (loads every session at CLAUDE.md
+        // priority) so ocgen never has to touch a user-owned CLAUDE.md.
+        let has_coordinator = !coordinator.is_empty();
+        let rules_ctx = context! {
+            coordinator => coordinator,
+            subagents => &subs,
+            team => self.claude.team.enabled,
+            team_mode => self.teammate_mode(),
+            plan_gate => self.claude.team.plan_gate,
+            confidence_threshold => self.claude.team.confidence_threshold,
+            risk_rounds => self.claude.team.risk_rounds,
+            approval_gate => self.claude.team.approval_gate,
+            fanout => self.claude.workflow.fanout,
+            verify_todos => self.claude.workflow.verify_todos,
+            deliver => self.claude.workflow.deliver,
+            subagent_confidence => self.claude.workflow.subagent_confidence,
+        };
+        components.push((
+            "rules/ocgen-workflow.md".to_string(),
+            env.render_str(
+                &templates::load("claude/rules/ocgen-workflow.md.j2")?,
+                rules_ctx.clone(),
+            )
+            .context("rendering ocgen-workflow rule")?,
+        ));
+        if has_coordinator || !subs.is_empty() || self.claude.team.enabled {
+            components.push((
+                "rules/ocgen-team.md".to_string(),
+                env.render_str(
+                    &templates::load("claude/rules/ocgen-team.md.j2")?,
+                    rules_ctx.clone(),
+                )
+                .context("rendering ocgen-team rule")?,
+            ));
+        }
+
+        // CLAUDE.md is a slim, user-owned starter (written once — never overwritten;
+        // see `scaffold`).
         let claude_md = env
             .render_str(
                 &templates::load("claude/CLAUDE.md.j2")?,
                 context! {
                     project_name => self.project_name,
                     instructions => self.claude.instructions,
-                    coordinator => coordinator,
-                    subagents => &subs,
-                    language => lang,
-                    team => self.claude.team.enabled,
-                    team_mode => self.teammate_mode(),
-                    plan_gate => self.claude.team.plan_gate,
-                    confidence_threshold => self.claude.team.confidence_threshold,
-                    risk_rounds => self.claude.team.risk_rounds,
-                    fanout => self.claude.workflow.fanout,
-                    verify_todos => self.claude.workflow.verify_todos,
-                    approval_gate => self.claude.team.approval_gate,
                 },
             )
             .context("rendering CLAUDE.md")?;
@@ -526,26 +568,37 @@ impl Project {
                 json!({ "type": "command", "command": "echo \"[$(basename \"$PWD\")]\"" }),
             );
         }
-        if self.claude.team.enabled {
+        let sub_conf = self.claude.workflow.subagent_confidence;
+        if self.claude.team.enabled || sub_conf > 0 {
             let mut env = serde_json::Map::new();
-            env.insert("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS".into(), json!("1"));
-            if self.claude.team.plan_gate {
-                env.insert("TEAM_PLAN_GATE".into(), json!("1"));
+            if self.claude.team.enabled {
+                env.insert("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS".into(), json!("1"));
+                if self.claude.team.plan_gate {
+                    env.insert("TEAM_PLAN_GATE".into(), json!("1"));
+                }
+                if self.claude.team.confidence_threshold > 0 {
+                    env.insert(
+                        "TEAM_CONFIDENCE_THRESHOLD".into(),
+                        json!(self.claude.team.confidence_threshold.to_string()),
+                    );
+                }
+                if self.claude.team.risk_rounds {
+                    env.insert("TEAM_RISK_ROUNDS".into(), json!("1"));
+                }
+                if self.claude.team.approval_gate {
+                    env.insert("TEAM_APPROVAL_GATE".into(), json!("1"));
+                }
             }
-            if self.claude.team.confidence_threshold > 0 {
+            if sub_conf > 0 {
                 env.insert(
-                    "TEAM_CONFIDENCE_THRESHOLD".into(),
-                    json!(self.claude.team.confidence_threshold.to_string()),
+                    "SUBAGENT_CONFIDENCE_THRESHOLD".into(),
+                    json!(sub_conf.to_string()),
                 );
             }
-            if self.claude.team.risk_rounds {
-                env.insert("TEAM_RISK_ROUNDS".into(), json!("1"));
-            }
-            if self.claude.team.approval_gate {
-                env.insert("TEAM_APPROVAL_GATE".into(), json!("1"));
-            }
             obj.insert("env".into(), Value::Object(env));
-            obj.insert("teammateMode".into(), json!(self.teammate_mode()));
+            if self.claude.team.enabled {
+                obj.insert("teammateMode".into(), json!(self.teammate_mode()));
+            }
         }
 
         let mut hooks = serde_json::Map::new();
@@ -604,6 +657,18 @@ impl Project {
                 } ]),
             );
         }
+        // Per-worker confidence gate: a SubagentStop hook that blocks a subagent
+        // which wrote files but isn't confident enough. Independent of teams —
+        // it pairs with worktree isolation for isolated writes + enforced confidence.
+        if self.claude.workflow.subagent_confidence > 0 {
+            hooks.insert(
+                "SubagentStop".into(),
+                json!([ { "hooks": [ {
+                    "type": "command",
+                    "command": "sh \"${CLAUDE_PROJECT_DIR}/.claude/hooks/subagent-confidence-gate.sh\""
+                } ] } ]),
+            );
+        }
         if !hooks.is_empty() {
             obj.insert("hooks".into(), Value::Object(hooks));
         }
@@ -638,8 +703,14 @@ impl Project {
     pub fn scaffold(&self, target: &Path, force: bool) -> Result<Vec<PathBuf>> {
         let files = self.render_all()?;
 
+        // CLAUDE.md is user-owned: ocgen creates it once and never overwrites it, so
+        // it is exempt from both the conflict check and the (forced) rewrite below.
+        let claude_md_path = std::path::Path::new("CLAUDE.md");
         if !force {
             for (rel, _) in &files {
+                if rel.as_path() == claude_md_path {
+                    continue;
+                }
                 let p = target.join(rel);
                 if p.exists() {
                     bail!(
@@ -653,6 +724,9 @@ impl Project {
         let mut written = Vec::new();
         for (rel, contents) in &files {
             let path = target.join(rel);
+            if rel.as_path() == claude_md_path && path.exists() {
+                continue; // preserve the user's CLAUDE.md
+            }
             if let Some(parent) = path.parent() {
                 fs::create_dir_all(parent)?;
             }
@@ -744,6 +818,13 @@ impl Project {
                 ));
                 self.claude.team.confidence_threshold = 96;
             }
+        }
+        if self.claude.workflow.subagent_confidence > 100 {
+            fixes.push(format!(
+                "subagent confidence {} → 96",
+                self.claude.workflow.subagent_confidence
+            ));
+            self.claude.workflow.subagent_confidence = 96;
         }
         fixes
     }

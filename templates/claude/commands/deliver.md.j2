@@ -1,0 +1,38 @@
+---
+description: Take a complex task end-to-end — sharpen, plan, research in parallel, gated execution
+argument-hint: "[the goal]"
+---
+Deliver this end-to-end: $ARGUMENTS
+
+Run the pipeline in order, and don't advance a phase until the previous one is solid.
+
+## 1. Sharpen the goal
+Rewrite the goal into a crisp brief using the prompt-engineering technique: explicit role, task,
+and success criteria; remove ambiguity.
+
+## 2. Gather requirements
+Interview me one question at a time — 2–4 default options (recommended first), only what resolves
+real ambiguity; infer the rest and say what you inferred. Cover scope, constraints, success
+criteria, and out-of-scope.
+
+## 3. Plan and get approval
+Draft a numbered task list + intent + a **risk register** (every risk gets a mitigation task).
+Present it and **invite push-back**; iterate until I approve. Do not execute yet.
+
+## 4. Research in parallel (read-only)
+Investigate concurrently where independent: fetch the relevant online HTML/PDF docs, and study the
+local source. Run these in parallel — exploration is side-effect-free.
+
+## 5. Execute under the gates
+Work the approved plan. For each decision or completed task, **state a `Confidence: NN%`** and
+surface gated decisions for me to confirm; keep working a risk until its mitigation round is done.
+Do not perform high-impact external actions (deploys, `git push`/merge, cloud mutations) without my
+explicit approval.
+
+## 6. Synthesize
+Summarize what was done, the decisions and their confidence, open risks, and next steps. If a
+coordinator session is named, report status to it with `SendMessage`.
+
+For several independent workstreams at once, run one `claude --worktree <name> --name <name>` session
+per workstream (each running `/deliver`) and coordinate via `/list-agents` + `SendMessage` — see the
+"Multi-session delivery" rule.

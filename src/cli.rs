@@ -166,6 +166,12 @@ pub enum EditWhat {
         #[arg(short, long, default_value = ".")]
         path: String,
     },
+    /// Enable or adjust Claude Code Agent Teams (and its governance gates).
+    Team {
+        /// Directory of the existing project.
+        #[arg(short, long, default_value = ".")]
+        path: String,
+    },
 }
 
 #[derive(Subcommand)]

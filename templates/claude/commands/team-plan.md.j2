@@ -29,8 +29,8 @@ argument-hint: "[what the team should accomplish]"
 
 ## 5. Схвалення
 Після схвалення додай рядок `Status: APPROVED` до `.claude/team/plan.md`, потім передай роботу
-`/team`. Кожен teammate має зафіксувати впевненість ≥ {{ confidence_threshold }}%
-(у `.claude/team/confidence/<task-id>.txt`) перед завершенням задачі.
+`/team`. Кожен teammate має вказати `Confidence: NN%` у завершенні задачі й бути впевненим
+≥ {{ confidence_threshold }}% перед її завершенням.
 {%- else -%}
 Goal: $ARGUMENTS
 
@@ -58,6 +58,6 @@ teammates or create execution tasks yet.
 
 ## 5. Approve
 Once the user approves, append a line `Status: APPROVED` to `.claude/team/plan.md`, then hand off
-to `/team` to execute. Each teammate must record ≥ {{ confidence_threshold }}% confidence (in
-`.claude/team/confidence/<task-id>.txt`) before completing a task.
+to `/team` to execute. Each teammate must state `Confidence: NN%` in its task completion and be
+≥ {{ confidence_threshold }}% confident before completing a task.
 {%- endif %}

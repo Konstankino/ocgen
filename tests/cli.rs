@@ -548,6 +548,8 @@ fn claude_landscape_plugin_opus_and_no_workflow_no_subagents() {
         improve_prompt: false,
         fanout: false,
         verify_todos: false,
+        deliver: false,
+        subagent_confidence: 0,
     };
     let mut boss = Agent::blank("boss", "custom", "");
     boss.mode = "primary".into();
@@ -593,6 +595,25 @@ fn claude_landscape_and_show_empty_model_defaults_to_opus() {
         .success()
         .stdout(contains("model: opus"))
         .stdout(contains("(none)")); // empty body
+}
+
+#[test]
+fn edit_team_is_advertised_and_guards_target() {
+    // The subcommand shows up in help.
+    ocgen()
+        .args(["edit", "team", "--help"])
+        .assert()
+        .success()
+        .stdout(contains("Agent Teams"));
+    // On an OpenCode project it errors before any prompt (target guard).
+    let dir = tempdir().unwrap();
+    scaffold_default(dir.path());
+    ocgen()
+        .args(["edit", "team", "-p"])
+        .arg(dir.path())
+        .assert()
+        .failure()
+        .stderr(contains("Claude Code"));
 }
 
 #[test]
