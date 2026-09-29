@@ -50,7 +50,8 @@ pre-author them.
 {% if risk_rounds %}
 - **Risk mitigation rounds.** Every risk in the register gets its own mitigation round; leave it
   `Mitigation: pending` until addressed, then mark it `done` or `accepted`. The `TeammateIdle`
-  hook keeps teammates working while any risk is still pending.
+  hook keeps teammates that can write working while any risk is still pending — read-only roles
+  (no Write/Edit tool) are exempt, since they cannot do mitigation work.
 {%- endif %}
 {% if approval_gate %}
 - **Execution-approval gate (hard line).** No agent may perform a high-impact external action —

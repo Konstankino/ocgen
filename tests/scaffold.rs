@@ -1600,6 +1600,92 @@ fn approval_gate_hook_blocks_high_impact_until_human_unlock() {
 }
 
 #[test]
+fn team_readonly_roles_env_lists_read_only_agents() {
+    let mut p = base_project("English");
+    p.target = Target::ClaudeCode;
+    p.project_name = "ro".into();
+    p.claude.team = Team {
+        enabled: true,
+        mode: "in-process".into(),
+        hooks: true,
+        plan_gate: true,
+        confidence_threshold: 96,
+        risk_rounds: true,
+        approval_gate: true,
+    };
+    p.agents = agent::claude_default_pipeline("English").unwrap();
+    let dir = tempdir().unwrap();
+    p.scaffold(dir.path(), false).unwrap();
+
+    let s: serde_json::Value =
+        serde_json::from_str(&read(dir.path(), ".claude/settings.json")).unwrap();
+    let ro = s["env"]["TEAM_READONLY_ROLES"].as_str().unwrap();
+    // explorer/reviewer are read-only; implementer writes.
+    assert!(ro.split_whitespace().any(|r| r == "explorer"));
+    assert!(ro.split_whitespace().any(|r| r == "reviewer"));
+    assert!(!ro.split_whitespace().any(|r| r == "implementer"));
+}
+
+#[test]
+fn teammate_idle_gate_exempts_read_only_roles() {
+    use std::io::Write as _;
+    use std::process::{Command, Stdio};
+
+    let mut p = base_project("English");
+    p.target = Target::ClaudeCode;
+    p.project_name = "idle".into();
+    p.claude.team = Team {
+        enabled: true,
+        mode: "in-process".into(),
+        hooks: true,
+        plan_gate: true,
+        confidence_threshold: 96,
+        risk_rounds: true,
+        approval_gate: true,
+    };
+    p.agents = agent::claude_default_pipeline("English").unwrap();
+    let dir = tempdir().unwrap();
+    p.scaffold(dir.path(), false).unwrap();
+    let hook = dir.path().join(".claude/hooks/team-teammate-idle.sh");
+    fs::create_dir_all(dir.path().join(".claude/team")).unwrap();
+    fs::write(
+        dir.path().join(".claude/team/plan.md"),
+        "- Risk: data loss\nMitigation: pending\n",
+    )
+    .unwrap();
+
+    let run = |agent_type: &str| -> i32 {
+        let mut child = Command::new("sh")
+            .arg(&hook)
+            .env("TEAM_RISK_ROUNDS", "1")
+            .env("TEAM_READONLY_ROLES", "explorer reviewer")
+            .env("CLAUDE_PROJECT_DIR", dir.path())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let payload =
+            format!(r#"{{"hook_event_name":"TeammateIdle","agent_type":"{agent_type}"}}"#);
+        let _ = child.stdin.take().unwrap().write_all(payload.as_bytes());
+        child.wait().unwrap().code().unwrap()
+    };
+
+    // Read-only roles are exempt even while a risk is pending (no livelock).
+    assert_eq!(run("explorer"), 0);
+    assert_eq!(run("reviewer"), 0);
+    // A writer is still held while a risk is pending.
+    assert_eq!(run("implementer"), 2);
+    // Once the risk is resolved, the writer may idle.
+    fs::write(
+        dir.path().join(".claude/team/plan.md"),
+        "- Risk: data loss\nMitigation: done\n",
+    )
+    .unwrap();
+    assert_eq!(run("implementer"), 0);
+}
+
+#[test]
 fn claude_doctor_repairs_bad_confidence_threshold() {
     let mut p = base_project("English");
     p.target = Target::ClaudeCode;

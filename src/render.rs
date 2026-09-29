@@ -584,6 +584,21 @@ impl Project {
                 }
                 if self.claude.team.risk_rounds {
                     env.insert("TEAM_RISK_ROUNDS".into(), json!("1"));
+                    // Read-only roles (no Write/Edit tool) can't mitigate, so the
+                    // TeammateIdle gate exempts them instead of livelocking them.
+                    let readonly: Vec<&str> = self
+                        .agents
+                        .iter()
+                        .filter(|a| a.mode != "primary")
+                        .filter(|a| {
+                            let t = a.tools.trim();
+                            !t.is_empty() && !t.contains("Write") && !t.contains("Edit")
+                        })
+                        .map(|a| a.name.as_str())
+                        .collect();
+                    if !readonly.is_empty() {
+                        env.insert("TEAM_READONLY_ROLES".into(), json!(readonly.join(" ")));
+                    }
                 }
                 if self.claude.team.approval_gate {
                     env.insert("TEAM_APPROVAL_GATE".into(), json!("1"));
