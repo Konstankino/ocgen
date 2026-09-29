@@ -15,6 +15,25 @@ For any complex or multi-step prompt, build self-checking into the plan — "don
 - **Rate your confidence.** State a confidence for each verified task and don't move on below a
   high bar (~95%) — re-scope or dig deeper instead of guessing.
 {% endif %}
+## Loop discipline
+
+Never grind on the same problem indefinitely:
+
+- **Two strikes, change the approach.** If the same approach fails twice, try a genuinely
+  different one. On the third failure, stop and report the blocker with its evidence (what you
+  tried, what happened, what you need) instead of retrying.
+- **Never game a gate.** Don't inflate a `Confidence: NN%` or mark a risk done just to get past a
+  hook — an honest "stuck" is better than a false "done".
+- **Bounded re-work.** Re-plan at most twice for one goal; resume a subagent whose output is marked
+  partial (it hit its `maxTurns`) at most once, then escalate.
+{%- if loop_guard_max %}
+- **The loop guard.** A gate may block the same agent on the same thing at most
+  {{ loop_guard_max }} times (fewer if its stated confidence stops rising). Then quality gates
+  release it with the result marked **UNRESOLVED**, and approval gates stay closed and halt it.
+  Every trip is logged to `.claude/loop-guard/escalations.md`. Before summarizing any work, read
+  that file and report each entry as unresolved — never present released work as done.
+{%- endif %}
+
 ## Parallel exploration
 
 Gather information concurrently, not step by step. When the next action does not depend on a

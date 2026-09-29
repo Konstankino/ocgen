@@ -17,6 +17,7 @@ permissions = """
 # web pages and search the web in addition to reading the codebase.
 claude_model = "opus"
 tools = "Read, Grep, Glob, WebFetch, WebSearch"
+claude_max_turns = 40
 
 [description]
 Ukrainian = "Досліджує код та вхідні дані, звітує про знахідки; тільки читання"

@@ -112,6 +112,14 @@ pub fn confidence_threshold(s: &str) -> Result<(), String> {
     }
 }
 
+/// A loop-guard budget: blocks allowed before escalating, 0 (unbounded) to 20.
+pub fn loop_budget(s: &str) -> Result<(), String> {
+    match s.trim().parse::<u8>() {
+        Ok(n) if n <= 20 => Ok(()),
+        _ => Err("must be a whole number between 0 and 20".into()),
+    }
+}
+
 /// A non-empty value that contains no whitespace (e.g. an npm package name).
 pub fn nonempty_nospace(s: &str) -> Result<(), String> {
     if s.is_empty() {
@@ -239,6 +247,16 @@ mod tests {
         assert!(confidence_threshold("-1").is_err());
         assert!(confidence_threshold("").is_err());
         assert!(confidence_threshold("abc").is_err());
+    }
+
+    #[test]
+    fn loop_budgets() {
+        for ok in ["0", "3", "20", " 5 "] {
+            assert!(loop_budget(ok).is_ok(), "{ok}");
+        }
+        for bad in ["21", "-1", "", "x"] {
+            assert!(loop_budget(bad).is_err(), "{bad}");
+        }
     }
 
     #[test]

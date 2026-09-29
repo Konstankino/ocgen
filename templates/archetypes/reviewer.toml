@@ -16,6 +16,7 @@ permissions = """
 # Claude Code defaults for this role.
 claude_model = "opus"
 tools = "Read, Grep, Glob"
+claude_max_turns = 30
 
 [description]
 Ukrainian = "Незалежне ревʼю іншою моделлю: коректність, дизайн, ризики; тільки читання"

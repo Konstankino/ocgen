@@ -235,6 +235,7 @@ impl Project {
                 model => model,
                 color => agent.color,
                 isolation => agent.isolation.trim(),
+                max_turns => agent.steps,
                 body => agent.body,
             };
             let md = env
@@ -380,6 +381,12 @@ impl Project {
             let body = templates::load("claude/hooks/subagent-confidence-gate.sh")?;
             components.push(("hooks/subagent-confidence-gate.sh".to_string(), body));
         }
+        // Shared loop guard, sourced by every blocking hook so no gate can hold an
+        // agent forever.
+        if self.has_blocking_hooks() {
+            let body = templates::load("claude/hooks/loop-guard.sh")?;
+            components.push(("hooks/loop-guard.sh".to_string(), body));
+        }
 
         // Coordinator body may itself be a template (the orchestrator prompt loops
         // over subagents), so render it with that context for CLAUDE.md.
@@ -409,6 +416,7 @@ impl Project {
             deliver => self.claude.workflow.deliver,
             inquire => self.claude.workflow.inquire,
             subagent_confidence => self.claude.workflow.subagent_confidence,
+            loop_guard_max => self.claude.workflow.loop_guard_max,
         };
         components.push((
             "rules/ocgen-workflow.md".to_string(),
@@ -542,6 +550,13 @@ impl Project {
         Ok(out)
     }
     /// The effective teammate display mode (defaults to in-process).
+    /// Whether any hook that can block (exit 2) is emitted — those source the loop guard.
+    fn has_blocking_hooks(&self) -> bool {
+        self.claude.workflow.subagent_confidence > 0
+            || (self.claude.team.enabled
+                && (self.claude.team.hooks || self.claude.team.approval_gate))
+    }
+
     fn teammate_mode(&self) -> String {
         let m = self.claude.team.mode.trim();
         if m.is_empty() {
@@ -619,6 +634,12 @@ impl Project {
                 env.insert(
                     "SUBAGENT_CONFIDENCE_THRESHOLD".into(),
                     json!(sub_conf.to_string()),
+                );
+            }
+            if self.has_blocking_hooks() {
+                env.insert(
+                    "LOOP_GUARD_MAX_BLOCKS".into(),
+                    json!(self.claude.workflow.loop_guard_max.to_string()),
                 );
             }
             obj.insert("env".into(), Value::Object(env));

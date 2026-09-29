@@ -184,6 +184,14 @@ const CLAUDE_FIELDS: &[Field] = &[
         example: "primary",
     },
     Field {
+        label: "max turns",
+        detail: "Claude subagent `maxTurns`: a hard ceiling on the agent's agentic turns. At the \
+                 limit Claude Code returns its output marked partial, which can be resumed. \
+                 Defaults come from the role (explorer 40, implementer 60, reviewer 30, verifier \
+                 40); '-' means unlimited.",
+        example: "60",
+    },
+    Field {
         label: "color",
         detail: "A Claude Code named colour: red, blue, green, yellow, purple, orange, pink, or                  cyan.",
         example: "cyan",
@@ -224,6 +232,16 @@ const CLAUDE_FIELDS: &[Field] = &[
                  refused if they try to create the marker themselves. Emitted independently of the \
                  quality-gate hook stubs so it is never silently off.",
         example: "on by default with --team;  --no-approval-gate to disable",
+    },
+    Field {
+        label: "loop guard",
+        detail: "Caps how many times one gate may block the same agent on the same task, role or \
+                 action (default 3; it trips early when stated confidence stops rising), so no \
+                 hook holds an agent forever. Quality gates (subagent/teammate confidence, risk \
+                 rounds) then release the agent with the result marked UNRESOLVED; the plan and \
+                 execution-approval gates never release — they tell the agent to stop and halt it. \
+                 Every trip is logged to .claude/loop-guard/escalations.md. 0 = unlimited.",
+        example: "3  (LOOP_GUARD_MAX_BLOCKS in settings.json)",
     },
 ];
 

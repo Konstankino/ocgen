@@ -387,18 +387,34 @@ fn run_claude(root: &Path, project: &Project) -> Result<()> {
             } else {
                 ui::truncate(a.tools.trim(), 30)
             };
+            let turns = if a.mode == "primary" {
+                ui::muted("—")
+            } else {
+                a.steps
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| ui::muted("∞"))
+            };
             vec![
                 style(&a.name).bold().to_string(),
                 mode,
                 model,
                 tools,
+                turns,
                 color_cell(&a.color),
                 ui::muted(&ui::truncate(&a.description, 34)),
             ]
         })
         .collect();
     ui::table(
-        &["NAME", "MODE", "MODEL", "TOOLS", "COLOR", "DESCRIPTION"],
+        &[
+            "NAME",
+            "MODE",
+            "MODEL",
+            "TOOLS",
+            "TURNS",
+            "COLOR",
+            "DESCRIPTION",
+        ],
         &rows,
     );
 
@@ -572,6 +588,14 @@ fn print_agent_claude(project: &Project, root: &Path, idx: usize) {
             a.tools.trim().to_string()
         },
     );
+    if a.mode != "primary" {
+        ui::kv(
+            "max turns",
+            &a.steps
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| ui::muted("(unlimited)")),
+        );
+    }
     ui::kv("color", &color_cell(&a.color));
     ui::kv("description", &dash(&a.description));
 

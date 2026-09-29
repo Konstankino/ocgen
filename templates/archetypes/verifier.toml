@@ -17,6 +17,7 @@ permissions = """
 # Claude Code defaults for this role.
 claude_model = "opus"
 tools = "Read, Grep, Glob, Bash"
+claude_max_turns = 40
 
 [description]
 Ukrainian = "Перевіряє результат: запускає тести/перевірки і звітує про пройдено/провалено"

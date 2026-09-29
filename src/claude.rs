@@ -198,6 +198,10 @@ pub struct Workflow {
     /// may stop, enforced by a `SubagentStop` hook. `0` disables. This pairs with
     /// worktree isolation to give isolated writes + enforced per-worker confidence.
     pub subagent_confidence: u8,
+    /// How many times one gate may block the same agent on the same thing before
+    /// the loop guard escalates (quality gates release the agent, marked
+    /// UNRESOLVED; approval gates stay closed and halt it). `0` = unbounded.
+    pub loop_guard_max: u8,
 }
 
 impl Default for Workflow {
@@ -211,6 +215,7 @@ impl Default for Workflow {
             deliver: true,
             inquire: true,
             subagent_confidence: 96,
+            loop_guard_max: 3,
         }
     }
 }

@@ -36,6 +36,9 @@ pub struct Archetype {
     /// Claude Code isolation default for this role (e.g. `worktree`).
     #[serde(default)]
     pub claude_isolation: Option<String>,
+    /// Claude Code `maxTurns` default for this role (None = unlimited).
+    #[serde(default)]
+    pub claude_max_turns: Option<u32>,
 }
 
 impl Archetype {

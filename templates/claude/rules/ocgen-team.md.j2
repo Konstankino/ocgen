@@ -55,6 +55,13 @@ pre-author them.
   and it is never pressured to fabricate closures for risks it doesn't own. Read-only roles (no
   Write/Edit tool) are exempt.
 {%- endif %}
+{% if loop_guard_max %}
+- **Loop guard.** No gate holds a teammate forever: after {{ loop_guard_max }} blocks on the same
+  task, role or action (or when its stated confidence stops rising), confidence and risk gates
+  release it with the result marked **UNRESOLVED**, while the plan and approval gates stay closed
+  and tell it to stop retrying. Each trip is logged to `.claude/loop-guard/escalations.md` — the
+  lead reports those as unresolved.
+{%- endif %}
 {% if approval_gate %}
 - **Execution-approval gate (hard line).** No agent may perform a high-impact external action —
   `ssh`, cloud mutations (`aws`/`gcloud`/`az`), `git push`/`merge`, `gh pr merge`/`release`,

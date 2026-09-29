@@ -550,6 +550,7 @@ fn claude_landscape_plugin_opus_and_no_workflow_no_subagents() {
         verify_todos: false,
         deliver: false,
         inquire: false,
+        loop_guard_max: 0,
         subagent_confidence: 0,
     };
     let mut boss = Agent::blank("boss", "custom", "");

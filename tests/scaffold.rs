@@ -981,6 +981,7 @@ fn claude_powerups_and_workflow_can_be_disabled() {
         verify_todos: false,
         deliver: false,
         inquire: false,
+        loop_guard_max: 0,
         subagent_confidence: 0,
     };
     let mut a = Agent::blank("w", "custom", "");
@@ -2068,6 +2069,11 @@ fn inquire_command_and_router() {
     let cmd = read(dir.path(), ".claude/commands/inquire.md");
     assert!(cmd.contains("Sharpen") && cmd.contains("Verified") && cmd.contains("Inferred"));
     assert!(cmd.contains(".claude/notes"));
+    // Resumable across sessions: a list with no arguments, a stored resume point,
+    // a refresher, and a staleness check against what changed in git.
+    assert!(cmd.contains("No arguments") && cmd.contains("Resume point"));
+    assert!(cmd.contains("Refresher") && cmd.contains("Mental model"));
+    assert!(cmd.contains("git log") && cmd.contains("Stale"));
     assert!(
         !cmd.contains("{{") && !cmd.contains("{%"),
         "unrendered Jinja"
@@ -2298,4 +2304,295 @@ fn improve_prompt_disabled_omits_command() {
         .path()
         .join(".claude/commands/improve-prompt.md")
         .exists());
+}
+
+// ---------------------------------------------------------------- loop guard --
+
+/// A Claude project with every blocking gate on (teams + governance + subagent gate).
+fn governed_claude_project(dir: &Path) {
+    let mut p = base_project("English");
+    p.target = Target::ClaudeCode;
+    p.project_name = "lg".into();
+    p.claude.team = Team {
+        enabled: true,
+        mode: "in-process".into(),
+        hooks: true,
+        plan_gate: true,
+        confidence_threshold: 96,
+        risk_rounds: true,
+        approval_gate: true,
+    };
+    p.agents = agent::claude_default_pipeline("English").unwrap();
+    p.scaffold(dir, false).unwrap();
+}
+
+/// Run a generated hook with `envs` and a JSON `payload`; return (exit, stdout, stderr).
+fn run_hook(hook: &Path, envs: &[(&str, &str)], payload: &str) -> (i32, String, String) {
+    use std::io::Write as _;
+    use std::process::{Command, Stdio};
+    let mut cmd = Command::new("sh");
+    cmd.arg(hook)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    for (k, v) in envs {
+        cmd.env(k, v);
+    }
+    let mut child = cmd.spawn().unwrap();
+    // The hook may exit before reading stdin; ignore a BrokenPipe on our write.
+    let _ = child.stdin.take().unwrap().write_all(payload.as_bytes());
+    let out = child.wait_with_output().unwrap();
+    (
+        out.status.code().unwrap(),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
+/// A git worktree with an uncommitted change, so the subagent gate treats it as a writer.
+fn dirty_worktree(root: &Path) -> std::path::PathBuf {
+    let wt = root.join("wt");
+    fs::create_dir_all(&wt).unwrap();
+    std::process::Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(&wt)
+        .output()
+        .unwrap();
+    fs::write(wt.join("new.rs"), "// change\n").unwrap();
+    wt
+}
+
+#[test]
+fn loop_guard_releases_stuck_subagent_writer_and_escalates() {
+    let dir = tempdir().unwrap();
+    governed_claude_project(dir.path());
+    let hook = dir.path().join(".claude/hooks/subagent-confidence-gate.sh");
+    let wt = dirty_worktree(dir.path());
+    let proj = dir.path().to_str().unwrap();
+    let env = [
+        ("CLAUDE_PROJECT_DIR", proj),
+        ("SUBAGENT_CONFIDENCE_THRESHOLD", "96"),
+        ("LOOP_GUARD_MAX_BLOCKS", "3"),
+    ];
+    // No stated confidence → no progress signal; only the budget can trip.
+    let ev = format!(
+        r#"{{"session_id":"s1","agent_id":"a1","cwd":"{}","last_assistant_message":"still stuck"}}"#,
+        wt.display()
+    );
+    assert_eq!(run_hook(&hook, &env, &ev).0, 2);
+    assert_eq!(run_hook(&hook, &env, &ev).0, 2);
+    let (code, out, _) = run_hook(&hook, &env, &ev);
+    assert_eq!(code, 0, "released on the 3rd block");
+    assert!(
+        out.contains("systemMessage") && out.contains("UNRESOLVED"),
+        "{out}"
+    );
+    let log = read(dir.path(), ".claude/loop-guard/escalations.md");
+    assert!(
+        log.contains("subagent-confidence") && log.contains("a1"),
+        "{log}"
+    );
+    // The state dir ignores itself, so nothing leaks into the repo.
+    assert_eq!(read(dir.path(), ".claude/loop-guard/.gitignore"), "*\n");
+    // Escalated once, not per event.
+    run_hook(&hook, &env, &ev);
+    let log = read(dir.path(), ".claude/loop-guard/escalations.md");
+    assert_eq!(log.lines().count(), 1, "{log}");
+}
+
+#[test]
+fn loop_guard_trips_early_when_confidence_stalls() {
+    let dir = tempdir().unwrap();
+    governed_claude_project(dir.path());
+    let hook = dir.path().join(".claude/hooks/subagent-confidence-gate.sh");
+    let wt = dirty_worktree(dir.path());
+    let proj = dir.path().to_str().unwrap();
+    let env = [
+        ("CLAUDE_PROJECT_DIR", proj),
+        ("SUBAGENT_CONFIDENCE_THRESHOLD", "96"),
+        ("LOOP_GUARD_MAX_BLOCKS", "3"),
+    ];
+    let ev = |agent: &str, score: u8| {
+        format!(
+            r#"{{"session_id":"s1","agent_id":"{agent}","cwd":"{}","last_assistant_message":"Confidence: {score}%"}}"#,
+            wt.display()
+        )
+    };
+    // Stalled: 60 then 60 → released at block 2.
+    assert_eq!(run_hook(&hook, &env, &ev("stall", 60)).0, 2);
+    assert_eq!(run_hook(&hook, &env, &ev("stall", 60)).0, 0);
+    // Rising: 60 then 80 → still making progress, still blocked.
+    assert_eq!(run_hook(&hook, &env, &ev("rise", 60)).0, 2);
+    assert_eq!(run_hook(&hook, &env, &ev("rise", 80)).0, 2);
+}
+
+#[test]
+fn loop_guard_resets_after_the_gate_passes() {
+    let dir = tempdir().unwrap();
+    governed_claude_project(dir.path());
+    let hook = dir.path().join(".claude/hooks/team-task-completed.sh");
+    let proj = dir.path().to_str().unwrap();
+    let env = [
+        ("CLAUDE_PROJECT_DIR", proj),
+        ("TEAM_CONFIDENCE_THRESHOLD", "96"),
+        ("LOOP_GUARD_MAX_BLOCKS", "3"),
+    ];
+    let ev = |tid: &str, msg: &str| {
+        format!(r#"{{"session_id":"s1","task_id":"{tid}","summary":"{msg}"}}"#)
+    };
+    assert_eq!(run_hook(&hook, &env, &ev("t1", "no rating")).0, 2);
+    assert_eq!(run_hook(&hook, &env, &ev("t1", "no rating")).0, 2);
+    assert_eq!(run_hook(&hook, &env, &ev("t1", "Confidence: 97%")).0, 0);
+    // Fresh budget after the pass: two more blocks before a release.
+    assert_eq!(run_hook(&hook, &env, &ev("t1", "no rating")).0, 2);
+    assert_eq!(run_hook(&hook, &env, &ev("t1", "no rating")).0, 2);
+}
+
+#[test]
+fn loop_guard_task_budgets_are_per_task() {
+    let dir = tempdir().unwrap();
+    governed_claude_project(dir.path());
+    let hook = dir.path().join(".claude/hooks/team-task-completed.sh");
+    let proj = dir.path().to_str().unwrap();
+    let env = [
+        ("CLAUDE_PROJECT_DIR", proj),
+        ("TEAM_CONFIDENCE_THRESHOLD", "96"),
+        ("LOOP_GUARD_MAX_BLOCKS", "3"),
+    ];
+    let ev =
+        |tid: &str| format!(r#"{{"session_id":"s1","task_id":"{tid}","summary":"no rating"}}"#);
+    assert_eq!(run_hook(&hook, &env, &ev("a")).0, 2);
+    assert_eq!(run_hook(&hook, &env, &ev("a")).0, 2);
+    // Another task's blocks don't consume task a's budget.
+    assert_eq!(run_hook(&hook, &env, &ev("b")).0, 2);
+    let (code, out, _) = run_hook(&hook, &env, &ev("a"));
+    assert_eq!(code, 0, "task a released on its own 3rd block");
+    assert!(out.contains("UNRESOLVED"));
+    assert_eq!(run_hook(&hook, &env, &ev("b")).0, 2);
+}
+
+#[test]
+fn loop_guard_releases_idle_teammate_and_names_owned_risk() {
+    let dir = tempdir().unwrap();
+    governed_claude_project(dir.path());
+    let hook = dir.path().join(".claude/hooks/team-teammate-idle.sh");
+    fs::create_dir_all(dir.path().join(".claude/team")).unwrap();
+    fs::write(
+        dir.path().join(".claude/team/plan.md"),
+        "- Risk: data loss — Owner: implementer — Mitigation: pending\n",
+    )
+    .unwrap();
+    let proj = dir.path().to_str().unwrap();
+    let env = [
+        ("CLAUDE_PROJECT_DIR", proj),
+        ("TEAM_RISK_ROUNDS", "1"),
+        ("LOOP_GUARD_MAX_BLOCKS", "3"),
+    ];
+    let ev = r#"{"session_id":"s1","agent_type":"implementer"}"#;
+    assert_eq!(run_hook(&hook, &env, ev).0, 2);
+    assert_eq!(run_hook(&hook, &env, ev).0, 2);
+    let (code, out, _) = run_hook(&hook, &env, ev);
+    assert_eq!(code, 0);
+    assert!(out.contains("UNRESOLVED"));
+    let log = read(dir.path(), ".claude/loop-guard/escalations.md");
+    assert!(log.contains("data loss"), "{log}");
+}
+
+#[test]
+fn loop_guard_never_releases_the_plan_gate() {
+    let dir = tempdir().unwrap();
+    governed_claude_project(dir.path());
+    let hook = dir.path().join(".claude/hooks/team-task-created.sh");
+    let proj = dir.path().to_str().unwrap();
+    let env = [
+        ("CLAUDE_PROJECT_DIR", proj),
+        ("TEAM_PLAN_GATE", "1"),
+        ("LOOP_GUARD_MAX_BLOCKS", "3"),
+    ];
+    let ev = r#"{"session_id":"s1","agent_type":"implementer"}"#;
+    for _ in 0..2 {
+        assert_eq!(run_hook(&hook, &env, ev).0, 2);
+    }
+    for _ in 0..3 {
+        let (code, _, err) = run_hook(&hook, &env, ev);
+        assert_eq!(code, 2, "an unapproved plan is never released");
+        assert!(err.contains("STOP retrying"), "{err}");
+    }
+    let log = read(dir.path(), ".claude/loop-guard/escalations.md");
+    assert_eq!(log.lines().count(), 1, "{log}");
+}
+
+#[test]
+fn loop_guard_halts_repeated_high_impact_attempts_without_allowing() {
+    let dir = tempdir().unwrap();
+    governed_claude_project(dir.path());
+    let hook = dir.path().join(".claude/hooks/team-approval-gate.sh");
+    let proj = dir.path().to_str().unwrap();
+    let env = [
+        ("CLAUDE_PROJECT_DIR", proj),
+        ("TEAM_APPROVAL_GATE", "1"),
+        ("LOOP_GUARD_MAX_BLOCKS", "3"),
+    ];
+    let push =
+        r#"{"session_id":"s1","tool_name":"Bash","tool_input":{"command":"git push origin main"}}"#;
+    assert_eq!(run_hook(&hook, &env, push).0, 2);
+    assert_eq!(run_hook(&hook, &env, push).0, 2);
+    // Budget spent: halt the agent — but the command is still denied, never allowed.
+    let (code, out, _) = run_hook(&hook, &env, push);
+    assert_eq!(code, 0);
+    assert!(out.contains(r#""permissionDecision": "deny""#), "{out}");
+    assert!(out.contains(r#""continue": false"#), "{out}");
+    // Self-protection still blocks marker creation outright.
+    let forge = r#"{"session_id":"s2","tool_name":"Bash","tool_input":{"command":"touch .claude/team/execution-approved"}}"#;
+    assert_eq!(run_hook(&hook, &env, forge).0, 2);
+    assert!(!dir.path().join(".claude/team/execution-approved").exists());
+}
+
+#[test]
+fn loop_guard_zero_budget_is_unbounded() {
+    let dir = tempdir().unwrap();
+    governed_claude_project(dir.path());
+    let hook = dir.path().join(".claude/hooks/team-task-completed.sh");
+    let proj = dir.path().to_str().unwrap();
+    let env = [
+        ("CLAUDE_PROJECT_DIR", proj),
+        ("TEAM_CONFIDENCE_THRESHOLD", "96"),
+        ("LOOP_GUARD_MAX_BLOCKS", "0"),
+    ];
+    let ev = r#"{"session_id":"s1","task_id":"t","summary":"no rating"}"#;
+    for _ in 0..6 {
+        assert_eq!(run_hook(&hook, &env, ev).0, 2);
+    }
+    assert!(!dir.path().join(".claude/loop-guard").exists());
+}
+
+#[test]
+fn loop_guard_renders_library_budget_turn_caps_and_discipline() {
+    let dir = tempdir().unwrap();
+    governed_claude_project(dir.path());
+    assert!(dir.path().join(".claude/hooks/loop-guard.sh").exists());
+    let settings: serde_json::Value =
+        serde_json::from_str(&read(dir.path(), ".claude/settings.json")).unwrap();
+    assert_eq!(settings["env"]["LOOP_GUARD_MAX_BLOCKS"], "3");
+    assert!(read(dir.path(), ".claude/agents/implementer.md").contains("maxTurns: 60"));
+    assert!(read(dir.path(), ".claude/agents/explorer.md").contains("maxTurns: 40"));
+    assert!(read(dir.path(), ".claude/rules/ocgen-workflow.md").contains("Loop discipline"));
+    assert!(read(dir.path(), ".claude/commands/deliver.md").contains("at most 2 re-plans"));
+
+    // No blocking gate at all → no library and no budget env.
+    let mut p = base_project("English");
+    p.target = Target::ClaudeCode;
+    p.project_name = "nolg".into();
+    p.claude.workflow.subagent_confidence = 0;
+    p.agents = agent::claude_default_pipeline("English").unwrap();
+    let dir2 = tempdir().unwrap();
+    p.scaffold(dir2.path(), false).unwrap();
+    assert!(!dir2.path().join(".claude/hooks/loop-guard.sh").exists());
+    assert!(!read(dir2.path(), ".claude/settings.json").contains("LOOP_GUARD_MAX_BLOCKS"));
+}
+
+#[test]
+fn workflow_without_loop_guard_field_backfills_three() {
+    let wf: Workflow = serde_json::from_str(r#"{"deliver": true}"#).unwrap();
+    assert_eq!(wf.loop_guard_max, 3);
 }

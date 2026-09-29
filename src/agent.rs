@@ -106,6 +106,8 @@ impl Agent {
             description: arch.description_for(lang),
             body,
             isolation: arch.claude_isolation(),
+            // `steps` doubles as the Claude subagent's `maxTurns` ceiling.
+            steps: arch.claude_max_turns,
             ..Default::default()
         })
     }

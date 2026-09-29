@@ -17,13 +17,35 @@
 payload=$(cat)
 marker="${CLAUDE_PROJECT_DIR:-.}/.claude/team/execution-approved"
 
+# Loop guard (shared). This gate NEVER allows a blocked action; after the budget
+# it denies AND halts the agent (continue:false) so it stops retrying.
+lg_on() { return 1; }
+lg_lib="$(dirname "$0")/loop-guard.sh"
+[ -f "$lg_lib" ] && . "$lg_lib"
+
+# deny <reason> -> block this call; once the budget is spent, halt the agent too.
+deny() {
+    if lg_on; then
+        who=$(lg_field "$payload" agent_type)
+        [ -n "$who" ] || who=main
+        lg_key "$payload" approval-gate "$who"
+        if [ "$(lg_bump)" -ge "$LG_MAX" ]; then
+            lg_escalate "halted after repeated high-impact attempts: $1"
+            msg="Halted by the loop guard: repeated attempts at a gated high-impact action ($1). A human must review and approve from their own terminal; see .claude/loop-guard/escalations.md"
+            printf '{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "%s"}, "continue": false, "stopReason": "%s"}\n' "$msg" "$msg"
+            exit 0
+        fi
+    fi
+    exit 2
+}
+
 # Self-protection: an agent must never create or modify the approval marker
 # itself (that would let it approve its own high-impact actions). Any tool call
 # that references the marker path is blocked outright.
 if printf '%s' "$payload" | grep -q 'execution-approved'; then
     echo "Blocked: the execution-approval marker may only be created by a HUMAN," >&2
     echo "from a terminal outside the agent — never through a tool call." >&2
-    exit 2
+    deny "tried to create the approval marker"
 fi
 
 # Deterministic denylist of high-impact external / substantial-side-effect
@@ -40,7 +62,7 @@ case "$payload" in
             echo "A human must review, then unlock execution from their own terminal:" >&2
             echo "    touch \"$marker\"" >&2
             echo "No agent may create that marker. Delete it afterwards to re-lock." >&2
-            exit 2
+            deny "gated command without approval"
         fi
     fi
     ;;

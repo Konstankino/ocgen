@@ -16,6 +16,7 @@ permissions = """
 # Claude Code defaults for this role.
 claude_model = "opus"
 tools = "Read, Edit, Write, Grep, Glob"
+claude_max_turns = 60
 # The writer role runs in its own enforced git worktree so parallel edits never
 # collide (Claude Code `isolation: worktree`).
 claude_isolation = "worktree"

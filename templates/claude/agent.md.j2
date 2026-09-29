@@ -11,5 +11,8 @@ color: {{ agent.color }}
 {% if agent.isolation -%}
 isolation: {{ agent.isolation }}
 {% endif -%}
+{% if agent.max_turns -%}
+maxTurns: {{ agent.max_turns }}
+{% endif -%}
 ---
 {{ agent.body }}

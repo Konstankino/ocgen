@@ -501,6 +501,16 @@ fn build_claude_project(
     )?
     .parse::<u8>()
     .unwrap_or(96);
+    p.claude.workflow.loop_guard_max = ask_v(
+        theme,
+        "Max times a gate may block the same agent before escalating (0–20, 0 = unlimited)",
+        "Loop guard: after this many blocks (or when confidence stops rising) quality gates release the agent marked UNRESOLVED; approval gates stay closed and halt it.",
+        Some("3"),
+        validate::loop_budget,
+    )?
+    .trim()
+    .parse::<u8>()
+    .unwrap_or(3);
     // Seed the team prompts from the CLI flags, then reuse the shared editor.
     let team_seed = Team {
         enabled: team.enabled,
@@ -767,6 +777,17 @@ fn configure_claude_agent(
         Some(&a.tools),
         true,
     )?;
+    if a.mode != "primary" {
+        let current = a.steps.map(|s| s.to_string()).unwrap_or_default();
+        let turns = ask_optional_v(
+            theme,
+            "  Max turns (- = unlimited)",
+            "maxTurns: a hard ceiling on this subagent's agentic turns; at the limit its output returns marked partial.",
+            &current,
+            validate::steps,
+        )?;
+        a.steps = turns.parse().ok();
+    }
     a.description = ask(
         theme,
         "  Description",

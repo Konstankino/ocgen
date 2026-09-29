@@ -32,17 +32,21 @@ Present it and **invite push-back**; iterate until I approve. Do not execute yet
 ## 4. Research in parallel (read-only)
 Investigate concurrently where independent: fetch the relevant online HTML/PDF docs, and study the
 local source. Run these in parallel — exploration is side-effect-free. If what you find contradicts
-the approved plan, go back to phase 3 and re-plan rather than pushing through.
+the approved plan, go back to phase 3 and re-plan rather than pushing through — at most 2 re-plans;
+after that, stop and present the conflict to me instead of looping.
 
 ## 5. Execute under the gates
 Work the approved plan. For each decision or completed task, **state a `Confidence: NN%`** and
 surface gated decisions for me to confirm; keep working a risk until its mitigation round is done.
+Give each task at most 3 attempts: if the same approach fails twice, change it; on the third
+failure, stop and report the blocker with evidence.
 Do not perform high-impact external actions (deploys, `git push`/merge, cloud mutations) without my
 explicit approval.
 
 ## 6. Synthesize
-Summarize what was done, the decisions and their confidence, open risks, and next steps. If a
-coordinator session is named, report status to it with `SendMessage`.
+Summarize what was done, the decisions and their confidence, open risks, and next steps. Report
+anything left unresolved — including every entry in `.claude/loop-guard/escalations.md` — as
+unresolved, not done. If a coordinator session is named, report status to it with `SendMessage`.
 
 For several independent workstreams at once, run one `claude --worktree <name> --name <name>` session
 per workstream (each running `/deliver`) and coordinate via `/list-agents` + `SendMessage` — see the
