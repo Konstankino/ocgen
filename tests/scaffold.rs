@@ -4128,3 +4128,75 @@ fn scaffold_keeping_skips_kept_files_and_writes_the_rest() {
     let kept = plan.iter().find(|c| c.rel == "opencode.json").unwrap();
     assert_eq!(kept.hand_edited, Some(true));
 }
+
+// ------------------------------------------------------------------ hook shell -----
+
+/// Every command hook in a hooks table, flattened.
+fn all_hooks(table: &serde_json::Value) -> Vec<serde_json::Value> {
+    table["hooks"]
+        .as_object()
+        .into_iter()
+        .flat_map(|events| events.values())
+        .flat_map(|groups| groups.as_array().cloned().unwrap_or_default())
+        .flat_map(|g| g["hooks"].as_array().cloned().unwrap_or_default())
+        .collect()
+}
+
+#[test]
+fn every_generated_hook_pins_bash() {
+    // The commands are POSIX sh. Without a pinned shell, Claude Code on Windows
+    // falls back to PowerShell when Git Bash is missing: the command fails to
+    // parse and the gate fails open.
+    let dir = tempdir().unwrap();
+    let mut p = claude_default("sh");
+    p.claude.team.enabled = true;
+    p.claude.hooks_extra.notify = true;
+    p.claude.hooks_extra.format_cmd = "cargo fmt".into();
+    p.claude.hooks_extra.config_audit = true;
+    p.claude.output = Output {
+        project: true,
+        plugin: true,
+    };
+    p.scaffold(dir.path(), false).unwrap();
+
+    let plugin: serde_json::Value =
+        serde_json::from_str(&read(dir.path(), "plugin/sh/hooks/hooks.json")).unwrap();
+    for table in [settings_of(dir.path()), plugin] {
+        let hooks = all_hooks(&table);
+        assert!(hooks.len() >= 5, "hooks present: {}", hooks.len());
+        for h in hooks {
+            assert_eq!(h["shell"], "bash", "{h}");
+        }
+    }
+}
+
+#[test]
+fn verify_flags_hooks_that_cannot_run_in_bash() {
+    use ocgen::verify::{hook_shell, Status};
+    let bash = Path::new("C:/Program Files/Git/bin/bash.exe");
+    let pinned = serde_json::json!({ "hooks": { "PreToolUse": [ { "hooks": [
+        { "type": "command", "command": "if [ 1 ]; then :; fi", "shell": "bash" }
+    ] } ] } });
+    let unpinned = serde_json::json!({ "hooks": { "PreToolUse": [ { "hooks": [
+        { "type": "command", "command": "if [ 1 ]; then :; fi" }
+    ] } ] } });
+
+    // Pinned and (off Windows, or with Git Bash) runnable.
+    assert_eq!(hook_shell(&pinned, false, None).status, Status::Pass);
+    assert_eq!(hook_shell(&pinned, true, Some(bash)).status, Status::Pass);
+
+    // Windows without Git Bash: the hooks cannot run, so the gates fail open.
+    let c = hook_shell(&pinned, true, None);
+    assert_eq!(c.status, Status::Fail);
+    assert!(c.detail.contains("Git for Windows"), "{}", c.detail);
+    assert_eq!(hook_shell(&unpinned, true, None).status, Status::Fail);
+
+    // A project generated before the shell was pinned.
+    let c = hook_shell(&unpinned, false, None);
+    assert_eq!(c.status, Status::Warn);
+    assert!(c.detail.contains("ocgen doctor"), "{}", c.detail);
+
+    // Nothing to check.
+    let none = serde_json::json!({});
+    assert_eq!(hook_shell(&none, true, None).status, Status::Skip);
+}

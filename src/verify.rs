@@ -147,6 +147,7 @@ pub fn verify(project: &Project, root: &Path, opts: &Options) -> Vec<Check> {
     if let Some(s) = &settings {
         out.push(hook_scripts(root, s));
         out.push(hook_commands(root, s));
+        out.push(hook_shell(s, cfg!(windows), find_git_bash(s).as_deref()));
         out.push(approval_gate(root, s));
         out.push(pre_push(project, root));
         out.push(statusline(root, s));
@@ -261,6 +262,100 @@ fn hook_entries(settings: &Value) -> Vec<(String, String)> {
         }
     }
     v
+}
+
+/// Whether each command hook pins `"shell": "bash"` (in table order).
+fn hook_shells_pinned(settings: &Value) -> Vec<bool> {
+    let mut v = Vec::new();
+    if let Some(hooks) = settings.get("hooks").and_then(Value::as_object) {
+        for groups in hooks.values() {
+            for g in groups.as_array().into_iter().flatten() {
+                for h in g
+                    .get("hooks")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                {
+                    if h.get("command").is_some() {
+                        v.push(h.get("shell").and_then(Value::as_str) == Some("bash"));
+                    }
+                }
+            }
+        }
+    }
+    v
+}
+
+/// Git Bash on Windows, the way Claude Code looks for it: the
+/// `CLAUDE_CODE_GIT_BASH_PATH` override (environment or settings `env`), the
+/// usual install locations, then PATH (skipping the WSL launcher in System32).
+fn find_git_bash(settings: &Value) -> Option<PathBuf> {
+    let configured = std::env::var_os("CLAUDE_CODE_GIT_BASH_PATH")
+        .map(PathBuf::from)
+        .or_else(|| {
+            settings
+                .pointer("/env/CLAUDE_CODE_GIT_BASH_PATH")
+                .and_then(Value::as_str)
+                .map(PathBuf::from)
+        });
+    let installs = ["ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"]
+        .into_iter()
+        .filter_map(std::env::var_os)
+        .flat_map(|base| {
+            let base = PathBuf::from(base);
+            [
+                base.join("Git/bin/bash.exe"),
+                base.join("Programs/Git/bin/bash.exe"),
+            ]
+        });
+    let on_path = std::env::var_os("PATH").into_iter().flat_map(|p| {
+        std::env::split_paths(&p)
+            .filter(|d| {
+                let d = d.to_string_lossy().to_lowercase();
+                !d.contains("system32") && !d.contains("windowsapps")
+            })
+            .map(|d| d.join("bash.exe"))
+            .collect::<Vec<_>>()
+    });
+    configured
+        .into_iter()
+        .chain(installs)
+        .chain(on_path)
+        .find(|p| p.is_file())
+}
+
+/// The generated hook commands are POSIX sh. Claude Code runs them in bash only
+/// when the hook says so and — on Windows — Git Bash exists; otherwise they go to
+/// PowerShell, fail to parse, and every gate fails open (a hook error never blocks).
+pub fn hook_shell(settings: &Value, windows: bool, bash: Option<&Path>) -> Check {
+    let name = "hook shell";
+    let pinned = hook_shells_pinned(settings);
+    if pinned.is_empty() {
+        return check(name, Status::Skip, "no hooks configured");
+    }
+    if windows && bash.is_none() {
+        return check(
+            name,
+            Status::Fail,
+            "Git Bash not found — the hooks cannot run here, so the gates (including the approval gate) let everything through. Install Git for Windows, or set CLAUDE_CODE_GIT_BASH_PATH to its bash.exe",
+        );
+    }
+    let unpinned = pinned.iter().filter(|p| !**p).count();
+    if unpinned > 0 {
+        return check(
+            name,
+            Status::Warn,
+            format!(
+                "{unpinned} hook(s) don't set \"shell\": \"bash\" — on Windows without Git Bash they run in PowerShell and fail open. Run `ocgen doctor`"
+            ),
+        );
+    }
+    let via = bash.map_or_else(|| "sh".to_string(), |b| b.display().to_string());
+    check(
+        name,
+        Status::Pass,
+        format!("{} hook(s) run in bash ({via})", pinned.len()),
+    )
 }
 
 fn hook_scripts(root: &Path, settings: &Value) -> Check {

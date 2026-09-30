@@ -905,10 +905,7 @@ impl Project {
             let escaped = tip.trim().replace('\'', "'\\''");
             hooks.insert(
                 "SessionStart".into(),
-                json!([ { "hooks": [ {
-                    "type": "command",
-                    "command": format!("echo '{escaped}'")
-                } ] } ]),
+                json!([ { "hooks": [ command_hook(format!("echo '{escaped}'")) ] } ]),
             );
         }
         if self.claude.team.enabled && self.claude.team.hooks {
@@ -919,10 +916,7 @@ impl Project {
             ] {
                 hooks.insert(
                     event.to_string(),
-                    json!([ { "hooks": [ {
-                        "type": "command",
-                        "command": hook_cmd(prefix, dir, script)
-                    } ] } ]),
+                    json!([ { "hooks": [ command_hook(hook_cmd(prefix, dir, script)) ] } ]),
                 );
             }
         }
@@ -934,10 +928,7 @@ impl Project {
                 "PreToolUse".into(),
                 json!([ {
                     "matcher": "Bash|Write|Edit|MultiEdit|NotebookEdit",
-                    "hooks": [ {
-                        "type": "command",
-                        "command": hook_cmd(prefix, dir, "team-approval-gate.sh")
-                    } ]
+                    "hooks": [ command_hook(hook_cmd(prefix, dir, "team-approval-gate.sh")) ]
                 } ]),
             );
         }
@@ -947,10 +938,7 @@ impl Project {
         if self.worker_gate() {
             hooks.insert(
                 "SubagentStop".into(),
-                json!([ { "hooks": [ {
-                    "type": "command",
-                    "command": hook_cmd(prefix, dir, "subagent-confidence-gate.sh")
-                } ] } ]),
+                json!([ { "hooks": [ command_hook(hook_cmd(prefix, dir, "subagent-confidence-gate.sh")) ] } ]),
             );
         }
         // Optional quality-of-life hooks. SessionStart may already hold the tip,
@@ -968,20 +956,14 @@ impl Project {
         if x.compact_context {
             push(
                 "SessionStart",
-                json!({ "matcher": "compact", "hooks": [ {
-                    "type": "command",
-                    "command": "echo 'Context was just compacted. Re-read the project rules in .claude/rules/ (workflow, team, loop discipline). If an /inquire study session is active, re-read its ledger resume point in .claude/notes/ before continuing.'"
-                } ] }),
+                json!({ "matcher": "compact", "hooks": [ command_hook("echo 'Context was just compacted. Re-read the project rules in .claude/rules/ (workflow, team, loop discipline). If an /inquire study session is active, re-read its ledger resume point in .claude/notes/ before continuing.'") ] }),
             );
         }
         if x.notify {
             for event in ["Notification", "StopFailure"] {
                 push(
                     event,
-                    json!({ "hooks": [ {
-                        "type": "command",
-                        "command": hook_cmd(prefix, dir, "notify.sh")
-                    } ] }),
+                    json!({ "hooks": [ command_hook(hook_cmd(prefix, dir, "notify.sh")) ] }),
                 );
             }
         }
@@ -990,19 +972,13 @@ impl Project {
             let fmt = fmt.replace('\'', "'\\''");
             push(
                 "PostToolUse",
-                json!({ "matcher": "Edit|Write", "hooks": [ {
-                    "type": "command",
-                    "command": hook_cmd(&format!("OCGEN_FORMAT_CMD='{fmt}' {prefix}"), dir, "format.sh")
-                } ] }),
+                json!({ "matcher": "Edit|Write", "hooks": [ command_hook(hook_cmd(&format!("OCGEN_FORMAT_CMD='{fmt}' {prefix}"), dir, "format.sh")) ] }),
             );
         }
         if x.config_audit {
             push(
                 "ConfigChange",
-                json!({ "hooks": [ {
-                    "type": "command",
-                    "command": hook_cmd(prefix, dir, "config-audit.sh")
-                } ] }),
+                json!({ "hooks": [ command_hook(hook_cmd(prefix, dir, "config-audit.sh")) ] }),
             );
         }
         hooks
@@ -1946,6 +1922,13 @@ fn command_to_skill(name: &str, command_md: &str, user_run: bool) -> String {
     out.push_str("---\n");
     out.push_str(body);
     out
+}
+
+/// A `type: "command"` hook entry. The commands are POSIX sh, so the shell is
+/// pinned: left to its default, Claude Code on Windows uses PowerShell when Git
+/// Bash is missing, where the command fails to parse and the gate fails open.
+fn command_hook(command: impl Into<String>) -> Value {
+    json!({ "type": "command", "command": command.into(), "shell": "bash" })
 }
 
 /// A hook command: run `ocgen hook <name>` when the installed ocgen speaks exactly

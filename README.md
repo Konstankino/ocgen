@@ -216,6 +216,10 @@ delete as stale (`-`) is listed with a short diff.
 - files are up to date (the same plan as `doctor`), and there are no consistency issues;
 - `settings.json` is valid JSON with known keys;
 - every hook script exists and parses, and the side-effect-free hook commands actually run;
+- every hook pins `"shell": "bash"`, and on Windows Git Bash is installed. The hook commands
+  are POSIX sh; without Git Bash Claude Code runs them in PowerShell, where they fail to
+  parse and **the gates let everything through** — install Git for Windows (or set
+  `CLAUDE_CODE_GIT_BASH_PATH`);
 - the approval gate blocks `git push` and allows `git status`, using the real generated
   command;
 - the statusline renders;
@@ -736,7 +740,7 @@ for a plugin; `--team` is off by default. (The `--base-url` flag is OpenCode-onl
 |---|---|
 | `ocgen landscape [dir]` (alias `horizon`) | Read-only overview: agents (alias/tools/colour), skills, workflow/output/team setup, delegation topology, and a **Checks** section. |
 | `ocgen doctor [dir] [--dry-run] [--yes]` | Repair the project and rewrite files (invalid models, colours, empty roles, bad enum values, older state files). Shows a per-file plan with diffs, flags hand edits, asks first, and backs up to `.ocgen-backup/`. |
-| `ocgen verify [dir] [--no-claude]` | Check the project works: up to date, settings valid, hooks run, the approval gate blocks, the statusline renders, ocgen on PATH is current, Claude Code validation passes. Exits 1 on failure. |
+| `ocgen verify [dir] [--no-claude]` | Check the project works: up to date, settings valid, hooks run (in bash; Git Bash present on Windows), the approval gate blocks, the statusline renders, ocgen on PATH is current, Claude Code validation passes. Exits 1 on failure. |
 | `ocgen approve [dir] [--minutes N] [--status] [--revoke]` | A human approves high-impact actions for a limited time. Refuses to run under Claude Code or without a terminal. |
 | `ocgen verify [dir] --run-check` | Also run the project's check command. |
 | `ocgen managed-settings` | Print a recommended organisation policy (`managed-settings.json`): no bypass mode, secrets unreadable, high-impact commands always ask, strict sandbox. |
