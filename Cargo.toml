@@ -2,7 +2,7 @@
 name = "ocgen"
 version = "0.1.0"
 edition = "2021"
-description = "Interactive wizard to scaffold OpenCode and Claude Code multi-agent projects"
+description = "Interactive bootstrapper for LLM multi-agent projects (OpenCode, Claude Code)"
 license = "MIT"
 # Used by the installers and `cargo install --git`.
 repository = "https://github.com/Konstankino/ocgen"

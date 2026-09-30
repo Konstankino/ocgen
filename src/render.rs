@@ -1,5 +1,6 @@
 //! Turning a [`Project`] into concrete files.
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -51,6 +52,9 @@ pub enum PrePush {
     /// Not a git repository, not a Claude project, or the approval gate is off.
     NotApplicable,
 }
+
+/// The user-owned file ocgen creates once and never overwrites.
+const CLAUDE_MD: &str = "CLAUDE.md";
 
 /// What `doctor` would do to one file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1056,10 +1060,9 @@ impl Project {
 
         // CLAUDE.md is user-owned: ocgen creates it once and never overwrites it, so
         // it is exempt from both the conflict check and the (forced) rewrite below.
-        let claude_md_path = std::path::Path::new("CLAUDE.md");
         if !force {
             for (rel, _) in &files {
-                if rel.as_path() == claude_md_path {
+                if rel.as_path() == Path::new(CLAUDE_MD) {
                     continue;
                 }
                 let p = target.join(rel);
@@ -1071,12 +1074,31 @@ impl Project {
                 }
             }
         }
+        self.write_files(target, &files, &BTreeSet::new())
+    }
 
+    /// Like a forced [`Project::scaffold`], but leaves the files in `keep` (paths
+    /// relative to `target`, with forward slashes) exactly as they are on disk.
+    /// Used by `ocgen new` when the user chooses to keep an existing file.
+    pub fn scaffold_keeping(&self, target: &Path, keep: &BTreeSet<String>) -> Result<Vec<PathBuf>> {
+        self.write_files(target, &self.render_all()?, keep)
+    }
+
+    fn write_files(
+        &self,
+        target: &Path,
+        files: &[(PathBuf, String)],
+        keep: &BTreeSet<String>,
+    ) -> Result<Vec<PathBuf>> {
+        let claude_md_path = Path::new(CLAUDE_MD);
         let mut written = Vec::new();
-        for (rel, contents) in &files {
+        for (rel, contents) in files {
             let path = target.join(rel);
             if rel.as_path() == claude_md_path && path.exists() {
                 continue; // preserve the user's CLAUDE.md
+            }
+            if keep.contains(&rel.to_string_lossy().replace('\\', "/")) {
+                continue; // the user chose to keep their version
             }
             if let Some(parent) = path.parent() {
                 fs::create_dir_all(parent)?;
@@ -1092,7 +1114,8 @@ impl Project {
         }
 
         // Persist project state so `add agent` can reload and re-render, with a
-        // fingerprint of every file just written (lets `doctor` spot hand edits).
+        // fingerprint of every generated file (lets `doctor` spot hand edits — a
+        // kept file is recorded too, so it shows up there as differing).
         let mut state = self.clone();
         state.generated = files
             .iter()

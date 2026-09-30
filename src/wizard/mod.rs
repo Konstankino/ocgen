@@ -1,6 +1,6 @@
 //! The interactive wizard — the whole user-facing experience.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -10,7 +10,7 @@ use dialoguer::{theme::ColorfulTheme, Editor};
 use ocgen::agent::{self, Agent};
 use ocgen::claude::{Output, Powerups, Team};
 use ocgen::manifest::{Manifest, Model, Provider};
-use ocgen::render::Project;
+use ocgen::render::{ChangeKind, FileChange, Project};
 use ocgen::target::Target;
 use ocgen::templates;
 use ocgen::validate::{self, unique_ident};
@@ -132,7 +132,7 @@ pub fn run_templates_edit(path_arg: Option<String>) -> Result<()> {
 /// `ocgen new` — ask everything, then scaffold.
 pub fn run_new(
     path_arg: Option<String>,
-    target: TargetArg,
+    target: Option<TargetArg>,
     base_url: Option<String>,
     output: OutputArg,
     repo: Option<String>,
@@ -141,20 +141,23 @@ pub fn run_new(
     let theme = ColorfulTheme::default();
     let manifest = Manifest::load().context("loading manifest.toml")?;
 
-    // Validate --base-url up front (OpenCode only) so a bad value fails before prompts.
-    if let (TargetArg::Opencode, Some(u)) = (target, &base_url) {
-        validate::url(u).map_err(|e| anyhow!("--base-url {u}: {e}"))?;
+    // Validate --base-url up front (it only applies to OpenCode) so a bad value
+    // fails before prompts.
+    if !matches!(target, Some(TargetArg::Claude)) {
+        if let Some(u) = &base_url {
+            validate::url(u).map_err(|e| anyhow!("--base-url {u}: {e}"))?;
+        }
     }
 
-    let kind = match target {
-        TargetArg::Opencode => "OpenCode",
-        TargetArg::Claude => "Claude Code",
-    };
-    ui::banner(&format!("new {kind} project"));
+    ui::banner("LLM project bootstrapper");
     println!(
         "  {}",
         style("Answer the prompts — Enter accepts the default.").dim()
     );
+    if let Some(t) = target {
+        ui::kv("target", target_label(t));
+    }
+    let target = pick_target(&theme, target)?;
 
     // 1. Project basics, driven by the manifest's declared variables.
     let mut answers: HashMap<String, String> = HashMap::new();
@@ -231,27 +234,165 @@ pub fn run_new(
         return Ok(());
     }
 
-    let target_path = Path::new(&target_dir);
-    let files = project.render_all()?;
-    let conflict = files.iter().any(|(rel, _)| target_path.join(rel).exists());
-    let force = if conflict {
-        ask_confirm(
-            &theme,
-            "Some files already exist. Overwrite them?",
-            "",
-            false,
-        )?
+    write_with_review(&theme, &project, Path::new(&target_dir))
+}
+
+/// The tools ocgen can generate for, in the order the wizard offers them.
+const TARGETS: [TargetArg; 2] = [TargetArg::Claude, TargetArg::Opencode];
+
+fn target_label(t: TargetArg) -> &'static str {
+    match t {
+        TargetArg::Opencode => "OpenCode",
+        TargetArg::Claude => "Claude Code",
+    }
+}
+
+/// The tool to generate for: `--target` when given, otherwise the wizard asks.
+fn pick_target(theme: &ColorfulTheme, given: Option<TargetArg>) -> Result<TargetArg> {
+    if let Some(t) = given {
+        return Ok(t);
+    }
+    let items: Vec<String> = TARGETS
+        .iter()
+        .map(|t| target_label(*t).to_string())
+        .collect();
+    let idx = ask_select(
+        theme,
+        "Which tool is this project for?",
+        "ocgen generates the agents and config for one tool per project (--target skips this question).",
+        &items,
+        0,
+    )?;
+    Ok(TARGETS[idx])
+}
+
+/// Write the project under `target`. Existing files that differ from what ocgen
+/// generates are listed first and the user decides what happens to each; whatever
+/// gets overwritten is backed up. Identical files and the user-owned `CLAUDE.md`
+/// are not conflicts.
+fn write_with_review(theme: &ColorfulTheme, project: &Project, target: &Path) -> Result<()> {
+    let plan = project.plan_changes(target)?;
+    let conflicts: Vec<&FileChange> = plan
+        .iter()
+        .filter(|c| c.kind == ChangeKind::Modified)
+        .collect();
+    let keep = if conflicts.is_empty() {
+        BTreeSet::new()
     } else {
-        false
+        let unchanged = plan
+            .iter()
+            .filter(|c| c.kind == ChangeKind::Unchanged)
+            .count();
+        match resolve_conflicts(theme, &conflicts, unchanged)? {
+            Some(keep) => keep,
+            None => {
+                println!("Aborted — nothing written.");
+                return Ok(());
+            }
+        }
     };
-    if conflict && !force {
-        println!("Aborted — existing files kept.");
-        return Ok(());
+
+    let applied: Vec<FileChange> = plan
+        .into_iter()
+        .filter(|c| !keep.contains(&c.rel))
+        .collect();
+    let backup = Project::backup(target, &applied)?;
+    let written = project.scaffold_keeping(target, &keep)?;
+    report_written(&written);
+    if let Some(b) = backup {
+        // Forward slashes on every platform (it's shown, and matched by tests).
+        let shown = ocgen::paths::for_shell(b.strip_prefix(target).unwrap_or(&b));
+        println!(
+            "  {} {shown}/  {}",
+            style("backup:").bold(),
+            ui::muted("(previous versions; copy a file back to restore it)")
+        );
+    }
+    if !keep.is_empty() {
+        println!();
+        ui::warning(&format!(
+            "kept {} existing file(s) as they were:",
+            keep.len()
+        ));
+        for rel in &keep {
+            println!("    {}", ui::muted(rel));
+        }
+        ui::tip("The generated files may rely on things the kept ones lack. `ocgen doctor --dry-run` shows how they differ; `ocgen doctor` replaces them (with a backup).");
+    }
+    Ok(())
+}
+
+/// Show the existing files that differ and ask what to do with them. Returns the
+/// files to keep as they are (relative paths), or `None` to write nothing at all.
+fn resolve_conflicts(
+    theme: &ColorfulTheme,
+    conflicts: &[&FileChange],
+    unchanged: usize,
+) -> Result<Option<BTreeSet<String>>> {
+    ui::section(&format!("Existing files ({})", conflicts.len()));
+    for c in conflicts {
+        print_conflict(c, 1, 12);
+    }
+    if unchanged > 0 {
+        println!(
+            "  {}",
+            ui::muted(&format!("{unchanged} file(s) already up to date"))
+        );
     }
 
-    let written = project.scaffold(target_path, force)?;
-    report_written(&written);
-    Ok(())
+    let choices = [
+        format!("Overwrite all ({})", conflicts.len()),
+        "Keep all existing — write only the new files".to_string(),
+        "Decide file by file".to_string(),
+        "Cancel — write nothing".to_string(),
+    ];
+    let choice = ask_select(
+        theme,
+        "These files already exist and differ. What now?",
+        "Anything overwritten is backed up to .ocgen-backup/ first.",
+        &choices,
+        2,
+    )?;
+    let all = || conflicts.iter().map(|c| c.rel.clone()).collect();
+    match choice {
+        0 => return Ok(Some(BTreeSet::new())),
+        1 => return Ok(Some(all())),
+        2 => {}
+        _ => return Ok(None),
+    }
+
+    let per_file = [
+        "Overwrite".to_string(),
+        "Keep mine".to_string(),
+        "Show full diff".to_string(),
+    ];
+    let mut keep = BTreeSet::new();
+    for c in conflicts {
+        loop {
+            match ask_select(theme, &c.rel, "", &per_file, 0)? {
+                0 => break,
+                1 => {
+                    keep.insert(c.rel.clone());
+                    break;
+                }
+                _ => print_conflict(c, 3, usize::MAX),
+            }
+        }
+    }
+    Ok(Some(keep))
+}
+
+/// One existing file that differs from what would be generated, with its diff.
+fn print_conflict(c: &FileChange, context: usize, max: usize) {
+    println!(
+        "  {} {}  {}",
+        style("~").yellow(),
+        style(&c.rel).bold(),
+        ui::muted("already exists — differs")
+    );
+    if let (Some(old), Some(new)) = (&c.old, &c.new) {
+        print_diff(old, new, context, max);
+    }
 }
 
 /// Build the Claude Code project: agents (aliases + tools), CLAUDE.md, power-ups,
@@ -1070,7 +1211,6 @@ pub fn run_edit_provider(path: String, key_arg: Option<String>) -> Result<()> {
 /// `ocgen doctor` — repair a project's config and rewrite its files. Also upgrades
 /// an old-format state file to the current schema.
 pub fn run_doctor(path: String, dry_run: bool, yes: bool) -> Result<()> {
-    use ocgen::render::ChangeKind;
     let theme = ColorfulTheme::default();
     let (target, mut project) = Project::discover(Path::new(&path))?;
 
@@ -1161,9 +1301,7 @@ pub fn run_doctor(path: String, dry_run: bool, yes: bool) -> Result<()> {
 }
 
 /// One planned change: a marker, the path, why, and a short diff.
-fn print_change(c: &ocgen::render::FileChange) {
-    use ocgen::diff::{hunks, line_diff, DiffLine};
-    use ocgen::render::ChangeKind;
+fn print_change(c: &FileChange) {
     let (mark, note) = match c.kind {
         ChangeKind::Added => (style("+").green(), "new".to_string()),
         ChangeKind::Removed => (style("-").red(), "stale — no longer generated".to_string()),
@@ -1180,13 +1318,20 @@ fn print_change(c: &ocgen::render::FileChange) {
     };
     println!("  {mark} {}  {}", style(&c.rel).bold(), ui::muted(&note));
     if let (Some(old), Some(new)) = (&c.old, &c.new) {
-        for line in hunks(&line_diff(old, new), 1, 12) {
-            match line {
-                Some(DiffLine::Removed(l)) => println!("      {}", style(format!("- {l}")).red()),
-                Some(DiffLine::Added(l)) => println!("      {}", style(format!("+ {l}")).green()),
-                Some(DiffLine::Same(l)) => println!("      {}", ui::muted(&format!("  {l}"))),
-                None => println!("      {}", ui::muted("…")),
-            }
+        print_diff(old, new, 1, 12);
+    }
+}
+
+/// A coloured line diff: `context` unchanged lines around each change, at most
+/// `max` lines (`…` marks a gap or the cut-off).
+fn print_diff(old: &str, new: &str, context: usize, max: usize) {
+    use ocgen::diff::{hunks, line_diff, DiffLine};
+    for line in hunks(&line_diff(old, new), context, max) {
+        match line {
+            Some(DiffLine::Removed(l)) => println!("      {}", style(format!("- {l}")).red()),
+            Some(DiffLine::Added(l)) => println!("      {}", style(format!("+ {l}")).green()),
+            Some(DiffLine::Same(l)) => println!("      {}", ui::muted(&format!("  {l}"))),
+            None => println!("      {}", ui::muted("…")),
         }
     }
 }

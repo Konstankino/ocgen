@@ -8,16 +8,14 @@ mod wizard;
 use anyhow::Result;
 use clap::Parser;
 
-use cli::{
-    AddWhat, Cli, Command, EditWhat, OutputArg, ShowWhat, TargetArg, TeamCli, TemplatesAction,
-};
+use cli::{AddWhat, Cli, Command, EditWhat, OutputArg, ShowWhat, TeamCli, TemplatesAction};
 use ocgen::templates;
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command.unwrap_or(Command::New {
         path: None,
-        target: TargetArg::Opencode,
+        target: None,
         base_url: None,
         output: OutputArg::Project,
         repo: None,

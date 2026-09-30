@@ -1,13 +1,14 @@
 # ocgen
 
-An interactive wizard that scaffolds [OpenCode](https://opencode.ai) multi-agent
-projects. Run it, answer a few questions, and it writes a ready-to-use
-`opencode.json` plus a `.opencode/` tree of agents, prompts and commands — with
-your own agent names, roles and models.
+An interactive bootstrapper for LLM multi-agent projects. Run it, pick the tool
+the project is for, answer a few questions, and it writes a ready-to-use agent
+setup — with your own agent names, roles and models.
 
-It can also target **[Claude Code](https://claude.com/claude-code)**: the same wizard
-writes a `.claude/` project (subagents, skills, `CLAUDE.md`, `settings.json`, `.mcp.json`)
-and/or a distributable **plugin**. See [Claude Code target](#claude-code-target).
+- **[OpenCode](https://opencode.ai)**: an `opencode.json` plus a `.opencode/` tree of
+  agents, prompts and commands.
+- **[Claude Code](https://claude.com/claude-code)**: a `.claude/` project (subagents,
+  skills, `CLAUDE.md`, `settings.json`, `.mcp.json`) and/or a distributable **plugin**.
+  See [Claude Code target](#claude-code-target).
 
 It's a single self-contained binary for **Windows, macOS and Linux**. The default
 templates are baked in but fully editable.
@@ -72,7 +73,9 @@ For the full story, run `ocgen fields` — a detailed reference explaining every
 agent and provider setting (temperature, steps, permissions, …), with valid
 values and examples.
 
-The wizard asks for:
+The wizard first asks **which tool the project is for** (Claude Code or OpenCode);
+pass `--target claude` or `--target opencode` to skip that question. For an OpenCode
+project it then asks for:
 
 1. **Project basics** — project name and prompt language.
 2. **Providers** — define one or more providers (key, display name, npm adapter,
@@ -90,6 +93,15 @@ The wizard asks for:
    full **permission block**, provider-specific **options** (e.g. `reasoningEffort`),
    the **system-prompt body**, and an optional **external prompt file**.
 5. **Review & confirm** before anything is written.
+
+**Existing files are never overwritten blindly.** If the directory already holds files
+that differ from what would be generated, the wizard lists each one with a short diff
+and asks what to do: **Overwrite all**, **Keep all existing** (write only the new
+files), **Decide file by file** (Overwrite / Keep mine / Show full diff for each), or
+**Cancel**. Anything overwritten is first copied to `.ocgen-backup/<timestamp>/` (the
+folder git-ignores itself; the newest five are kept). Identical files and your own
+`CLAUDE.md` are not conflicts. A file you keep is left untouched; `ocgen doctor
+--dry-run` shows later how it differs from the generated version.
 
 Input is validated as you type — the wizard re-prompts on bad values rather than
 writing them: identifiers (agent name, provider key, model id) must be safe for
@@ -114,7 +126,8 @@ chose.
 ### Other commands
 
 ```bash
-ocgen new ./my-project              # scaffold into a specific directory
+ocgen new ./my-project              # scaffold into a specific directory (asks which tool)
+ocgen new ./my-project --target opencode   # scaffold an OpenCode project
 ocgen new ./my-project --base-url http://192.168.1.10:8080/v1   # override the seeded provider's base URL
 ocgen new ./my-project --target claude   # scaffold a Claude Code project (see "Claude Code target")
 ocgen add agent ./my-project        # add one more agent to an existing project

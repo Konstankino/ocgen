@@ -4099,3 +4099,32 @@ fn check_command_is_wired_into_settings_and_rules() {
     let wf: Workflow = serde_json::from_str(r#"{"deliver": true}"#).unwrap();
     assert!(wf.check_cmd.is_empty());
 }
+
+// ------------------------------------------------------- keeping existing files -----
+
+#[test]
+fn scaffold_keeping_skips_kept_files_and_writes_the_rest() {
+    let mut project = base_project("English");
+    project.agents = agent::default_pipeline("English", "mac").unwrap();
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("opencode.json"), "{\"mine\": true}\n").unwrap();
+    fs::create_dir_all(dir.path().join(".opencode/agents")).unwrap();
+    fs::write(dir.path().join(".opencode/agents/reviewer.md"), "old\n").unwrap();
+
+    let keep = std::collections::BTreeSet::from(["opencode.json".to_string()]);
+    let written = project.scaffold_keeping(dir.path(), &keep).unwrap();
+
+    // The kept file is untouched and not reported; everything else is (re)written.
+    assert_eq!(read(dir.path(), "opencode.json"), "{\"mine\": true}\n");
+    assert!(!written.contains(&dir.path().join("opencode.json")));
+    assert!(read(dir.path(), ".opencode/agents/reviewer.md").contains("mode: subagent"));
+    assert!(dir.path().join(".opencode/agents/coordinator.md").exists());
+
+    // The state still fingerprints what ocgen would have written, so `doctor`
+    // later reports the kept file as differing (hand-edited).
+    let (_, state) = Project::discover(dir.path()).unwrap();
+    assert!(state.generated.contains_key("opencode.json"));
+    let plan = state.plan_changes(dir.path()).unwrap();
+    let kept = plan.iter().find(|c| c.rel == "opencode.json").unwrap();
+    assert_eq!(kept.hand_edited, Some(true));
+}

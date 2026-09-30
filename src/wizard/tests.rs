@@ -167,3 +167,176 @@ fn edit_mcp_remove_also_detaches_it_from_agents() {
     assert!(p.claude.mcp_servers.is_empty());
     assert!(p.agents.iter().all(|a| a.mcp_servers.is_empty()));
 }
+
+// ---------- `new`: target choice and the existing-file review ----------
+
+use crate::cli::TargetArg;
+use dialoguer::theme::ColorfulTheme;
+
+#[test]
+fn target_is_asked_only_when_not_given_on_the_command_line() {
+    let theme = ColorfulTheme::default();
+    script(&[]);
+    assert!(matches!(
+        super::pick_target(&theme, Some(TargetArg::Opencode)).unwrap(),
+        TargetArg::Opencode
+    ));
+    script(&["OpenCode"]);
+    assert!(matches!(
+        super::pick_target(&theme, None).unwrap(),
+        TargetArg::Opencode
+    ));
+    script(&["Claude"]);
+    assert!(matches!(
+        super::pick_target(&theme, None).unwrap(),
+        TargetArg::Claude
+    ));
+    assert_eq!(script_remaining(), 0);
+}
+
+/// A Claude project that hasn't been written anywhere yet.
+fn unwritten_claude_project() -> Project {
+    let mut p = Project::from_manifest(&Manifest::load().unwrap(), "English");
+    p.target = Target::ClaudeCode;
+    p.project_name = "wiz".into();
+    p.providers.clear();
+    p.agents = agent::claude_default_pipeline("English").unwrap();
+    p
+}
+
+const SETTINGS: &str = ".claude/settings.json";
+const STATE: &str = ".claude/.ocgen-state.json";
+
+/// The first generated agent file (relative path), in render order.
+fn first_agent(p: &Project) -> String {
+    p.render_all()
+        .unwrap()
+        .into_iter()
+        .map(|(rel, _)| rel.to_string_lossy().replace('\\', "/"))
+        .find(|rel| rel.starts_with(".claude/agents/"))
+        .unwrap()
+}
+
+fn read(dir: &Path, rel: &str) -> String {
+    fs::read_to_string(dir.join(rel)).unwrap()
+}
+
+/// The single backup folder under `.ocgen-backup/`.
+fn backup_dir(dir: &Path) -> std::path::PathBuf {
+    let mut dirs: Vec<_> = fs::read_dir(dir.join(".ocgen-backup"))
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.is_dir())
+        .collect();
+    assert_eq!(dirs.len(), 1);
+    dirs.remove(0)
+}
+
+#[test]
+fn new_writes_without_asking_when_nothing_conflicts() {
+    let theme = ColorfulTheme::default();
+    let p = unwritten_claude_project();
+
+    // An empty directory: no question.
+    let tmp = tempfile::tempdir().unwrap();
+    script(&[]);
+    super::write_with_review(&theme, &p, tmp.path()).unwrap();
+    assert!(tmp.path().join(SETTINGS).exists());
+
+    // Identical files and the user's own CLAUDE.md are not conflicts either.
+    fs::write(tmp.path().join("CLAUDE.md"), "mine\n").unwrap();
+    script(&[]);
+    super::write_with_review(&theme, &p, tmp.path()).unwrap();
+    assert_eq!(read(tmp.path(), "CLAUDE.md"), "mine\n");
+    assert!(!tmp.path().join(".ocgen-backup").exists());
+}
+
+#[test]
+fn new_overwrite_all_backs_up_the_old_versions() {
+    let theme = ColorfulTheme::default();
+    let p = unwritten_claude_project();
+    let tmp = tempfile::tempdir().unwrap();
+    p.scaffold(tmp.path(), false).unwrap();
+    let agent = first_agent(&p);
+    let generated = read(tmp.path(), SETTINGS);
+    fs::write(tmp.path().join(SETTINGS), "{\"mine\": 1}\n").unwrap();
+    fs::write(tmp.path().join(&agent), "my agent\n").unwrap();
+
+    script(&["Overwrite all"]);
+    super::write_with_review(&theme, &p, tmp.path()).unwrap();
+    assert_eq!(script_remaining(), 0);
+
+    assert_eq!(read(tmp.path(), SETTINGS), generated);
+    assert_ne!(read(tmp.path(), &agent), "my agent\n");
+    let backup = backup_dir(tmp.path());
+    assert_eq!(read(&backup, SETTINGS), "{\"mine\": 1}\n");
+    assert_eq!(read(&backup, &agent), "my agent\n");
+}
+
+#[test]
+fn new_keep_all_writes_only_the_missing_files() {
+    let theme = ColorfulTheme::default();
+    let p = unwritten_claude_project();
+    let tmp = tempfile::tempdir().unwrap();
+    p.scaffold(tmp.path(), false).unwrap();
+    let agent = first_agent(&p);
+    fs::write(tmp.path().join(SETTINGS), "{\"mine\": 1}\n").unwrap();
+    fs::remove_file(tmp.path().join(&agent)).unwrap();
+
+    script(&["Keep all"]);
+    super::write_with_review(&theme, &p, tmp.path()).unwrap();
+    assert_eq!(script_remaining(), 0);
+
+    assert_eq!(read(tmp.path(), SETTINGS), "{\"mine\": 1}\n");
+    assert!(tmp.path().join(&agent).exists(), "missing file is written");
+    assert!(!tmp.path().join(".ocgen-backup").exists());
+}
+
+#[test]
+fn new_file_by_file_overwrites_and_keeps_as_chosen() {
+    let theme = ColorfulTheme::default();
+    let p = unwritten_claude_project();
+    let tmp = tempfile::tempdir().unwrap();
+    p.scaffold(tmp.path(), false).unwrap();
+    let agent = first_agent(&p);
+    fs::write(tmp.path().join(&agent), "my agent\n").unwrap();
+    fs::write(tmp.path().join(SETTINGS), "{\"mine\": 1}\n").unwrap();
+
+    // Conflicts come in render order: the agent file, then settings.json.
+    script(&[
+        "file by file",
+        "Overwrite", // the agent
+        "full diff", // settings.json: look first…
+        "Keep",      // …then keep it
+    ]);
+    super::write_with_review(&theme, &p, tmp.path()).unwrap();
+    assert_eq!(script_remaining(), 0);
+
+    assert_ne!(read(tmp.path(), &agent), "my agent\n");
+    assert_eq!(read(tmp.path(), SETTINGS), "{\"mine\": 1}\n");
+    let backup = backup_dir(tmp.path());
+    assert_eq!(read(&backup, &agent), "my agent\n");
+    assert!(
+        !backup.join(SETTINGS).exists(),
+        "kept files aren't backed up"
+    );
+}
+
+#[test]
+fn new_cancel_writes_nothing() {
+    let theme = ColorfulTheme::default();
+    let p = unwritten_claude_project();
+    let tmp = tempfile::tempdir().unwrap();
+    fs::create_dir_all(tmp.path().join(".claude")).unwrap();
+    fs::write(tmp.path().join(SETTINGS), "{\"mine\": 1}\n").unwrap();
+
+    script(&["Cancel"]);
+    super::write_with_review(&theme, &p, tmp.path()).unwrap();
+    assert_eq!(script_remaining(), 0);
+
+    assert_eq!(read(tmp.path(), SETTINGS), "{\"mine\": 1}\n");
+    assert!(!tmp.path().join(STATE).exists());
+    assert!(!tmp.path().join(".claude/agents").exists());
+    assert!(!tmp.path().join(".ocgen-backup").exists());
+}

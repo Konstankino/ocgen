@@ -10,6 +10,7 @@ use ocgen::claude::{Output, Skill, Team, Workflow};
 use ocgen::manifest::Manifest;
 use ocgen::render::Project;
 use ocgen::target::Target;
+use predicates::prelude::PredicateBooleanExt;
 use predicates::str::contains;
 use tempfile::tempdir;
 
@@ -891,4 +892,22 @@ fn windows_installer_extracts_from_a_zip_named_file() {
         ps1.is_ascii(),
         "keep the script ASCII: Windows PowerShell 5.1 misreads UTF-8 without a BOM"
     );
+}
+
+#[test]
+fn help_is_not_tied_to_one_target() {
+    // ocgen bootstraps for several tools: the description is generic…
+    ocgen()
+        .arg("--help")
+        .assert()
+        .success()
+        .stdout(contains("bootstrapper for LLM multi-agent projects"));
+    // …and `new` has no built-in target: the wizard asks when --target is omitted.
+    ocgen()
+        .args(["new", "--help"])
+        .assert()
+        .success()
+        .stdout(contains("opencode"))
+        .stdout(contains("claude"))
+        .stdout(contains("[default: opencode]").not());
 }

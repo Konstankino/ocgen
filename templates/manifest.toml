@@ -8,7 +8,7 @@
 [[variable]]
 key = "project_name"
 prompt = "Project name"
-help = "A label for this project; not written into OpenCode files."
+help = "A label for this project; not written into the generated files."
 default = "my-project"
 
 [[variable]]

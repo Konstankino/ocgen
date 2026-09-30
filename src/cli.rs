@@ -7,7 +7,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 #[command(
     name = "ocgen",
     version,
-    about = "Interactively scaffold OpenCode multi-agent projects"
+    about = "Interactive bootstrapper for LLM multi-agent projects (OpenCode, Claude Code)"
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -20,9 +20,9 @@ pub enum Command {
     New {
         /// Directory to create the project in (otherwise the wizard asks).
         path: Option<String>,
-        /// Which platform to generate for.
-        #[arg(long, value_enum, default_value_t = TargetArg::Opencode)]
-        target: TargetArg,
+        /// Which platform to generate for (the wizard asks when omitted).
+        #[arg(long, value_enum)]
+        target: Option<TargetArg>,
         /// Base URL for the seeded provider(s) (OpenCode target only).
         #[arg(long, value_name = "URL")]
         base_url: Option<String>,
