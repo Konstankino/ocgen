@@ -817,7 +817,11 @@ fn discover_finds_a_claude_project_by_its_state_file() {
     .unwrap();
 
     let (root, loaded) = Project::discover(dir.path()).unwrap();
-    assert_eq!(root, dir.path().canonicalize().unwrap());
+    // `discover` returns a plain path (no Windows `\\?\` prefix).
+    assert_eq!(
+        root,
+        ocgen::paths::plain(&dir.path().canonicalize().unwrap())
+    );
     assert_eq!(loaded.target, Target::ClaudeCode);
     assert_eq!(loaded.project_name, "demo");
 }
