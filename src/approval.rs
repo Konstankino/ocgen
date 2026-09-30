@@ -19,19 +19,23 @@ fn now() -> u64 {
 }
 
 /// The repository root a project (or any worktree of it) belongs to, so every
-/// worktree shares one approval. Falls back to the resolved project path.
-fn root_of(project: &Path) -> PathBuf {
+/// worktree shares one approval. Falls back to the resolved project path. Returned
+/// in the forward-slash form a shell produces (`C:/Users/x` on Windows, as from
+/// `git rev-parse` or `pwd -W`), so the hook scripts compute the same key.
+fn root_of(project: &Path) -> String {
     let common = Command::new("git")
         .arg("-C")
-        .arg(project)
+        .arg(crate::paths::plain(project))
         .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
         .output()
         .ok()
         .filter(|o| o.status.success())
         .map(|o| PathBuf::from(String::from_utf8_lossy(&o.stdout).trim().to_string()));
     match common.as_deref().and_then(Path::parent) {
-        Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
-        _ => fs::canonicalize(project).unwrap_or_else(|_| project.to_path_buf()),
+        Some(p) if !p.as_os_str().is_empty() => crate::paths::for_shell(p),
+        _ => crate::paths::for_shell(
+            &fs::canonicalize(project).unwrap_or_else(|_| project.to_path_buf()),
+        ),
     }
 }
 
@@ -41,7 +45,6 @@ fn root_of(project: &Path) -> PathBuf {
 pub fn project_key(project: &Path) -> String {
     let root = root_of(project);
     let bytes: Vec<u8> = root
-        .to_string_lossy()
         .bytes()
         .map(|b| {
             if b.is_ascii_alphanumeric() || b"._-".contains(&b) {

@@ -19,7 +19,7 @@ use serde_json::Value;
 /// hook command uses the binary only when `ocgen hook --check` prints exactly the
 /// protocol the project was generated with; any other ocgen (older or newer)
 /// falls back to the project's own scripts, which always match the project.
-pub const PROTOCOL: &str = "ocgen-hooks 2";
+pub const PROTOCOL: &str = "ocgen-hooks 3";
 
 /// Every hook `ocgen hook <name>` accepts (matching the script names minus `.sh`).
 pub const NAMES: [&str; 8] = [
@@ -459,10 +459,11 @@ impl<'a> Hook<'a> {
         };
         if self.field("tool_name") == "Bash" {
             let cmd = crate::risk::normalize(&text("command"));
-            if cmd.contains("ocgen/approvals")
-                || Regex::new(r"ocgen[[:space:]]+approve")
-                    .unwrap()
-                    .is_match(&cmd)
+            // (`ocgen/?approvals`: a Windows `ocgen\approvals` loses its backslash
+            // in normalization.)
+            if Regex::new(r"ocgen[[:space:]]+approve|ocgen/?approvals")
+                .unwrap()
+                .is_match(&cmd)
             {
                 return self_approval();
             }
@@ -486,7 +487,8 @@ impl<'a> Hook<'a> {
                 p if !p.is_empty() => p,
                 _ => text("notebook_path"),
             };
-            if path.contains("ocgen/approvals") {
+            // Windows paths use backslashes.
+            if path.replace('\\', "/").contains("ocgen/approvals") {
                 return self_approval();
             }
         }

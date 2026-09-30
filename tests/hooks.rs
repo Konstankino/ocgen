@@ -37,6 +37,14 @@ fn project() -> TempDir {
     p.claude.hooks_extra.config_audit = true;
     p.claude.hooks_extra.notify = true;
     p.scaffold(dir.path(), false).unwrap();
+    // A git repository, like a real project: the approval key then comes from git
+    // in both implementations (a bare directory would depend on how each resolves
+    // Windows short names such as RUNNER~1).
+    Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
     dir
 }
 
@@ -48,11 +56,26 @@ fn sh(
 ) -> (i32, String, String) {
     let mut cmd = Command::new("sh");
     cmd.arg(dir.join(format!(".claude/hooks/{hook}.sh")))
-        .env_clear()
-        .env("PATH", std::env::var("PATH").unwrap())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    // Start from the real environment (a shell needs more than PATH on Windows),
+    // minus anything that would steer a gate.
+    for k in [
+        "TEAM_APPROVAL_GATE",
+        "TEAM_PLAN_GATE",
+        "TEAM_RISK_ROUNDS",
+        "TEAM_READONLY_ROLES",
+        "TEAM_CONFIDENCE_THRESHOLD",
+        "SUBAGENT_CONFIDENCE_THRESHOLD",
+        "LOOP_GUARD_MAX_BLOCKS",
+        "OCGEN_CHECK_CMD",
+        "OCGEN_CHECK_TIMEOUT",
+        "OCGEN_FORMAT_CMD",
+        "OCGEN_NO_JQ",
+    ] {
+        cmd.env_remove(k);
+    }
     for (k, v) in env {
         cmd.env(k, v);
     }
@@ -88,10 +111,13 @@ fn check(name: &str, steps: &[Step]) {
                 .iter()
                 .map(|(k, v)| (k.to_string(), v.to_string()))
                 .collect();
-            env.insert("CLAUDE_PROJECT_DIR".into(), dir.display().to_string());
+            // Forward slashes: valid inside JSON and understood by bash and git on
+            // Windows too (a raw `C:\Users` would be a broken JSON escape).
+            let d = ocgen::paths::for_shell(dir);
+            env.insert("CLAUDE_PROJECT_DIR".into(), d.clone());
             // A private HOME per project: approvals live under ~/.claude/ocgen/.
-            env.insert("HOME".into(), dir.join(".home").display().to_string());
-            let payload = s.payload.replace("{dir}", &dir.display().to_string());
+            env.insert("HOME".into(), format!("{d}/.home"));
+            let payload = s.payload.replace("{dir}", &d);
             let o = if rust {
                 let o = ocgen::hooks::run(s.hook, &payload, &env);
                 (o.code, o.stdout, o.stderr)
@@ -398,14 +424,19 @@ fn teammate_idle_parity() {
 }
 
 const GATE: &[(&str, &str)] = &[("TEAM_APPROVAL_GATE", "1"), ("LOOP_GUARD_MAX_BLOCKS", "3")];
+const GATE_NO_JQ: &[(&str, &str)] = &[
+    ("TEAM_APPROVAL_GATE", "1"),
+    ("LOOP_GUARD_MAX_BLOCKS", "3"),
+    ("OCGEN_NO_JQ", "1"),
+];
 
 fn unlock(dir: &Path) {
     ocgen::approval::grant(&dir.join(".home"), dir, 10).unwrap();
 }
 
-#[test]
-fn approval_gate_parity() {
-    fn bash(command: &'static str, session: &'static str) -> Step {
+/// The approval scenario, for a given gate environment.
+fn approval_steps(env: &'static [(&'static str, &'static str)]) -> Vec<Step> {
+    let bash = |command: &'static str, session: &'static str| {
         // Leaked once per test step: payloads must be 'static for the step table.
         let payload = serde_json::json!({
             "session_id": session, "tool_name": "Bash", "tool_input": { "command": command }
@@ -413,11 +444,11 @@ fn approval_gate_parity() {
         .to_string();
         Step {
             hook: "team-approval-gate",
-            env: GATE,
+            env,
             setup: none,
             payload: Box::leak(payload.into_boxed_str()),
         }
-    }
+    };
     let mut steps = vec![
         bash("git status", "s"),
         bash("git log --grep='push'", "s"),
@@ -435,6 +466,8 @@ fn approval_gate_parity() {
         bash("sshfs host:/x /mnt", "a8"),
         bash("ocgen approve", "a9"),
         bash("echo 9999999999 > ~/.claude/ocgen/approvals/x", "a10"),
+        // A Windows-style path to the approval store.
+        bash("echo 9 > C:\\Users\\x\\.claude\\ocgen\\approvals\\k", "a11"),
         // The budget: three blocks in one session, then deny + halt.
         bash("git push origin main", "b"),
         bash("git push origin main", "b"),
@@ -442,13 +475,20 @@ fn approval_gate_parity() {
     ];
     steps.push(Step {
         hook: "team-approval-gate",
-        env: GATE,
+        env,
         setup: none,
         payload: r#"{"session_id":"w1","tool_name":"Write","tool_input":{"file_path":"{dir}/.home/.claude/ocgen/approvals/x"}}"#,
     });
+    // The same store, addressed with Windows backslashes (JSON-escaped).
     steps.push(Step {
         hook: "team-approval-gate",
-        env: GATE,
+        env,
+        setup: none,
+        payload: r#"{"session_id":"w3","tool_name":"Write","tool_input":{"file_path":"C:\\Users\\x\\.claude\\ocgen\\approvals\\k"}}"#,
+    });
+    steps.push(Step {
+        hook: "team-approval-gate",
+        env,
         setup: none,
         payload: r#"{"session_id":"w2","tool_name":"Write","tool_input":{"file_path":"docs/runbook.md","content":"ask a human for execution-approved"}}"#,
     });
@@ -457,13 +497,24 @@ fn approval_gate_parity() {
     approved.setup = unlock;
     steps.push(approved);
     steps.push(bash("ocgen approve --minutes 600", "c2"));
-    steps.push(Step {
-        hook: "team-approval-gate",
-        env: &[("TEAM_APPROVAL_GATE", "0")],
-        setup: none,
-        payload: r#"{"tool_name":"Bash","tool_input":{"command":"git push"}}"#,
-    });
-    check("approval", &steps);
+    steps
+}
+
+#[test]
+fn approval_gate_parity() {
+    // With jq, and with the plain fallback (the path taken where jq is missing,
+    // e.g. most Windows machines) — both must match the Rust hook.
+    check("approval (jq)", &approval_steps(GATE));
+    check("approval (no jq)", &approval_steps(GATE_NO_JQ));
+    check(
+        "approval (off)",
+        &[Step {
+            hook: "team-approval-gate",
+            env: &[("TEAM_APPROVAL_GATE", "0")],
+            setup: none,
+            payload: r#"{"tool_name":"Bash","tool_input":{"command":"git push"}}"#,
+        }],
+    );
 }
 
 #[test]
@@ -508,7 +559,7 @@ fn format_and_audit_parity() {
     let dir = project();
     let env: HashMap<String, String> = [(
         "CLAUDE_PROJECT_DIR".to_string(),
-        dir.path().display().to_string(),
+        ocgen::paths::for_shell(dir.path()),
     )]
     .into();
     let o = ocgen::hooks::run(
@@ -632,7 +683,7 @@ fn check_failure_shows_the_tail_of_its_output() {
     let dir = project();
     dirty_repo(dir.path());
     let env: HashMap<String, String> = [
-        ("CLAUDE_PROJECT_DIR", dir.path().display().to_string()),
+        ("CLAUDE_PROJECT_DIR", ocgen::paths::for_shell(dir.path())),
         ("SUBAGENT_CONFIDENCE_THRESHOLD", "96".to_string()),
         (
             "OCGEN_CHECK_CMD",
@@ -644,7 +695,7 @@ fn check_failure_shows_the_tail_of_its_output() {
     .collect();
     let payload = format!(
         r#"{{"session_id":"s","agent_id":"w","cwd":"{}/wt","last_assistant_message":"Confidence: 99%"}}"#,
-        dir.path().display()
+        ocgen::paths::for_shell(dir.path())
     );
     for (code, _, err) in [
         {

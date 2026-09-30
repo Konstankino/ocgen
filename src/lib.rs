@@ -14,6 +14,7 @@ pub mod diff;
 pub mod gitcheck;
 pub mod hooks;
 pub mod manifest;
+pub mod paths;
 pub mod render;
 pub mod risk;
 pub mod seeds;

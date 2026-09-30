@@ -295,8 +295,13 @@ fn hook_scripts(root: &Path, settings: &Value) -> Check {
         if !p.is_file() {
             problems.push(format!("{s} is missing"));
         } else if !Command::new("sh")
+            // Run from the hooks dir with a bare file name: no path for the
+            // shell to mangle (Windows verbatim paths lose their backslashes).
+            .current_dir(root.join(".claude/hooks"))
             .arg("-n")
-            .arg(&p)
+            .arg(s)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
             .status()
             .is_ok_and(|st| st.success())
         {
@@ -329,7 +334,7 @@ fn hook_env(root: &Path, settings: &Value) -> HashMap<String, String> {
                 .collect()
         })
         .unwrap_or_default();
-    env.insert("CLAUDE_PROJECT_DIR".into(), root.display().to_string());
+    env.insert("CLAUDE_PROJECT_DIR".into(), crate::paths::for_shell(root));
     env.insert("LOOP_GUARD_MAX_BLOCKS".into(), "0".into());
     // Probing the gates must not run the project's test suite.
     env.insert("OCGEN_CHECK_CMD".into(), String::new());
@@ -389,7 +394,7 @@ fn hook_commands(root: &Path, settings: &Value) -> Check {
         let (payload, expect) = match event.as_str() {
             "SessionStart" => ("{}".to_string(), 0),
             "SubagentStop" => (
-                serde_json::json!({ "session_id": "ocgen-verify", "cwd": not_git }).to_string(),
+                serde_json::json!({ "session_id": "ocgen-verify", "cwd": crate::paths::for_shell(&not_git) }).to_string(),
                 0,
             ),
             "TaskCompleted" => (
@@ -444,7 +449,7 @@ fn approval_gate(root: &Path, settings: &Value) -> Check {
     let mut env = hook_env(root, settings);
     let empty_home = std::env::temp_dir().join(format!("ocgen-verify-home-{}", std::process::id()));
     let _ = std::fs::create_dir_all(&empty_home);
-    env.insert("HOME".into(), empty_home.display().to_string());
+    env.insert("HOME".into(), crate::paths::for_shell(&empty_home));
     let run = |c: &str| {
         let ev = serde_json::json!({
             "session_id": "ocgen-verify", "tool_name": "Bash", "tool_input": { "command": c }
@@ -554,12 +559,18 @@ fn statusline(root: &Path, settings: &Value) -> Check {
     };
     let payload = serde_json::json!({
         "model": { "display_name": "ocgen verify" },
-        "workspace": { "current_dir": root, "project_dir": root },
+        "workspace": {
+            "current_dir": crate::paths::for_shell(root),
+            "project_dir": crate::paths::for_shell(root)
+        },
         "context_window": { "remaining_percentage": 50 },
     })
     .to_string();
     let mut env = HashMap::new();
-    env.insert("CLAUDE_PROJECT_DIR".to_string(), root.display().to_string());
+    env.insert(
+        "CLAUDE_PROJECT_DIR".to_string(),
+        crate::paths::for_shell(root),
+    );
     match run_sh(cmd, &payload, &env, root, Duration::from_secs(10)) {
         Some((0, out, _)) if !out.trim().is_empty() => {
             let plain = regex::Regex::new(r"\x1b\[[0-9;]*m")
@@ -715,7 +726,10 @@ fn claude_validate(project: &Project, root: &Path) -> Check {
     }
     let mut failed = Vec::new();
     for t in &targets {
-        let cmd = format!("claude plugin validate \"{}\" </dev/null", t.display());
+        let cmd = format!(
+            "claude plugin validate \"{}\" </dev/null",
+            crate::paths::for_shell(t)
+        );
         match run_sh(&cmd, "", &HashMap::new(), root, Duration::from_secs(90)) {
             Some((0, out, _)) if out.contains("Validation passed") => {}
             Some((_, out, err)) => failed.push(format!(

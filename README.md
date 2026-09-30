@@ -530,12 +530,14 @@ and inside the ocgen binary (`ocgen hook <name>`). The generated hook command us
 binary when a compatible ocgen is installed, and the script otherwise:
 
 ```sh
-if [ "$(ocgen hook --check 2>/dev/null)" = "ocgen-hooks 2" ]; then ocgen hook team-approval-gate; else sh ".../team-approval-gate.sh"; fi
+if [ "$(ocgen hook --check 2>/dev/null)" = "ocgen-hooks 3" ]; then ocgen hook team-approval-gate; else sh ".../team-approval-gate.sh"; fi
 ```
 
 - **The binary gives you** real JSON parsing instead of `grep`, and hooks that work on
   **native Windows**.
 - **The scripts keep the project working** for teammates and CI machines without ocgen.
+  They need only a POSIX `sh` (Git Bash on Windows): `jq` is used when present and is never
+  required, and Windows paths (`C:\Users\...`) are handled in both implementations.
 - **A stale binary can't weaken a gate.** The command uses the binary only when it reports
   *exactly* the hook protocol the project was generated with. The protocol number goes up
   whenever hook behaviour changes, so any other ocgen, older or newer, falls back to the

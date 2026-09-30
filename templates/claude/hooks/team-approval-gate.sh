@@ -26,7 +26,12 @@ lg_lib="$(dirname "$0")/loop-guard.sh"
 # The approval file: keyed by the repository root (shared by every worktree), the
 # same key `ocgen approve` computes.
 root=$(git -C "$proj" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
-if [ -n "$root" ]; then root=$(dirname "$root"); else root=$(cd "$proj" 2>/dev/null && pwd -P); fi
+if [ -n "$root" ]; then
+    root=$(dirname "$root")
+else
+    # `pwd -W` is Git Bash's Windows form (C:/Users/x), the one ocgen computes.
+    root=$(cd "$proj" 2>/dev/null && { pwd -W 2>/dev/null || pwd -P; })
+fi
 key=$(printf '%s' "$root" | tr -c 'A-Za-z0-9._-' '_' | tail -c 200)
 marker="${HOME}/.claude/ocgen/approvals/${key}"
 approved() {
@@ -51,18 +56,25 @@ deny() {
     exit 2
 }
 
-# The tool, its shell command and its target file (jq when available).
-if command -v jq >/dev/null 2>&1; then
+# The tool, its shell command and its target file. jq when available; otherwise
+# jstr reads a JSON string value up to its real closing quote (escapes included).
+jstr() {
+    printf '%s' "$payload" | tr '\n' ' ' |
+        sed -nE 's/.*"('"$1"')"[[:space:]]*:[[:space:]]*"(([^"\\]|\\.)*)".*/\2/p'
+}
+if [ -z "${OCGEN_NO_JQ:-}" ] && command -v jq >/dev/null 2>&1; then
     tool=$(printf '%s' "$payload" | jq -r '.tool_name // empty' 2>/dev/null)
     cmd=$(printf '%s' "$payload" | jq -r '.tool_input.command // empty' 2>/dev/null)
     path=$(printf '%s' "$payload" | jq -r '.tool_input.file_path // .tool_input.notebook_path // empty' 2>/dev/null)
 else
-    tool=$(printf '%s' "$payload" | grep -oE '"tool_name"[[:space:]]*:[[:space:]]*"[^"]*"' | head -n 1 | sed -E 's/^.*:[[:space:]]*"([^"]*)"$/\1/')
-    cmd=$(printf '%s' "$payload" | tr '\n' ' ' | sed -n 's/.*"command"[[:space:]]*:[[:space:]]*"\(.*\)/\1/p')
-    path=$(printf '%s' "$payload" | grep -oE '"(file_path|notebook_path)"[[:space:]]*:[[:space:]]*"[^"]*"' | head -n 1 | sed -E 's/^.*:[[:space:]]*"([^"]*)"$/\1/')
+    tool=$(jstr tool_name)
+    cmd=$(jstr command)
+    path=$(jstr 'file_path|notebook_path')
 fi
-# Strip what a shell would strip, so `git "push"` can't slip through.
+# Strip what a shell would strip, so `git "push"` can't slip through. Windows
+# paths use backslashes, so compare the target with forward slashes.
 cmd=$(printf '%s' "$cmd" | tr -d "\"'\\\\")
+path=$(printf '%s' "$path" | tr '\\' '/' | tr -s '/')
 
 self_approval() {
     echo "Blocked: only a HUMAN may approve execution, from a terminal outside the agent" >&2
@@ -72,11 +84,11 @@ self_approval() {
 
 # High-impact external actions. Generated from ocgen's risk pattern (a test keeps
 # this line and the Rust constant identical) — tune it to your environment.
-HIGH_IMPACT='(^|[^[:alnum:]_./-])(ssh|scp|sftp|rsync)([[:space:]]|$)|git([[:space:]]+-[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?)*[[:space:]]+(push|merge)([[:space:]]|$)|gh[[:space:]]+(pr[[:space:]]+merge|release|repo[[:space:]]+delete|api[[:space:]])|aws[[:space:]]+[a-z0-9-]+[[:space:]]+[a-z0-9-]*(delete|terminate|create|put|update|modify|remove|rm|mv|cp|sync|stop|start|reboot|run-instances|deregister|detach|attach|associate|disassociate|scale|apply|invoke|publish|import|export|restore|purge|send-)|(gcloud|az)[[:space:]].*(delete|create|update|deploy|remove|apply)|(terraform|tofu)([[:space:]]+-[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?)*[[:space:]]+(apply|destroy)([[:space:]]|$)|kubectl([[:space:]]+-[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?)*[[:space:]]+(apply|delete|create|replace|patch|scale|drain|cordon|uncordon)([[:space:]]|$)|helm([[:space:]]+-[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?)*[[:space:]]+(install|upgrade|uninstall|delete|rollback)([[:space:]]|$)|docker[[:space:]]+(push|rm|rmi)([[:space:]]|$)|(npm|pnpm|yarn|bun)[[:space:]]+(run[[:space:]]+)?(publish|deploy)([[:space:]]|$)|cargo[[:space:]]+publish|twine[[:space:]]+upload|curl[[:space:]].*(-X[[:space:]]*(POST|PUT|DELETE|PATCH)|--request[[:space:]]*(POST|PUT|DELETE|PATCH)|(-d|--data)[[:space:]])|wget[[:space:]].*--method=(POST|PUT|DELETE|PATCH)|(^|[;&|(][[:space:]]*|(sh|bash|zsh|python[0-9.]*|node|ruby)[[:space:]]+)([^[:space:]]*/)?(deploy|publish)[A-Za-z0-9_.-]*\.(sh|bash|py|js|ts|rb)([[:space:]]|$)|make([[:space:]]+[^[:space:]]+)*[[:space:]]+(deploy|publish)([[:space:]]|$)|ocgen[[:space:]]+approve|ocgen/approvals'
+HIGH_IMPACT='(^|[^[:alnum:]_./-])(ssh|scp|sftp|rsync)([[:space:]]|$)|git([[:space:]]+-[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?)*[[:space:]]+(push|merge)([[:space:]]|$)|gh[[:space:]]+(pr[[:space:]]+merge|release|repo[[:space:]]+delete|api[[:space:]])|aws[[:space:]]+[a-z0-9-]+[[:space:]]+[a-z0-9-]*(delete|terminate|create|put|update|modify|remove|rm|mv|cp|sync|stop|start|reboot|run-instances|deregister|detach|attach|associate|disassociate|scale|apply|invoke|publish|import|export|restore|purge|send-)|(gcloud|az)[[:space:]].*(delete|create|update|deploy|remove|apply)|(terraform|tofu)([[:space:]]+-[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?)*[[:space:]]+(apply|destroy)([[:space:]]|$)|kubectl([[:space:]]+-[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?)*[[:space:]]+(apply|delete|create|replace|patch|scale|drain|cordon|uncordon)([[:space:]]|$)|helm([[:space:]]+-[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?)*[[:space:]]+(install|upgrade|uninstall|delete|rollback)([[:space:]]|$)|docker[[:space:]]+(push|rm|rmi)([[:space:]]|$)|(npm|pnpm|yarn|bun)[[:space:]]+(run[[:space:]]+)?(publish|deploy)([[:space:]]|$)|cargo[[:space:]]+publish|twine[[:space:]]+upload|curl[[:space:]].*(-X[[:space:]]*(POST|PUT|DELETE|PATCH)|--request[[:space:]]*(POST|PUT|DELETE|PATCH)|(-d|--data)[[:space:]])|wget[[:space:]].*--method=(POST|PUT|DELETE|PATCH)|(^|[;&|(][[:space:]]*|(sh|bash|zsh|python[0-9.]*|node|ruby)[[:space:]]+)([^[:space:]]*/)?(deploy|publish)[A-Za-z0-9_.-]*\.(sh|bash|py|js|ts|rb)([[:space:]]|$)|make([[:space:]]+[^[:space:]]+)*[[:space:]]+(deploy|publish)([[:space:]]|$)|ocgen[[:space:]]+approve|ocgen/?approvals'
 
 case "$tool" in
 Bash)
-    if printf '%s' "$cmd" | grep -Eq 'ocgen[[:space:]]+approve|ocgen/approvals'; then
+    if printf '%s' "$cmd" | grep -Eq 'ocgen[[:space:]]+approve|ocgen/?approvals'; then
         self_approval
     fi
     if printf '%s' "$cmd" | grep -Eq "$HIGH_IMPACT" && ! approved; then

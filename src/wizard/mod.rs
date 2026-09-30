@@ -1143,7 +1143,8 @@ pub fn run_doctor(path: String, dry_run: bool, yes: bool) -> Result<()> {
     println!();
     ui::success(&format!("applied {} change(s)", changed.len()));
     if let Some(b) = backup {
-        let shown = b.strip_prefix(&target).unwrap_or(&b).display().to_string();
+        // Forward slashes on every platform (it's shown, and matched by tests).
+        let shown = ocgen::paths::for_shell(b.strip_prefix(&target).unwrap_or(&b));
         println!(
             "  {} {shown}/  {}",
             style("backup:").bold(),

@@ -770,8 +770,14 @@ pub fn run_approve(path: String, minutes: u64, revoke: bool, status: bool) -> Re
     use ocgen::approval;
     use std::io::IsTerminal;
     let (root, project) = Project::discover(Path::new(&path))?;
-    let home =
-        dirs::home_dir().ok_or_else(|| anyhow!("could not determine your home directory"))?;
+    // The same rule the hooks use (HOME, then USERPROFILE), so an approval is
+    // always written where the gate looks for it — also under Git Bash on Windows.
+    let home = ["HOME", "USERPROFILE"]
+        .iter()
+        .find_map(|k| std::env::var_os(k).filter(|v| !v.is_empty()))
+        .map(std::path::PathBuf::from)
+        .or_else(dirs::home_dir)
+        .ok_or_else(|| anyhow!("could not determine your home directory"))?;
     let show = |left: Option<u64>| match left {
         Some(s) => println!(
             "{} {} — approved for another {} min",

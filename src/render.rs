@@ -1892,7 +1892,8 @@ fn migrate_agent(agent: &mut Value, language: &str, default_provider: &str) -> R
 
 /// Walk up from `start` looking for a directory that holds the state file.
 fn find_root(start: &Path) -> Option<PathBuf> {
-    let start = start.canonicalize().ok()?;
+    // Plain, not verbatim: this path is handed to git, bash and hook environments.
+    let start = crate::paths::plain(&start.canonicalize().ok()?);
     let mut cur: Option<&Path> = Some(start.as_path());
     while let Some(dir) = cur {
         if state_file_in(dir).is_some() {

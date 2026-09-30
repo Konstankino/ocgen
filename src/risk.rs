@@ -31,7 +31,7 @@ pub const HIGH_IMPACT_PARTS: [&str; 17] = [
     // interpreter) — not merely read or grepped.
     r"(^|[;&|(][[:space:]]*|(sh|bash|zsh|python[0-9.]*|node|ruby)[[:space:]]+)([^[:space:]]*/)?(deploy|publish)[A-Za-z0-9_.-]*\.(sh|bash|py|js|ts|rb)([[:space:]]|$)",
     r"make([[:space:]]+[^[:space:]]+)*[[:space:]]+(deploy|publish)([[:space:]]|$)",
-    r"ocgen[[:space:]]+approve|ocgen/approvals",
+    r"ocgen[[:space:]]+approve|ocgen/?approvals",
 ];
 
 /// The full alternation, as used by both implementations.
@@ -43,7 +43,9 @@ pub fn pattern() -> String {
         .join("|")
 }
 
-/// Strip the characters a shell would remove before running the command.
+/// Strip the characters a shell would remove before running the command. (This
+/// also turns a Windows `ocgen\approvals` into `ocgenapprovals`, which the
+/// pattern's `ocgen/?approvals` still matches.)
 pub fn normalize(command: &str) -> String {
     command
         .chars()

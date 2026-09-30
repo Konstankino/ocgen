@@ -1556,6 +1556,12 @@ fn approval_gate_hook_blocks_high_impact_until_human_unlock() {
     let dir = tempdir().unwrap();
     p.scaffold(dir.path(), false).unwrap();
     let hook = dir.path().join(".claude/hooks/team-approval-gate.sh");
+    // A git repository, like a real project, so the approval key comes from git.
+    Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
     // A private HOME: approvals live outside the project, under ~/.claude/ocgen/.
     let home = tempdir().unwrap();
 
@@ -3603,7 +3609,8 @@ fn strip_ansi(s: &str) -> String {
 }
 
 fn statusline_payload(dir: &Path) -> String {
-    let d = dir.display();
+    // Forward slashes keep the JSON valid on Windows (`C:\Users` is a bad escape).
+    let d = ocgen::paths::for_shell(dir);
     format!(
         r#"{{"model":{{"id":"claude-opus-5-5","display_name":"Opus 5.5"}},"workspace":{{"current_dir":"{d}","project_dir":"{d}"}},"cost":{{"total_cost_usd":0.4213}},"context_window":{{"current_usage":{{"input_tokens":5}},"used_percentage":42,"remaining_percentage":58}},"rate_limits":{{"five_hour":{{"used_percentage":90}}}},"worktree":{{"name":"feature-a","path":"x","branch":"worktree-feature-a"}}}}"#
     )

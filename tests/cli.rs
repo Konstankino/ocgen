@@ -874,14 +874,21 @@ fn windows_installer_extracts_from_a_zip_named_file() {
     // `.zip` — and New-TemporaryFile makes a `.tmp`, which broke the installer.
     let ps1 = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/install.ps1")).unwrap();
     assert!(
-        !ps1.lines().any(|l| !l.trim_start().starts_with('#') && l.contains("New-TemporaryFile")),
+        !ps1.lines()
+            .any(|l| !l.trim_start().starts_with('#') && l.contains("New-TemporaryFile")),
         "New-TemporaryFile yields a .tmp file that Expand-Archive refuses"
     );
     let assign = ps1
         .lines()
         .find(|l| l.trim_start().starts_with("$tmpZip ="))
         .expect("the installer names its download");
-    assert!(assign.contains(".zip"), "the download must be saved as *.zip: {assign}");
+    assert!(
+        assign.contains(".zip"),
+        "the download must be saved as *.zip: {assign}"
+    );
     assert!(ps1.contains("Expand-Archive"));
-    assert!(ps1.is_ascii(), "keep the script ASCII: Windows PowerShell 5.1 misreads UTF-8 without a BOM");
+    assert!(
+        ps1.is_ascii(),
+        "keep the script ASCII: Windows PowerShell 5.1 misreads UTF-8 without a BOM"
+    );
 }
