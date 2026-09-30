@@ -7,7 +7,7 @@
   Or a specific version:
     & ([scriptblock]::Create((irm https://raw.githubusercontent.com/Konstankino/ocgen/main/install.ps1))) -Version v0.2.0
 
-  Re-run any time to update — it always fetches the requested (default: latest) release.
+  Re-run any time to update - it always fetches the requested (default: latest) release.
 #>
 [CmdletBinding()]
 param(
@@ -35,7 +35,9 @@ $asset = "ocgen-$tag-$target.zip"
 $url = "https://github.com/$Repo/releases/download/$tag/$asset"
 Write-Host "Downloading $asset ..."
 
-$tmpZip = New-TemporaryFile
+# Expand-Archive (Windows PowerShell 5.1) only accepts a path ending in .zip, so
+# name the download explicitly instead of using a .tmp temporary file.
+$tmpZip = Join-Path $env:TEMP ("ocgen-$tag-" + [guid]::NewGuid().ToString('N') + '.zip')
 Invoke-WebRequest $url -OutFile $tmpZip -Headers $headers -UseBasicParsing
 $extract = Join-Path $env:TEMP "ocgen-$tag-extract"
 Remove-Item $extract -Recurse -Force -ErrorAction SilentlyContinue
@@ -52,7 +54,7 @@ $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
 if ($userPath -notlike "*$InstallDir*") {
   [Environment]::SetEnvironmentVariable('Path', "$userPath;$InstallDir", 'User')
   $env:Path += ";$InstallDir"
-  Write-Host "Added $InstallDir to your PATH — open a new terminal to pick it up."
+  Write-Host "Added $InstallDir to your PATH - open a new terminal to pick it up."
 }
 
 Write-Host "Installed ocgen $tag to $InstallDir"
