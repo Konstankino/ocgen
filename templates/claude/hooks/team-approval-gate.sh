@@ -1,27 +1,39 @@
 #!/bin/sh
 # Claude Code Agent Teams — PreToolUse execution-approval gate.
 #
-# Deterministic human-approval line for HIGH-IMPACT EXTERNAL actions (substantial
-# side effects on outside services). No agent may cross this line until a human
-# reviews and unlocks execution by creating the marker file — from their own
-# terminal, OUTSIDE the agent:
+# Deterministic human-approval line for HIGH-IMPACT EXTERNAL actions (pushes,
+# deploys, cloud mutations, publishes, remote shells). No agent may cross it until
+# a human approves — from their own terminal, OUTSIDE the agent:
 #
-#     touch "$CLAUDE_PROJECT_DIR/.claude/team/execution-approved"
+#     ocgen approve            # unlocks for 30 minutes, then re-locks by itself
 #
-# Remove that file to re-lock. Decisions here come only from pattern matching and
-# the marker check — never from model judgment. Enabled via TEAM_APPROVAL_GATE=1
-# (set in .claude/settings.json). Wired on PreToolUse for Bash/file-write tools.
+# The approval lives outside the project (~/.claude/ocgen/approvals/<project>), so
+# an agent can't create it as a side effect of normal work, and it expires.
+# Decisions come only from pattern matching and that file — never from model
+# judgment. Enabled via TEAM_APPROVAL_GATE=1 (set in .claude/settings.json).
 #   exit 2 -> block (stderr shown to the agent).   exit 0 -> allow.
 [ "${TEAM_APPROVAL_GATE:-0}" = "1" ] || exit 0
 
 payload=$(cat)
-marker="${CLAUDE_PROJECT_DIR:-.}/.claude/team/execution-approved"
+proj="${CLAUDE_PROJECT_DIR:-.}"
 
 # Loop guard (shared). This gate NEVER allows a blocked action; after the budget
 # it denies AND halts the agent (continue:false) so it stops retrying.
 lg_on() { return 1; }
 lg_lib="$(dirname "$0")/loop-guard.sh"
 [ -f "$lg_lib" ] && . "$lg_lib"
+
+# The approval file: keyed by the repository root (shared by every worktree), the
+# same key `ocgen approve` computes.
+root=$(git -C "$proj" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
+if [ -n "$root" ]; then root=$(dirname "$root"); else root=$(cd "$proj" 2>/dev/null && pwd -P); fi
+key=$(printf '%s' "$root" | tr -c 'A-Za-z0-9._-' '_' | tail -c 200)
+marker="${HOME}/.claude/ocgen/approvals/${key}"
+approved() {
+    [ -f "$marker" ] || return 1
+    exp=$(tr -cd '0-9' <"$marker")
+    [ -n "$exp" ] && [ "$exp" -gt "$(date +%s)" ]
+}
 
 # deny <reason> -> block this call; once the budget is spent, halt the agent too.
 deny() {
@@ -39,32 +51,48 @@ deny() {
     exit 2
 }
 
-# Self-protection: an agent must never create or modify the approval marker
-# itself (that would let it approve its own high-impact actions). Any tool call
-# that references the marker path is blocked outright.
-if printf '%s' "$payload" | grep -q 'execution-approved'; then
-    echo "Blocked: the execution-approval marker may only be created by a HUMAN," >&2
-    echo "from a terminal outside the agent — never through a tool call." >&2
-    deny "tried to create the approval marker"
+# The tool, its shell command and its target file (jq when available).
+if command -v jq >/dev/null 2>&1; then
+    tool=$(printf '%s' "$payload" | jq -r '.tool_name // empty' 2>/dev/null)
+    cmd=$(printf '%s' "$payload" | jq -r '.tool_input.command // empty' 2>/dev/null)
+    path=$(printf '%s' "$payload" | jq -r '.tool_input.file_path // .tool_input.notebook_path // empty' 2>/dev/null)
+else
+    tool=$(printf '%s' "$payload" | grep -oE '"tool_name"[[:space:]]*:[[:space:]]*"[^"]*"' | head -n 1 | sed -E 's/^.*:[[:space:]]*"([^"]*)"$/\1/')
+    cmd=$(printf '%s' "$payload" | tr '\n' ' ' | sed -n 's/.*"command"[[:space:]]*:[[:space:]]*"\(.*\)/\1/p')
+    path=$(printf '%s' "$payload" | grep -oE '"(file_path|notebook_path)"[[:space:]]*:[[:space:]]*"[^"]*"' | head -n 1 | sed -E 's/^.*:[[:space:]]*"([^"]*)"$/\1/')
 fi
+# Strip what a shell would strip, so `git "push"` can't slip through.
+cmd=$(printf '%s' "$cmd" | tr -d "\"'\\\\")
 
-# Deterministic denylist of high-impact external / substantial-side-effect
-# commands. Tune this to your environment — it is intentionally fail-closed.
-HIGH_IMPACT='(^|[^[:alnum:]_./-])(ssh|scp|sftp|rsync)([[:space:]]|$)|git[[:space:]]+push|git[[:space:]]+merge|gh[[:space:]]+(pr[[:space:]]+merge|release|repo[[:space:]]+delete|api[[:space:]])|aws[[:space:]]+[a-z0-9-]+[[:space:]]+[a-z0-9-]*(delete|terminate|create|put|update|modify|remove|rm|mv|cp|sync|stop|start|reboot|run-instances|deregister|detach|attach|associate|disassociate|scale|apply|invoke|publish|import|export|restore|purge|send-)|(gcloud|az)[[:space:]].*(delete|create|update|deploy|remove|apply)|terraform[[:space:]]+(apply|destroy)|kubectl[[:space:]]+(apply|delete|create|replace|patch|scale|drain|cordon|uncordon)|helm[[:space:]]+(install|upgrade|uninstall|delete|rollback)|docker[[:space:]]+(push|rm|rmi)|(npm|pnpm|yarn)[[:space:]]+publish|cargo[[:space:]]+publish|twine[[:space:]]+upload|curl[[:space:]].*(-X[[:space:]]*(POST|PUT|DELETE|PATCH)|--request[[:space:]]*(POST|PUT|DELETE|PATCH)|(-d|--data)[[:space:]])|wget[[:space:]].*--method=(POST|PUT|DELETE|PATCH)'
+self_approval() {
+    echo "Blocked: only a HUMAN may approve execution, from a terminal outside the agent" >&2
+    echo "(ocgen approve). No tool call may approve or touch the approval store." >&2
+    deny "tried to approve itself"
+}
 
-# Only Bash carries a shell command worth pattern-matching.
-case "$payload" in
-*'"tool_name":"Bash"'* | *'"tool_name": "Bash"'*)
-    if printf '%s' "$payload" | grep -Eq "$HIGH_IMPACT"; then
-        if [ ! -f "$marker" ]; then
-            echo "BLOCKED by the execution-approval gate: this is a high-impact external" >&2
-            echo "action (ssh / cloud mutation / git push|merge / deploy / publish / etc.)." >&2
-            echo "A human must review, then unlock execution from their own terminal:" >&2
-            echo "    touch \"$marker\"" >&2
-            echo "No agent may create that marker. Delete it afterwards to re-lock." >&2
-            deny "gated command without approval"
-        fi
+# High-impact external actions. Generated from ocgen's risk pattern (a test keeps
+# this line and the Rust constant identical) — tune it to your environment.
+HIGH_IMPACT='(^|[^[:alnum:]_./-])(ssh|scp|sftp|rsync)([[:space:]]|$)|git([[:space:]]+-[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?)*[[:space:]]+(push|merge)([[:space:]]|$)|gh[[:space:]]+(pr[[:space:]]+merge|release|repo[[:space:]]+delete|api[[:space:]])|aws[[:space:]]+[a-z0-9-]+[[:space:]]+[a-z0-9-]*(delete|terminate|create|put|update|modify|remove|rm|mv|cp|sync|stop|start|reboot|run-instances|deregister|detach|attach|associate|disassociate|scale|apply|invoke|publish|import|export|restore|purge|send-)|(gcloud|az)[[:space:]].*(delete|create|update|deploy|remove|apply)|(terraform|tofu)([[:space:]]+-[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?)*[[:space:]]+(apply|destroy)([[:space:]]|$)|kubectl([[:space:]]+-[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?)*[[:space:]]+(apply|delete|create|replace|patch|scale|drain|cordon|uncordon)([[:space:]]|$)|helm([[:space:]]+-[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?)*[[:space:]]+(install|upgrade|uninstall|delete|rollback)([[:space:]]|$)|docker[[:space:]]+(push|rm|rmi)([[:space:]]|$)|(npm|pnpm|yarn|bun)[[:space:]]+(run[[:space:]]+)?(publish|deploy)([[:space:]]|$)|cargo[[:space:]]+publish|twine[[:space:]]+upload|curl[[:space:]].*(-X[[:space:]]*(POST|PUT|DELETE|PATCH)|--request[[:space:]]*(POST|PUT|DELETE|PATCH)|(-d|--data)[[:space:]])|wget[[:space:]].*--method=(POST|PUT|DELETE|PATCH)|(^|[;&|(][[:space:]]*|(sh|bash|zsh|python[0-9.]*|node|ruby)[[:space:]]+)([^[:space:]]*/)?(deploy|publish)[A-Za-z0-9_.-]*\.(sh|bash|py|js|ts|rb)([[:space:]]|$)|make([[:space:]]+[^[:space:]]+)*[[:space:]]+(deploy|publish)([[:space:]]|$)|ocgen[[:space:]]+approve|ocgen/approvals'
+
+case "$tool" in
+Bash)
+    if printf '%s' "$cmd" | grep -Eq 'ocgen[[:space:]]+approve|ocgen/approvals'; then
+        self_approval
     fi
+    if printf '%s' "$cmd" | grep -Eq "$HIGH_IMPACT" && ! approved; then
+        echo "BLOCKED by the execution-approval gate: this is a high-impact external" >&2
+        echo "action (ssh / cloud mutation / git push|merge / deploy / publish / etc.)." >&2
+        echo "A human must review, then approve from their own terminal (it expires by itself):" >&2
+        echo "    ocgen approve" >&2
+        echo "Without ocgen: echo \$(( \$(date +%s) + 1800 )) > \"$marker\"" >&2
+        echo "No agent may approve." >&2
+        deny "gated command without approval"
+    fi
+    ;;
+*)
+    case "$path" in
+    *ocgen/approvals*) self_approval ;;
+    esac
     ;;
 esac
 exit 0

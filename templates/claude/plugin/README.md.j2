@@ -1,6 +1,6 @@
 # {{ display_name }}
 
-A Claude Code plugin: a multi-agent team plus `/multi`{% if intake %}, `/intake`{% endif %}{% if refine %} and `/refine`{% endif %} commands.
+A Claude Code plugin: a multi-agent team plus `/multi`{% if intake %}, `/intake`{% endif %}{% if refine %} and `/refine`{% endif %} workflow skills.
 
 **Agents:** {% for sub in subagents %}`{{ sub.name }}`{% if not loop.last %}, {% endif %}{% endfor %}
 

@@ -66,10 +66,12 @@ pre-author them.
 - **Execution-approval gate (hard line).** No agent may perform a high-impact external action —
   `ssh`, cloud mutations (`aws`/`gcloud`/`az`), `git push`/`merge`, `gh pr merge`/`release`,
   `terraform apply`, `kubectl`/`helm`, deploys, or publishes — until a **human** reviews and
-  unlocks execution. Unlock only from your own terminal (never through a tool call):
-  `touch .claude/team/execution-approved`; delete it to re-lock. A deterministic `PreToolUse`
-  hook enforces this and refuses any attempt by an agent to create the marker itself. Plan and
-  local edits are allowed before the line; crossing it into external side effects is not.
+  approves. Only a human can approve, from their own terminal: `ocgen approve` (it lasts 30
+  minutes by default and re-locks by itself). Never try to approve, and never touch
+  `~/.claude/ocgen/` — a deterministic `PreToolUse` hook refuses both, a git `pre-push` hook
+  blocks any push made without approval however it is launched, and credentials may be withheld
+  entirely. Plan and local edits are allowed before the line; when you reach it, stop and ask
+  the human to review and approve.
 {%- endif %}
 {%- endif %}
 {% endif %}

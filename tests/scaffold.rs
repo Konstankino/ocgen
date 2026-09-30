@@ -861,7 +861,7 @@ fn claude_project_renders_agents_command_settings_and_claude_md() {
     assert!(rev_md.contains("color: cyan"));
     assert!(rev_md.contains("You review."));
 
-    let multi = read(dir.path(), ".claude/commands/multi.md");
+    let multi = read(dir.path(), ".claude/skills/multi/SKILL.md");
     assert!(multi.contains("@reviewer"));
     assert!(multi.contains("$ARGUMENTS"));
 
@@ -877,7 +877,7 @@ fn claude_project_renders_agents_command_settings_and_claude_md() {
         serde_json::from_str(&read(dir.path(), ".claude/settings.json")).unwrap();
     assert_eq!(settings["model"], "opus");
     assert!(settings["permissions"]["allow"].is_array());
-    assert_eq!(settings["outputStyle"], "Concise");
+    assert_eq!(settings["outputStyle"], "ocgen-concise");
 
     let reloaded = Project::load_state(dir.path()).unwrap();
     assert_eq!(reloaded.target, Target::ClaudeCode);
@@ -908,10 +908,10 @@ fn claude_renders_workflow_commands_skills_and_hooks() {
     let dir = tempdir().unwrap();
     p.scaffold(dir.path(), false).unwrap();
 
-    let intake = read(dir.path(), ".claude/commands/intake.md");
+    let intake = read(dir.path(), ".claude/skills/intake/SKILL.md");
     assert!(intake.contains("intake interview"));
     assert!(intake.contains("$ARGUMENTS"));
-    let refine = read(dir.path(), ".claude/commands/refine.md");
+    let refine = read(dir.path(), ".claude/skills/refine/SKILL.md");
     assert!(refine.contains("push back"));
 
     let skill = read(dir.path(), ".claude/skills/commit/SKILL.md");
@@ -954,7 +954,7 @@ fn claude_default_pipeline_scaffolds_a_full_project() {
     );
     assert!(!claude_md.contains("{{ sub.name }}"));
 
-    let multi = read(dir.path(), ".claude/commands/multi.md");
+    let multi = read(dir.path(), ".claude/skills/multi/SKILL.md");
     assert!(multi.contains("@explorer") && multi.contains("@reviewer"));
 
     let settings: serde_json::Value =
@@ -967,6 +967,7 @@ fn claude_powerups_and_workflow_can_be_disabled() {
     let mut p = base_project("English");
     p.target = Target::ClaudeCode;
     p.project_name = "bare".into();
+    p.claude.hooks_extra.compact_context = false; // the wizard clears it with the power-ups
     p.claude.powerups = Powerups {
         permissions: false,
         hooks: false,
@@ -982,6 +983,7 @@ fn claude_powerups_and_workflow_can_be_disabled() {
         deliver: false,
         inquire: false,
         loop_guard_max: 0,
+        check_cmd: String::new(),
         subagent_confidence: 0,
     };
     let mut a = Agent::blank("w", "custom", "");
@@ -994,8 +996,8 @@ fn claude_powerups_and_workflow_can_be_disabled() {
     let dir = tempdir().unwrap();
     p.scaffold(dir.path(), false).unwrap();
 
-    assert!(!dir.path().join(".claude/commands/intake.md").exists());
-    assert!(!dir.path().join(".claude/commands/refine.md").exists());
+    assert!(!dir.path().join(".claude/skills/intake/SKILL.md").exists());
+    assert!(!dir.path().join(".claude/skills/refine/SKILL.md").exists());
     // verify_todos off → no Verification-first todos guidance in the workflow rule.
     assert!(
         !read(dir.path(), ".claude/rules/ocgen-workflow.md").contains("Verification-first todos")
@@ -1064,7 +1066,7 @@ fn claude_project_with_only_coordinator_skips_multi() {
     let dir = tempdir().unwrap();
     p.scaffold(dir.path(), false).unwrap();
 
-    assert!(!dir.path().join(".claude/commands/multi.md").exists());
+    assert!(!dir.path().join(".claude/skills/multi/SKILL.md").exists());
     assert!(!dir.path().join(".claude/agents/boss.md").exists());
     let claude_md = read(dir.path(), "CLAUDE.md");
     assert!(claude_md.contains("# solo"));
@@ -1116,10 +1118,10 @@ fn claude_plugin_output_emits_manifest_marketplace_and_workflow() {
 
     // Components live at the plugin root (no .claude/ prefix).
     assert!(base.join("agents/explorer.md").is_file());
-    assert!(base.join("commands/multi.md").is_file());
-    assert!(base.join("commands/intake.md").is_file());
+    assert!(base.join("skills/multi/SKILL.md").is_file());
+    assert!(base.join("skills/intake/SKILL.md").is_file());
     assert!(base.join("skills/commit/SKILL.md").is_file());
-    assert!(base.join("output-styles/concise.md").is_file());
+    assert!(base.join("output-styles/ocgen-concise.md").is_file());
 
     let readme = fs::read_to_string(base.join("README.md")).unwrap();
     assert!(readme.contains("claude plugin marketplace add acme/writing-kit"));
@@ -1294,11 +1296,11 @@ fn claude_team_enabled_wires_settings_command_hooks_and_guidance() {
     assert!(s["hooks"]["TaskCreated"].is_array());
     assert!(s["hooks"]["TaskCompleted"].is_array());
 
-    let team_md = read(dir.path(), ".claude/commands/team.md");
+    let team_md = read(dir.path(), ".claude/skills/team/SKILL.md");
     assert!(team_md.contains("$ARGUMENTS"));
     assert!(team_md.contains("explorer"));
     assert!(!team_md.contains("{% for"), "unrendered Jinja in team.md");
-    assert!(dir.path().join(".claude/commands/multi.md").is_file());
+    assert!(dir.path().join(".claude/skills/multi/SKILL.md").is_file());
 
     for h in [
         "team-teammate-idle.sh",
@@ -1328,7 +1330,7 @@ fn claude_team_disabled_by_default_adds_nothing() {
         serde_json::from_str(&read(dir.path(), ".claude/settings.json")).unwrap();
     assert!(s.get("teammateMode").is_none());
     assert!(s.get("env").is_none());
-    assert!(!dir.path().join(".claude/commands/team.md").exists());
+    assert!(!dir.path().join(".claude/skills/team/SKILL.md").exists());
     assert!(!dir
         .path()
         .join(".claude/hooks/team-task-created.sh")
@@ -1389,7 +1391,7 @@ fn claude_team_enabled_without_hook_stubs() {
     assert!(s["hooks"].get("TaskCreated").is_none());
     assert!(!dir.path().join(".claude/hooks").exists());
     // …but the /team command is still emitted.
-    assert!(dir.path().join(".claude/commands/team.md").is_file());
+    assert!(dir.path().join(".claude/skills/team/SKILL.md").is_file());
 }
 
 #[test]
@@ -1429,11 +1431,11 @@ fn team_governance_wires_settings_command_and_hooks() {
         .contains("team-approval-gate.sh"));
     let gate = read(dir.path(), ".claude/hooks/team-approval-gate.sh");
     assert!(gate.contains("TEAM_APPROVAL_GATE"));
-    assert!(gate.contains("execution-approved")); // the human-created marker
+    assert!(gate.contains("ocgen approve")); // only a human approves, outside the project
     assert!(gate.contains("git") && gate.contains("push")); // deterministic patterns
 
     // The collaborative planning command is emitted and fully rendered.
-    let plan_cmd = read(dir.path(), ".claude/commands/team-plan.md");
+    let plan_cmd = read(dir.path(), ".claude/skills/team-plan/SKILL.md");
     assert!(plan_cmd.contains("Status: APPROVED"));
     assert!(
         !plan_cmd.contains("{{") && !plan_cmd.contains("{%"),
@@ -1486,9 +1488,12 @@ fn team_confidence_zero_disables_gate() {
         .join(".claude/hooks/team-approval-gate.sh")
         .exists());
     // …and the plan command is not emitted when the plan gate is off.
-    assert!(!dir.path().join(".claude/commands/team-plan.md").exists());
+    assert!(!dir
+        .path()
+        .join(".claude/skills/team-plan/SKILL.md")
+        .exists());
     // The base team command is still emitted.
-    assert!(dir.path().join(".claude/commands/team.md").is_file());
+    assert!(dir.path().join(".claude/skills/team/SKILL.md").is_file());
 }
 
 #[test]
@@ -1551,12 +1556,15 @@ fn approval_gate_hook_blocks_high_impact_until_human_unlock() {
     let dir = tempdir().unwrap();
     p.scaffold(dir.path(), false).unwrap();
     let hook = dir.path().join(".claude/hooks/team-approval-gate.sh");
+    // A private HOME: approvals live outside the project, under ~/.claude/ocgen/.
+    let home = tempdir().unwrap();
 
     // Run the generated hook with a PreToolUse payload; return its exit code.
     let run = |payload: &str| -> i32 {
         let mut child = Command::new("sh")
             .arg(&hook)
             .env("CLAUDE_PROJECT_DIR", dir.path())
+            .env("HOME", home.path())
             .env("TEAM_APPROVAL_GATE", "1")
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
@@ -1568,37 +1576,79 @@ fn approval_gate_hook_blocks_high_impact_until_human_unlock() {
         let _ = child.stdin.take().unwrap().write_all(payload.as_bytes());
         child.wait().unwrap().code().unwrap()
     };
-    let bash = |cmd: &str| format!(r#"{{"tool_name":"Bash","tool_input":{{"command":"{cmd}"}}}}"#);
+    let bash = |cmd: &str| {
+        serde_json::json!({ "tool_name": "Bash", "tool_input": { "command": cmd } }).to_string()
+    };
 
-    // Locked (no marker): local/read-only work is allowed…
-    assert_eq!(run(&bash("git status")), 0);
-    assert_eq!(run(&bash("npm test")), 0);
-    // …but every high-impact external action is blocked (exit 2).
+    // Locked: local/read-only work is allowed…
+    for cmd in [
+        "git status",
+        "npm test",
+        "git log --grep='push'",
+        "terraform plan",
+        "cat scripts/deploy.sh",
+    ] {
+        assert_eq!(run(&bash(cmd)), 0, "should allow: {cmd}");
+    }
+    // …but every high-impact external action is blocked (exit 2) — including the
+    // phrasings that used to slip past a plain `git push` match.
     for cmd in [
         "git push origin main",
+        "git -C . push origin main",
+        "git -c user.name=x push",
+        "git \"push\" origin",
         "gh pr merge 42 --merge",
         "aws s3 rm s3://b/x --recursive",
         "aws ec2 terminate-instances --instance-ids i-1",
         "ssh prod uptime",
         "terraform apply -auto-approve",
+        "terraform -chdir=infra apply",
+        "sh ./deploy.sh",
+        "make deploy",
         "curl -X POST https://api/x -d @p",
     ] {
         assert_eq!(run(&bash(cmd)), 2, "should block: {cmd}");
     }
-    // An agent may not self-approve by creating the marker (Bash or file write).
-    assert_eq!(run(&bash("touch .claude/team/execution-approved")), 2);
+    // An agent may not approve itself: not via the command, not by writing the store.
+    assert_eq!(run(&bash("ocgen approve")), 2);
     assert_eq!(
-        run(
-            r#"{"tool_name":"Write","tool_input":{"file_path":".claude/team/execution-approved","content":"x"}}"#
-        ),
+        run(&bash("echo 9999999999 > ~/.claude/ocgen/approvals/x")),
         2
     );
-
-    // Human unlocks from outside the agent → high-impact actions proceed.
+    let store = home
+        .path()
+        .join(".claude/ocgen/approvals/x")
+        .display()
+        .to_string();
+    assert_eq!(
+        run(&serde_json::json!({ "tool_name": "Write", "tool_input": { "file_path": store, "content": "9999999999" } }).to_string()),
+        2
+    );
+    // Merely mentioning the old marker is ordinary work now (no false positives)…
+    assert_eq!(run(&bash("grep -r execution-approved docs/")), 0);
+    assert_eq!(
+        run(
+            r#"{"tool_name":"Write","tool_input":{"file_path":"docs/runbook.md","content":"ask a human for execution-approved"}}"#
+        ),
+        0
+    );
+    // …and the old in-project marker no longer unlocks anything.
     fs::create_dir_all(dir.path().join(".claude/team")).unwrap();
     fs::write(dir.path().join(".claude/team/execution-approved"), "").unwrap();
+    assert_eq!(run(&bash("git push origin main")), 2);
+
+    // A human approves from outside the agent → high-impact actions proceed…
+    let marker = ocgen::approval::grant(home.path(), dir.path(), 30).unwrap();
     assert_eq!(run(&bash("git push origin main")), 0);
     assert_eq!(run(&bash("aws s3 rm s3://b/x")), 0);
+    assert_eq!(
+        run(&bash("ocgen approve --minutes 600")),
+        2,
+        "still can't extend its own approval"
+    );
+    // …until the approval expires by itself.
+    fs::write(&marker, "1\n").unwrap();
+    assert_eq!(run(&bash("git push origin main")), 2);
 }
 
 #[test]
@@ -1762,6 +1812,7 @@ fn claude_skill_renders_full_frontmatter() {
         context_fork: true,
         agent: "Explore".into(),
         model: "sonnet".into(),
+        ..Default::default()
     });
     let mut a = Agent::blank("w", "custom", "");
     a.mode = "subagent".into();
@@ -2033,7 +2084,7 @@ fn deliver_pipeline_command_and_guidance() {
     let dir = tempdir().unwrap();
     p.scaffold(dir.path(), false).unwrap();
 
-    let cmd = read(dir.path(), ".claude/commands/deliver.md");
+    let cmd = read(dir.path(), ".claude/skills/deliver/SKILL.md");
     assert!(cmd.contains("Sharpen") && cmd.contains("requirements") && cmd.contains("Confidence"));
     assert!(
         !cmd.contains("{{") && !cmd.contains("{%"),
@@ -2053,7 +2104,7 @@ fn deliver_disabled_omits_command_and_guidance() {
     p.agents = agent::claude_default_pipeline("English").unwrap();
     let dir = tempdir().unwrap();
     p.scaffold(dir.path(), false).unwrap();
-    assert!(!dir.path().join(".claude/commands/deliver.md").exists());
+    assert!(!dir.path().join(".claude/skills/deliver/SKILL.md").exists());
     assert!(!read(dir.path(), ".claude/rules/ocgen-workflow.md").contains("Delivery pipeline"));
 }
 
@@ -2066,7 +2117,7 @@ fn inquire_command_and_router() {
     let dir = tempdir().unwrap();
     p.scaffold(dir.path(), false).unwrap();
 
-    let cmd = read(dir.path(), ".claude/commands/inquire.md");
+    let cmd = read(dir.path(), ".claude/skills/inquire/SKILL.md");
     assert!(cmd.contains("Sharpen") && cmd.contains("Verified") && cmd.contains("Inferred"));
     assert!(cmd.contains(".claude/notes"));
     // Resumable across sessions: a list with no arguments, a stored resume point,
@@ -2074,6 +2125,16 @@ fn inquire_command_and_router() {
     assert!(cmd.contains("No arguments") && cmd.contains("Resume point"));
     assert!(cmd.contains("Refresher") && cmd.contains("Mental model"));
     assert!(cmd.contains("git log") && cmd.contains("Stale"));
+    // The nudge is a single hint, never a list of ready-made next questions.
+    assert!(cmd.contains("## 3. Nudge — one hint") && cmd.contains("Hint:"));
+    assert!(cmd.contains("Never list") && cmd.contains("form the question myself"));
+    for gone in [
+        "Offer 3 next questions",
+        "Next questions:",
+        "pending next questions",
+    ] {
+        assert!(!cmd.contains(gone), "still offers questions: {gone}");
+    }
     // Ledger writes go to a quiet background subagent, not inline diffs.
     assert!(cmd.contains("background subagent") && cmd.contains("haiku"));
     assert!(cmd.contains("≤ 4 lines"));
@@ -2081,7 +2142,7 @@ fn inquire_command_and_router() {
         !cmd.contains("{{") && !cmd.contains("{%"),
         "unrendered Jinja"
     );
-    let deliver = read(dir.path(), ".claude/commands/deliver.md");
+    let deliver = read(dir.path(), ".claude/skills/deliver/SKILL.md");
     assert!(deliver.contains("Route the goal") && deliver.contains("/inquire"));
     assert!(read(dir.path(), ".claude/rules/ocgen-workflow.md").contains("Codebase inquiry"));
 }
@@ -2095,8 +2156,8 @@ fn inquire_disabled_omits_command_and_router() {
     p.agents = agent::claude_default_pipeline("English").unwrap();
     let dir = tempdir().unwrap();
     p.scaffold(dir.path(), false).unwrap();
-    assert!(!dir.path().join(".claude/commands/inquire.md").exists());
-    let deliver = read(dir.path(), ".claude/commands/deliver.md");
+    assert!(!dir.path().join(".claude/skills/inquire/SKILL.md").exists());
+    let deliver = read(dir.path(), ".claude/skills/deliver/SKILL.md");
     assert!(!deliver.contains("/inquire") && !deliver.contains("Route the goal"));
     assert!(!read(dir.path(), ".claude/rules/ocgen-workflow.md").contains("Codebase inquiry"));
 }
@@ -2208,7 +2269,7 @@ fn fanout_scaffolds_worktree_isolation_command_and_include() {
     assert!(!read(dir.path(), ".claude/agents/reviewer.md").contains("isolation:"));
 
     // The /fanout command and .worktreeinclude are emitted.
-    let fanout = read(dir.path(), ".claude/commands/fanout.md");
+    let fanout = read(dir.path(), ".claude/skills/fanout/SKILL.md");
     assert!(fanout.contains("worktree") && fanout.contains("merge") && fanout.contains("clean up"));
     assert!(
         !fanout.contains("{{") && !fanout.contains("{%"),
@@ -2231,7 +2292,7 @@ fn fanout_disabled_omits_command_and_include() {
     p.agents = agent::claude_default_pipeline("English").unwrap();
     let dir = tempdir().unwrap();
     p.scaffold(dir.path(), false).unwrap();
-    assert!(!dir.path().join(".claude/commands/fanout.md").exists());
+    assert!(!dir.path().join(".claude/skills/fanout/SKILL.md").exists());
     assert!(!dir.path().join(".worktreeinclude").exists());
     let settings = read(dir.path(), ".claude/settings.json");
     assert!(
@@ -2281,7 +2342,7 @@ fn improve_prompt_command_and_skill_preset() {
     p.agents = agent::claude_default_pipeline("English").unwrap();
     let dir = tempdir().unwrap();
     p.scaffold(dir.path(), false).unwrap();
-    let cmd = read(dir.path(), ".claude/commands/improve-prompt.md");
+    let cmd = read(dir.path(), ".claude/skills/improve-prompt/SKILL.md");
     assert!(cmd.contains("<instructions>"));
     assert!(cmd.contains("frontmatter"));
     assert!(cmd.contains("example"));
@@ -2311,7 +2372,7 @@ fn improve_prompt_disabled_omits_command() {
     p.scaffold(dir.path(), false).unwrap();
     assert!(!dir
         .path()
-        .join(".claude/commands/improve-prompt.md")
+        .join(".claude/skills/improve-prompt/SKILL.md")
         .exists());
 }
 
@@ -2551,10 +2612,10 @@ fn loop_guard_halts_repeated_high_impact_attempts_without_allowing() {
     assert_eq!(code, 0);
     assert!(out.contains(r#""permissionDecision": "deny""#), "{out}");
     assert!(out.contains(r#""continue": false"#), "{out}");
-    // Self-protection still blocks marker creation outright.
-    let forge = r#"{"session_id":"s2","tool_name":"Bash","tool_input":{"command":"touch .claude/team/execution-approved"}}"#;
+    // Self-approval is still blocked outright.
+    let forge =
+        r#"{"session_id":"s2","tool_name":"Bash","tool_input":{"command":"ocgen approve"}}"#;
     assert_eq!(run_hook(&hook, &env, forge).0, 2);
-    assert!(!dir.path().join(".claude/team/execution-approved").exists());
 }
 
 #[test]
@@ -2586,7 +2647,7 @@ fn loop_guard_renders_library_budget_turn_caps_and_discipline() {
     assert!(read(dir.path(), ".claude/agents/implementer.md").contains("maxTurns: 60"));
     assert!(read(dir.path(), ".claude/agents/explorer.md").contains("maxTurns: 40"));
     assert!(read(dir.path(), ".claude/rules/ocgen-workflow.md").contains("Loop discipline"));
-    assert!(read(dir.path(), ".claude/commands/deliver.md").contains("at most 2 re-plans"));
+    assert!(read(dir.path(), ".claude/skills/deliver/SKILL.md").contains("at most 2 re-plans"));
 
     // No blocking gate at all → no library and no budget env.
     let mut p = base_project("English");
@@ -2703,6 +2764,1327 @@ fn worktree_guidance_in_rules_and_inquire() {
         wf.contains("commit `.claude/`") && wf.contains("baseRef"),
         "{wf}"
     );
-    let inq = read(dir.path(), ".claude/commands/inquire.md");
+    let inq = read(dir.path(), ".claude/skills/inquire/SKILL.md");
     assert!(inq.contains(".claude/worktrees/") && inq.contains("main checkout"));
+}
+
+// --------------------------------------------------------------- skills -----
+
+/// A skill that follows every "what makes a skill good" rule.
+fn good_skill() -> Skill {
+    Skill {
+        name: "tf-plan-review".into(),
+        description: "Review a Terraform plan for S3/KMS misconfigurations. Use when asked to check a plan, a bucket policy, or encryption settings.".into(),
+        allowed_tools: "Read, Grep, Bash(terraform show:*)".into(),
+        body: "1. Run `terraform show -json`.\n2. Check it against reference.md.\n3. Report findings.\n".into(),
+        ..Default::default()
+    }
+}
+
+fn has(issues: &[String], needle: &str) -> bool {
+    issues.iter().any(|i| i.contains(needle))
+}
+
+#[test]
+fn good_skill_has_no_issues() {
+    use ocgen::claude::skill_issues;
+    assert!(
+        skill_issues(&good_skill()).is_empty(),
+        "{:?}",
+        skill_issues(&good_skill())
+    );
+}
+
+#[test]
+fn skill_issues_flag_each_rule() {
+    use ocgen::claude::skill_issues;
+    let with = |f: &dyn Fn(&mut Skill)| {
+        let mut s = good_skill();
+        f(&mut s);
+        skill_issues(&s)
+    };
+    // Name: lowercase letters, digits, hyphens, ≤ 64.
+    assert!(has(&with(&|s| s.name = "Tf_Plan".into()), "name"));
+    assert!(has(&with(&|s| s.name = "a".repeat(65)), "name"));
+    // The description is the trigger.
+    assert!(has(&with(&|s| s.description.clear()), "description"));
+    assert!(has(
+        &with(&|s| s.description = "TF helper".into()),
+        "too short"
+    ));
+    assert!(has(&with(&|s| s.description = "x".repeat(1025)), "1024"));
+    let no_when = "Reviews Terraform plans for S3 and KMS misconfigurations in detail.";
+    assert!(has(&with(&|s| s.description = no_when.into()), "when"));
+    // ...but a when_to_use line satisfies it, and user-run skills need no trigger.
+    assert!(!has(
+        &with(&|s| {
+            s.description = no_when.into();
+            s.when_to_use = "Use when asked to check a plan.".into();
+        }),
+        "when"
+    ));
+    assert!(!has(
+        &with(&|s| {
+            s.description = no_when.into();
+            s.disable_model_invocation = true;
+        }),
+        "when"
+    ));
+    // Keep SKILL.md short.
+    assert!(has(
+        &with(&|s| s.body = "line\n".repeat(501)),
+        "reference.md"
+    ));
+    // Fewest tools.
+    assert!(has(
+        &with(&|s| s.allowed_tools = "Read, Bash".into()),
+        "Bash("
+    ));
+    assert!(has(
+        &with(&|s| s.allowed_tools = "Read, Write".into()),
+        "user-run"
+    ));
+    assert!(!has(
+        &with(&|s| {
+            s.allowed_tools = "Read, Write".into();
+            s.disable_model_invocation = true;
+        }),
+        "user-run"
+    ));
+    // Contradiction: nobody can invoke it.
+    assert!(has(
+        &with(&|s| {
+            s.disable_model_invocation = true;
+            s.hidden_from_menu = true;
+        }),
+        "nobody"
+    ));
+}
+
+#[test]
+fn landscape_checks_include_skill_issues() {
+    let mut p = base_project("English");
+    p.target = Target::ClaudeCode;
+    p.agents = agent::claude_default_pipeline("English").unwrap();
+    p.skills.push(Skill {
+        name: "helper".into(),
+        description: "TF helper".into(),
+        body: "do it".into(),
+        ..Default::default()
+    });
+    let issues = p.issues();
+    assert!(
+        issues.iter().any(|i| i.starts_with("skill 'helper'")),
+        "{issues:?}"
+    );
+}
+
+#[test]
+fn every_preset_says_when_to_choose_it_and_seeds_a_good_skill() {
+    use ocgen::claude::{skill_issues, skill_presets};
+    for preset in skill_presets().unwrap() {
+        assert!(
+            !preset.choose_when.trim().is_empty(),
+            "{} lacks choose_when",
+            preset.name
+        );
+        let seeded = preset.to_skill("my-skill", "English");
+        let issues = skill_issues(&seeded);
+        assert!(
+            issues.is_empty(),
+            "preset {} seeds issues: {issues:?}",
+            preset.name
+        );
+    }
+}
+
+#[test]
+fn skill_extras_are_created_once_and_survive_regeneration() {
+    let mut p = base_project("English");
+    p.target = Target::ClaudeCode;
+    p.agents = agent::claude_default_pipeline("English").unwrap();
+    p.skills.push(good_skill());
+    let dir = tempdir().unwrap();
+    p.scaffold(dir.path(), false).unwrap();
+
+    let made = Project::scaffold_skill_extras(dir.path(), "tf-plan-review", true, true).unwrap();
+    assert_eq!(made.len(), 2);
+    let reference = dir
+        .path()
+        .join(".claude/skills/tf-plan-review/reference.md");
+    let scripts = dir
+        .path()
+        .join(".claude/skills/tf-plan-review/scripts/README.md");
+    assert!(reference.exists() && scripts.exists());
+
+    // Never overwrites the user's content.
+    fs::write(&reference, "my checklist\n").unwrap();
+    let again = Project::scaffold_skill_extras(dir.path(), "tf-plan-review", true, true).unwrap();
+    assert!(again.is_empty());
+    assert_eq!(fs::read_to_string(&reference).unwrap(), "my checklist\n");
+
+    // doctor-style forced regeneration keeps them.
+    p.scaffold(dir.path(), true).unwrap();
+    assert_eq!(fs::read_to_string(&reference).unwrap(), "my checklist\n");
+    assert!(scripts.exists());
+}
+
+#[test]
+fn renaming_a_skill_carries_its_supporting_files() {
+    let mut p = base_project("English");
+    p.target = Target::ClaudeCode;
+    p.agents = agent::claude_default_pipeline("English").unwrap();
+    p.skills.push(good_skill());
+    let dir = tempdir().unwrap();
+    p.scaffold(dir.path(), false).unwrap();
+    let old = dir.path().join(".claude/skills/tf-plan-review");
+    fs::write(old.join("reference.md"), "mine\n").unwrap();
+    fs::create_dir_all(old.join("scripts")).unwrap();
+    fs::write(old.join("scripts/check.sh"), "echo ok\n").unwrap();
+
+    // The wizard renames in state, re-scaffolds, then moves the old dir's extras.
+    p.skills[0].name = "plan-review".into();
+    p.scaffold(dir.path(), true).unwrap();
+    Project::rename_claude_skill_dir(dir.path(), "tf-plan-review", "plan-review").unwrap();
+
+    let new = dir.path().join(".claude/skills/plan-review");
+    assert_eq!(
+        fs::read_to_string(new.join("reference.md")).unwrap(),
+        "mine\n"
+    );
+    assert!(new.join("scripts/check.sh").exists());
+    assert!(read(dir.path(), ".claude/skills/plan-review/SKILL.md").contains("name: plan-review"));
+    assert!(!old.exists(), "old skill dir removed");
+}
+
+// ------------------------------------------------------ tier 1 defects -----
+
+fn claude_default(name: &str) -> Project {
+    let mut p = base_project("English");
+    p.target = Target::ClaudeCode;
+    p.project_name = name.into();
+    p.agents = agent::claude_default_pipeline("English").unwrap();
+    p
+}
+
+#[test]
+fn output_style_keeps_coding_instructions_and_does_not_shadow_builtin() {
+    let dir = tempdir().unwrap();
+    // A project generated by an older ocgen, plus a user-edited style elsewhere.
+    fs::create_dir_all(dir.path().join(".claude/output-styles")).unwrap();
+    fs::write(
+        dir.path().join(".claude/output-styles/concise.md"),
+        "---\nname: Concise\ndescription: Lead with the result; minimal preamble.\n---\n\
+         Respond concisely. Lead each answer with the result or recommendation. Skip\n",
+    )
+    .unwrap();
+    claude_default("os").scaffold(dir.path(), true).unwrap();
+
+    let style = read(dir.path(), ".claude/output-styles/ocgen-concise.md");
+    assert!(style.contains("name: ocgen-concise"));
+    assert!(style.contains("keep-coding-instructions: true"));
+    let settings: serde_json::Value =
+        serde_json::from_str(&read(dir.path(), ".claude/settings.json")).unwrap();
+    assert_eq!(settings["outputStyle"], "ocgen-concise");
+    assert!(
+        !dir.path().join(".claude/output-styles/concise.md").exists(),
+        "stale generated style removed so it stops shadowing the built-in Concise"
+    );
+
+    // A concise.md the user wrote themselves is never deleted.
+    fs::write(
+        dir.path().join(".claude/output-styles/concise.md"),
+        "---\nname: Mine\n---\nmy style\n",
+    )
+    .unwrap();
+    claude_default("os").scaffold(dir.path(), true).unwrap();
+    assert!(dir.path().join(".claude/output-styles/concise.md").exists());
+}
+
+#[test]
+fn full_model_ids_are_valid_and_survive_doctor() {
+    use ocgen::validate::claude_model;
+    for ok in [
+        "opus",
+        "sonnet",
+        "haiku",
+        "fable",
+        "inherit",
+        "claude-opus-5-5",
+        "claude-sonnet-5-5[1m]",
+        "claude-haiku-4-5-20251001",
+    ] {
+        assert!(claude_model(ok).is_ok(), "{ok}");
+    }
+    for bad in ["gemma", "gpt-4", "", "Claude-Opus", "claude-"] {
+        assert!(claude_model(bad).is_err(), "{bad}");
+    }
+    let mut p = claude_default("ids");
+    p.agents[1].model = "claude-opus-5-5".into();
+    assert!(
+        !p.issues().iter().any(|i| i.contains("model")),
+        "{:?}",
+        p.issues()
+    );
+    p.doctor();
+    assert_eq!(p.agents[1].model, "claude-opus-5-5");
+}
+
+#[test]
+fn settings_have_schema_and_deny_reading_secrets() {
+    let dir = tempdir().unwrap();
+    claude_default("sec").scaffold(dir.path(), false).unwrap();
+    let settings: serde_json::Value =
+        serde_json::from_str(&read(dir.path(), ".claude/settings.json")).unwrap();
+    assert_eq!(
+        settings["$schema"],
+        "https://json.schemastore.org/claude-code-settings.json"
+    );
+    let deny: Vec<&str> = settings["permissions"]["deny"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    for want in [
+        "Read(./.env)",
+        "Read(./**/*.pem)",
+        "Read(./**/*.key)",
+        "Read(./**/*.tfstate)",
+    ] {
+        assert!(deny.contains(&want), "missing {want}: {deny:?}");
+    }
+    // Example files stay readable.
+    assert!(!deny
+        .iter()
+        .any(|d| d.contains("tfvars") || d.contains(".env.*")));
+}
+
+#[test]
+fn plugin_ships_the_same_gates_as_the_project() {
+    let dir = tempdir().unwrap();
+    let mut p = claude_default("gates");
+    p.claude.output = Output {
+        project: false,
+        plugin: true,
+    };
+    p.claude.plugin.repo_owner = "me".into();
+    p.claude.plugin.repo_name = "gates".into();
+    p.claude.team = Team {
+        enabled: true,
+        mode: "in-process".into(),
+        hooks: true,
+        plan_gate: true,
+        confidence_threshold: 96,
+        risk_rounds: true,
+        approval_gate: true,
+    };
+    p.scaffold(dir.path(), false).unwrap();
+    let base = dir.path().join("plugin/gates");
+    let hooks: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(base.join("hooks/hooks.json")).unwrap()).unwrap();
+    for ev in [
+        "SubagentStop",
+        "PreToolUse",
+        "TaskCompleted",
+        "TaskCreated",
+        "TeammateIdle",
+    ] {
+        let cmd = hooks["hooks"][ev][0]["hooks"][0]["command"]
+            .as_str()
+            .unwrap_or_default();
+        assert!(cmd.contains("${CLAUDE_PLUGIN_ROOT}/hooks/"), "{ev}: {cmd}");
+        assert!(
+            cmd.contains("LOOP_GUARD_MAX_BLOCKS='3'"),
+            "{ev} gets its budget: {cmd}"
+        );
+    }
+    let stop = hooks["hooks"]["SubagentStop"][0]["hooks"][0]["command"]
+        .as_str()
+        .unwrap();
+    assert!(stop.contains("SUBAGENT_CONFIDENCE_THRESHOLD='96'"));
+    let gate = hooks["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+        .as_str()
+        .unwrap();
+    assert!(gate.contains("TEAM_APPROVAL_GATE='1'"));
+    for script in [
+        "loop-guard.sh",
+        "subagent-confidence-gate.sh",
+        "team-approval-gate.sh",
+    ] {
+        assert!(base.join("hooks").join(script).is_file(), "{script}");
+    }
+}
+
+#[test]
+fn skill_description_length_limits() {
+    use ocgen::claude::skill_issues;
+    let mut s = good_skill();
+    s.description = format!("Use when checking plans. {}", "x".repeat(1100));
+    let issues = skill_issues(&s);
+    assert!(has(&issues, "1024") && !has(&issues, "1536"), "{issues:?}");
+    s.when_to_use = "y".repeat(500);
+    assert!(has(&skill_issues(&s), "1536"));
+}
+
+// --------------------------------------------------- subagent fields + MCP -----
+
+#[test]
+fn agent_frontmatter_renders_every_new_field() {
+    let dir = tempdir().unwrap();
+    let mut p = claude_default("fm");
+    let i = p
+        .agents
+        .iter()
+        .position(|a| a.name == "implementer")
+        .unwrap();
+    {
+        let a = &mut p.agents[i];
+        a.disallowed_tools = "WebFetch".into();
+        a.permission_mode = "acceptEdits".into();
+        a.effort = "high".into();
+        a.memory = "project".into();
+        a.preload_skills = "tf-plan-review, commit".into();
+        a.background = true;
+    }
+    p.scaffold(dir.path(), false).unwrap();
+    let md = read(dir.path(), ".claude/agents/implementer.md");
+    for line in [
+        "disallowedTools: WebFetch",
+        "permissionMode: acceptEdits",
+        "effort: high",
+        "memory: project",
+        "skills:\n  - tf-plan-review\n  - commit",
+        "background: true",
+    ] {
+        assert!(md.contains(line), "missing {line:?} in:\n{md}");
+    }
+}
+
+#[test]
+fn read_only_roles_are_enforced_and_reviewer_thinks_harder() {
+    let dir = tempdir().unwrap();
+    claude_default("ro").scaffold(dir.path(), false).unwrap();
+    for role in ["explorer", "reviewer"] {
+        let md = read(dir.path(), &format!(".claude/agents/{role}.md"));
+        assert!(
+            md.contains("disallowedTools: Edit, Write, NotebookEdit"),
+            "{role}"
+        );
+    }
+    assert!(read(dir.path(), ".claude/agents/reviewer.md").contains("effort: high"));
+    let imp = read(dir.path(), ".claude/agents/implementer.md");
+    assert!(!imp.contains("disallowedTools") && !imp.contains("effort:"));
+    // Opt-in fields stay off by default.
+    assert!(!imp.contains("memory:") && !imp.contains("permissionMode:"));
+}
+
+#[test]
+fn old_agent_state_backfills_no_new_fields() {
+    let a: Agent =
+        serde_json::from_str(r#"{"name":"x","mode":"subagent","model":"opus"}"#).unwrap();
+    assert!(a.disallowed_tools.is_empty() && a.effort.is_empty() && a.mcp_servers.is_empty());
+    assert!(!a.background);
+}
+
+#[test]
+fn disallowed_write_makes_a_role_read_only_for_risk_rounds() {
+    let dir = tempdir().unwrap();
+    let mut p = claude_default("rr");
+    p.claude.team = Team {
+        enabled: true,
+        mode: "in-process".into(),
+        hooks: true,
+        plan_gate: false,
+        confidence_threshold: 0,
+        risk_rounds: true,
+        approval_gate: false,
+    };
+    // A role with every tool (empty list) but Edit/Write disallowed is read-only.
+    let mut auditor = Agent::blank("auditor", "custom", "");
+    auditor.mode = "subagent".into();
+    auditor.model = "opus".into();
+    auditor.disallowed_tools = "Edit, Write".into();
+    p.agents.push(auditor);
+    p.scaffold(dir.path(), false).unwrap();
+    let s: serde_json::Value =
+        serde_json::from_str(&read(dir.path(), ".claude/settings.json")).unwrap();
+    assert!(s["env"]["TEAM_READONLY_ROLES"]
+        .as_str()
+        .unwrap()
+        .contains("auditor"));
+}
+
+#[test]
+fn invalid_agent_enums_are_flagged_and_doctor_clears_them() {
+    let mut p = claude_default("en");
+    let i = 1;
+    p.agents[i].effort = "extreme".into();
+    p.agents[i].permission_mode = "yolo".into();
+    p.agents[i].memory = "cloud".into();
+    let issues = p.issues();
+    for want in ["effort", "permission mode", "memory"] {
+        assert!(
+            issues.iter().any(|x| x.contains(want)),
+            "{want}: {issues:?}"
+        );
+    }
+    p.doctor();
+    assert!(
+        p.agents[i].effort.is_empty()
+            && p.agents[i].permission_mode.is_empty()
+            && p.agents[i].memory.is_empty()
+    );
+    // bypassPermissions is valid but called out.
+    p.agents[i].permission_mode = "bypassPermissions".into();
+    assert!(p.issues().iter().any(|x| x.contains("bypassPermissions")));
+}
+
+fn stdio_server() -> ocgen::claude::McpServer {
+    ocgen::claude::McpServer {
+        name: "tf".into(),
+        transport: "stdio".into(),
+        command: "npx".into(),
+        args: vec!["-y".into(), "terraform-mcp".into()],
+        env: [("TF_TOKEN".to_string(), "${TF_TOKEN}".to_string())]
+            .into_iter()
+            .collect(),
+        pre_approve: true,
+        ..Default::default()
+    }
+}
+
+#[test]
+fn mcp_json_and_pre_approval() {
+    let dir = tempdir().unwrap();
+    let mut p = claude_default("mcp");
+    p.claude.mcp_servers.push(stdio_server());
+    p.claude.mcp_servers.push(ocgen::claude::McpServer {
+        name: "docs".into(),
+        transport: "http".into(),
+        url: "https://mcp.example.com/mcp".into(),
+        headers: [(
+            "Authorization".to_string(),
+            "Bearer ${DOCS_TOKEN}".to_string(),
+        )]
+        .into_iter()
+        .collect(),
+        ..Default::default()
+    });
+    p.scaffold(dir.path(), false).unwrap();
+    let mcp: serde_json::Value = serde_json::from_str(&read(dir.path(), ".mcp.json")).unwrap();
+    assert_eq!(mcp["mcpServers"]["tf"]["type"], "stdio");
+    assert_eq!(mcp["mcpServers"]["tf"]["command"], "npx");
+    assert_eq!(mcp["mcpServers"]["tf"]["args"][1], "terraform-mcp");
+    assert_eq!(mcp["mcpServers"]["tf"]["env"]["TF_TOKEN"], "${TF_TOKEN}");
+    assert_eq!(mcp["mcpServers"]["docs"]["type"], "http");
+    assert_eq!(
+        mcp["mcpServers"]["docs"]["url"],
+        "https://mcp.example.com/mcp"
+    );
+    assert!(mcp["mcpServers"]["docs"].get("command").is_none());
+    let s: serde_json::Value =
+        serde_json::from_str(&read(dir.path(), ".claude/settings.json")).unwrap();
+    let approved = s["enabledMcpjsonServers"].as_array().unwrap();
+    assert_eq!(approved.len(), 1, "only pre-approved servers");
+    assert_eq!(approved[0], "tf");
+    assert!(p.issues().is_empty(), "{:?}", p.issues());
+
+    // No servers → no .mcp.json and no approval key.
+    let dir2 = tempdir().unwrap();
+    claude_default("nomcp")
+        .scaffold(dir2.path(), false)
+        .unwrap();
+    assert!(!dir2.path().join(".mcp.json").exists());
+    assert!(!read(dir2.path(), ".claude/settings.json").contains("enabledMcpjsonServers"));
+}
+
+#[test]
+fn agent_mcp_servers_render_and_extend_a_tools_allowlist() {
+    let dir = tempdir().unwrap();
+    let mut p = claude_default("amcp");
+    p.claude.mcp_servers.push(stdio_server());
+    let i = p.agents.iter().position(|a| a.name == "explorer").unwrap();
+    p.agents[i].mcp_servers = "tf".into();
+    p.scaffold(dir.path(), false).unwrap();
+    let md = read(dir.path(), ".claude/agents/explorer.md");
+    assert!(md.contains("mcpServers:\n  - tf"), "{md}");
+    assert!(
+        md.contains("tools: Read, Grep, Glob, WebFetch, WebSearch, mcp__tf"),
+        "{md}"
+    );
+}
+
+#[test]
+fn mcp_checks_catch_unknown_servers_and_literal_secrets() {
+    let mut p = claude_default("chk");
+    p.agents[1].mcp_servers = "ghost".into();
+    let mut leaky = stdio_server();
+    leaky.env.insert("API_KEY".into(), "sk-live-123".into());
+    p.claude.mcp_servers.push(leaky);
+    let issues = p.issues();
+    assert!(issues.iter().any(|i| i.contains("ghost")), "{issues:?}");
+    assert!(
+        issues
+            .iter()
+            .any(|i| i.contains("API_KEY") && i.contains("${")),
+        "{issues:?}"
+    );
+}
+
+#[test]
+fn kv_lists_parse_and_round_trip() {
+    use ocgen::claude::{format_kv_list, parse_kv_list};
+    let m = parse_kv_list("A=1, B=${B} ,C=x=y").unwrap();
+    assert_eq!(m["A"], "1");
+    assert_eq!(m["B"], "${B}");
+    assert_eq!(m["C"], "x=y");
+    assert_eq!(parse_kv_list(&format_kv_list(&m)).unwrap(), m);
+    assert!(parse_kv_list("").unwrap().is_empty());
+    assert!(parse_kv_list("novalue").is_err());
+}
+
+// ------------------------------------------------ hooks library + skills -----
+
+fn hook_groups(settings: &serde_json::Value, event: &str) -> Vec<serde_json::Value> {
+    settings["hooks"][event]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+}
+
+fn settings_of(dir: &Path) -> serde_json::Value {
+    serde_json::from_str(&read(dir, ".claude/settings.json")).unwrap()
+}
+
+#[test]
+fn compaction_reinjects_context_by_default() {
+    let dir = tempdir().unwrap();
+    claude_default("cc").scaffold(dir.path(), false).unwrap();
+    let s = settings_of(dir.path());
+    let compact = hook_groups(&s, "SessionStart")
+        .into_iter()
+        .find(|g| g["matcher"] == "compact")
+        .expect("a SessionStart group matching compact");
+    let cmd = compact["hooks"][0]["command"].as_str().unwrap();
+    assert!(
+        cmd.contains(".claude/notes") && cmd.contains("rules"),
+        "{cmd}"
+    );
+}
+
+#[test]
+fn optional_hooks_are_wired_with_their_scripts() {
+    let dir = tempdir().unwrap();
+    let mut p = claude_default("hx");
+    p.claude.hooks_extra.notify = true;
+    p.claude.hooks_extra.format_cmd = "cargo fmt".into();
+    p.claude.hooks_extra.config_audit = true;
+    p.scaffold(dir.path(), false).unwrap();
+    let s = settings_of(dir.path());
+    for ev in ["Notification", "StopFailure"] {
+        let cmd = hook_groups(&s, ev)[0]["hooks"][0]["command"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(cmd.contains("notify.sh"), "{ev}: {cmd}");
+    }
+    let fmt = &hook_groups(&s, "PostToolUse")[0];
+    assert_eq!(fmt["matcher"], "Edit|Write");
+    assert!(fmt["hooks"][0]["command"]
+        .as_str()
+        .unwrap()
+        .contains("OCGEN_FORMAT_CMD='cargo fmt'"));
+    assert!(hook_groups(&s, "ConfigChange")[0]["hooks"][0]["command"]
+        .as_str()
+        .unwrap()
+        .contains("config-audit.sh"));
+    for script in ["notify.sh", "format.sh", "config-audit.sh"] {
+        let path = dir.path().join(".claude/hooks").join(script);
+        let ok = std::process::Command::new("sh")
+            .arg("-n")
+            .arg(&path)
+            .status()
+            .unwrap();
+        assert!(ok.success(), "{script} parses");
+    }
+
+    // Off by default: none of them.
+    let dir2 = tempdir().unwrap();
+    claude_default("hoff").scaffold(dir2.path(), false).unwrap();
+    let s2 = settings_of(dir2.path());
+    for ev in ["Notification", "PostToolUse", "ConfigChange"] {
+        assert!(hook_groups(&s2, ev).is_empty(), "{ev} off by default");
+    }
+    assert!(!dir2.path().join(".claude/hooks/notify.sh").exists());
+}
+
+#[test]
+fn format_hook_never_blocks_and_audit_log_ignores_itself() {
+    let dir = tempdir().unwrap();
+    let mut p = claude_default("fb");
+    p.claude.hooks_extra.format_cmd = "false".into();
+    p.claude.hooks_extra.config_audit = true;
+    p.scaffold(dir.path(), false).unwrap();
+    let proj = dir.path().to_str().unwrap();
+    let (code, _, err) = run_hook(
+        &dir.path().join(".claude/hooks/format.sh"),
+        &[("CLAUDE_PROJECT_DIR", proj), ("OCGEN_FORMAT_CMD", "false")],
+        r#"{"tool_name":"Edit"}"#,
+    );
+    assert_eq!(code, 0, "a failing formatter never blocks");
+    assert!(err.contains("failed"));
+    let (code, _, _) = run_hook(
+        &dir.path().join(".claude/hooks/config-audit.sh"),
+        &[("CLAUDE_PROJECT_DIR", proj)],
+        r#"{"hook_event_name":"ConfigChange","source":"project_settings"}"#,
+    );
+    assert_eq!(code, 0);
+    assert!(read(dir.path(), ".claude/audit/config-changes.log").contains("project_settings"));
+    assert_eq!(read(dir.path(), ".claude/audit/.gitignore"), "*\n");
+}
+
+#[test]
+fn plugin_gets_the_optional_hooks_too() {
+    let dir = tempdir().unwrap();
+    let mut p = claude_default("ph");
+    p.claude.output = Output {
+        project: false,
+        plugin: true,
+    };
+    p.claude.plugin.repo_owner = "me".into();
+    p.claude.plugin.repo_name = "ph".into();
+    p.claude.hooks_extra.format_cmd = "cargo fmt".into();
+    p.scaffold(dir.path(), false).unwrap();
+    let base = dir.path().join("plugin/ph");
+    let hooks: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(base.join("hooks/hooks.json")).unwrap()).unwrap();
+    let cmd = hooks["hooks"]["PostToolUse"][0]["hooks"][0]["command"]
+        .as_str()
+        .unwrap();
+    assert!(
+        cmd.contains("${CLAUDE_PLUGIN_ROOT}/hooks/format.sh"),
+        "{cmd}"
+    );
+    assert!(base.join("hooks/format.sh").is_file());
+}
+
+#[test]
+fn workflow_commands_are_generated_as_skills() {
+    let dir = tempdir().unwrap();
+    let mut p = claude_default("wf");
+    p.claude.team.enabled = true;
+    p.claude.team.plan_gate = true;
+    p.scaffold(dir.path(), false).unwrap();
+    for (name, user_only) in [
+        ("deliver", true),
+        ("fanout", true),
+        ("multi", true),
+        ("team", true),
+        ("team-plan", true),
+        ("inquire", false),
+        ("intake", false),
+        ("refine", false),
+        ("improve-prompt", false),
+    ] {
+        let md = read(dir.path(), &format!(".claude/skills/{name}/SKILL.md"));
+        assert!(
+            md.starts_with(&format!("---\nname: {name}\n")),
+            "{name}:\n{md}"
+        );
+        assert_eq!(
+            md.contains("disable-model-invocation: true"),
+            user_only,
+            "{name}"
+        );
+        assert!(md.contains("description:"), "{name}");
+    }
+    assert!(
+        !dir.path().join(".claude/commands").exists(),
+        "no legacy commands dir"
+    );
+}
+
+#[test]
+fn stale_generated_commands_are_removed_but_user_commands_kept() {
+    let dir = tempdir().unwrap();
+    let cmds = dir.path().join(".claude/commands");
+    fs::create_dir_all(&cmds).unwrap();
+    fs::write(cmds.join("deliver.md"), "---\ndescription: Take a complex task end-to-end\nargument-hint: \"[the goal]\"\n---\nold\n").unwrap();
+    fs::write(
+        cmds.join("my-own.md"),
+        "---\ndescription: mine\n---\nkeep me\n",
+    )
+    .unwrap();
+    fs::write(cmds.join("inquire.md"), "hand-written, no frontmatter\n").unwrap();
+    claude_default("st").scaffold(dir.path(), true).unwrap();
+    assert!(
+        !cmds.join("deliver.md").exists(),
+        "old generated command removed"
+    );
+    assert!(cmds.join("my-own.md").exists(), "user command kept");
+    assert!(
+        cmds.join("inquire.md").exists(),
+        "a hand-written file with a workflow name is kept"
+    );
+}
+
+#[test]
+fn user_skills_cannot_take_a_workflow_name() {
+    assert!(ocgen::validate::skill_name("deliver").is_err());
+    assert!(ocgen::validate::skill_name("team-plan").is_err());
+    let mut p = claude_default("rsv");
+    let mut s = good_skill();
+    s.name = "inquire".into();
+    p.skills.push(s);
+    assert!(
+        p.issues()
+            .iter()
+            .any(|i| i.contains("inquire") && i.contains("generated")),
+        "{:?}",
+        p.issues()
+    );
+}
+
+#[test]
+fn full_skill_frontmatter_renders_and_is_checked() {
+    use ocgen::claude::skill_issues;
+    let dir = tempdir().unwrap();
+    let mut p = claude_default("sf");
+    let mut s = good_skill();
+    s.paths = "**/*.tf **/*.tfvars".into();
+    s.arguments = "plan_file".into();
+    s.disallowed_tools = "Write".into();
+    s.effort = "high".into();
+    s.context_fork = true;
+    s.agent = "Explore".into();
+    s.background = true;
+    p.skills.push(s.clone());
+    p.scaffold(dir.path(), false).unwrap();
+    let md = read(dir.path(), ".claude/skills/tf-plan-review/SKILL.md");
+    for line in [
+        "paths:\n  - \"**/*.tf\"\n  - \"**/*.tfvars\"",
+        "arguments: plan_file",
+        "disallowed-tools: Write",
+        "effort: high",
+        "background: true",
+    ] {
+        assert!(md.contains(line), "missing {line:?} in:\n{md}");
+    }
+    assert!(skill_issues(&s).is_empty(), "{:?}", skill_issues(&s));
+    // background only makes sense for a forked skill; effort must be a real level.
+    let mut bad = s.clone();
+    bad.context_fork = false;
+    bad.effort = "turbo".into();
+    let issues = skill_issues(&bad);
+    assert!(
+        has(&issues, "background") && has(&issues, "effort"),
+        "{issues:?}"
+    );
+}
+
+// ------------------------------------------------------------- statusline -----
+
+fn strip_ansi(s: &str) -> String {
+    let mut out = String::new();
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' {
+            for n in chars.by_ref() {
+                if n.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+fn statusline_payload(dir: &Path) -> String {
+    let d = dir.display();
+    format!(
+        r#"{{"model":{{"id":"claude-opus-5-5","display_name":"Opus 5.5"}},"workspace":{{"current_dir":"{d}","project_dir":"{d}"}},"cost":{{"total_cost_usd":0.4213}},"context_window":{{"current_usage":{{"input_tokens":5}},"used_percentage":42,"remaining_percentage":58}},"rate_limits":{{"five_hour":{{"used_percentage":90}}}},"worktree":{{"name":"feature-a","path":"x","branch":"worktree-feature-a"}}}}"#
+    )
+}
+
+#[test]
+fn statusline_script_is_wired_for_the_project_only() {
+    let dir = tempdir().unwrap();
+    let mut p = claude_default("sl");
+    p.claude.output = Output {
+        project: true,
+        plugin: true,
+    };
+    p.claude.plugin.repo_owner = "me".into();
+    p.claude.plugin.repo_name = "sl".into();
+    p.scaffold(dir.path(), false).unwrap();
+    let s = settings_of(dir.path());
+    let cmd = s["statusLine"]["command"].as_str().unwrap();
+    assert!(cmd.contains(".claude/statusline.sh"), "{cmd}");
+    assert!(dir.path().join(".claude/statusline.sh").is_file());
+    // Plugins can't set statusLine, so the plugin doesn't carry the script.
+    assert!(!dir.path().join("plugin/sl/statusline.sh").exists());
+}
+
+#[test]
+fn statusline_shows_model_place_context_cost_worktree_and_escalations() {
+    let dir = tempdir().unwrap();
+    claude_default("slr").scaffold(dir.path(), false).unwrap();
+    std::process::Command::new("git")
+        .args(["init", "-q", "-b", "trunk"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    fs::create_dir_all(dir.path().join(".claude/loop-guard")).unwrap();
+    fs::write(
+        dir.path().join(".claude/loop-guard/escalations.md"),
+        "- t [subagent-confidence] a1: x\n- t [task-confidence] t2: y\n",
+    )
+    .unwrap();
+    let script = dir.path().join(".claude/statusline.sh");
+    for no_jq in ["", "1"] {
+        let (code, out, _) = run_hook(
+            &script,
+            &[("OCGEN_STATUSLINE_NO_JQ", no_jq)],
+            &statusline_payload(dir.path()),
+        );
+        assert_eq!(code, 0);
+        let line = strip_ansi(&out);
+        let dir_name = dir
+            .path()
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+        for want in [
+            "Opus 5.5",
+            dir_name.as_str(),
+            "(trunk)",
+            "58% left",
+            "$0.42",
+            "wt:feature-a",
+            "2 unresolved",
+        ] {
+            assert!(
+                line.contains(want),
+                "no_jq={no_jq:?}: missing {want:?} in {line:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn statusline_survives_a_sparse_payload() {
+    let dir = tempdir().unwrap();
+    claude_default("sls").scaffold(dir.path(), false).unwrap();
+    let script = dir.path().join(".claude/statusline.sh");
+    for no_jq in ["", "1"] {
+        let (code, out, _) = run_hook(&script, &[("OCGEN_STATUSLINE_NO_JQ", no_jq)], "{}");
+        assert_eq!(code, 0, "no_jq={no_jq:?}");
+        let line = strip_ansi(&out);
+        assert!(
+            !line.contains("unresolved") && !line.contains("null"),
+            "{line:?}"
+        );
+    }
+}
+
+// ------------------------------------------------------------ safe doctor -----
+
+#[test]
+fn plan_classifies_added_modified_unchanged_and_stale() {
+    use ocgen::render::ChangeKind;
+    let dir = tempdir().unwrap();
+    claude_default("plan").scaffold(dir.path(), false).unwrap();
+    // `doctor` works on the saved state, which carries the fingerprints.
+    let mut p = Project::load_state(dir.path()).unwrap();
+    assert!(
+        p.plan_changes(dir.path())
+            .unwrap()
+            .iter()
+            .all(|c| c.kind == ChangeKind::Unchanged),
+        "fresh scaffold → nothing to change"
+    );
+
+    // A hand edit, an ocgen-side change, a deleted file, and a stale legacy command.
+    fs::write(dir.path().join(".claude/settings.json"), "{}\n").unwrap();
+    p.agents[1].description = "Explores differently now".into();
+    fs::remove_file(dir.path().join(".claude/statusline.sh")).unwrap();
+    fs::create_dir_all(dir.path().join(".claude/commands")).unwrap();
+    fs::write(
+        dir.path().join(".claude/commands/deliver.md"),
+        "---\ndescription: old\n---\nx\n",
+    )
+    .unwrap();
+
+    let plan = p.plan_changes(dir.path()).unwrap();
+    let find = |rel: &str| {
+        plan.iter()
+            .find(|c| c.path.ends_with(rel))
+            .unwrap_or_else(|| panic!("{rel}"))
+    };
+    let settings = find(".claude/settings.json");
+    assert_eq!(settings.kind, ChangeKind::Modified);
+    assert_eq!(
+        settings.hand_edited,
+        Some(true),
+        "the user changed what ocgen wrote"
+    );
+    let explorer = find(".claude/agents/explorer.md");
+    assert_eq!(explorer.kind, ChangeKind::Modified);
+    assert_eq!(
+        explorer.hand_edited,
+        Some(false),
+        "ocgen's own change, not a hand edit"
+    );
+    assert_eq!(find(".claude/statusline.sh").kind, ChangeKind::Added);
+    assert_eq!(
+        find(".claude/commands/deliver.md").kind,
+        ChangeKind::Removed
+    );
+    // CLAUDE.md is the user's and never part of the plan.
+    assert!(!plan.iter().any(|c| c.path.ends_with("CLAUDE.md")));
+}
+
+#[test]
+fn backup_keeps_old_versions_and_prunes_to_five() {
+    let dir = tempdir().unwrap();
+    let p = claude_default("bk");
+    p.scaffold(dir.path(), false).unwrap();
+    fs::write(
+        dir.path().join(".claude/settings.json"),
+        "{\"mine\":true}\n",
+    )
+    .unwrap();
+    let plan = p.plan_changes(dir.path()).unwrap();
+    let bk = Project::backup(dir.path(), &plan)
+        .unwrap()
+        .expect("a backup was needed");
+    assert_eq!(
+        fs::read_to_string(bk.join(".claude/settings.json")).unwrap(),
+        "{\"mine\":true}\n"
+    );
+    assert_eq!(read(dir.path(), ".ocgen-backup/.gitignore"), "*\n");
+    // Nothing to back up → no new backup.
+    p.scaffold(dir.path(), true).unwrap();
+    assert!(
+        Project::backup(dir.path(), &p.plan_changes(dir.path()).unwrap())
+            .unwrap()
+            .is_none()
+    );
+    // Only the newest five are kept.
+    for i in 0..7 {
+        fs::create_dir_all(dir.path().join(format!(".ocgen-backup/20000101-00000{i}"))).unwrap();
+    }
+    Project::prune_backups(dir.path(), 5).unwrap();
+    let kept = fs::read_dir(dir.path().join(".ocgen-backup"))
+        .unwrap()
+        .filter(|e| e.as_ref().unwrap().path().is_dir())
+        .count();
+    assert_eq!(kept, 5);
+    assert!(bk.exists(), "the real (newest) backup survives pruning");
+}
+
+#[test]
+fn line_diff_reports_changes_with_context() {
+    use ocgen::diff::{line_diff, DiffLine};
+    let old = "a\nb\nc\nd\n";
+    let new = "a\nB\nc\nd\ne\n";
+    let d = line_diff(old, new);
+    assert!(d.contains(&DiffLine::Removed("b".into())));
+    assert!(d.contains(&DiffLine::Added("B".into())));
+    assert!(d.contains(&DiffLine::Added("e".into())));
+    assert!(d.contains(&DiffLine::Same("a".into())));
+    assert!(line_diff("x\n", "x\n")
+        .iter()
+        .all(|l| matches!(l, DiffLine::Same(_))));
+}
+
+// ------------------------------------------------------ defence in depth -----
+
+#[test]
+fn high_impact_commands_always_ask_first() {
+    let dir = tempdir().unwrap();
+    claude_default("ask").scaffold(dir.path(), false).unwrap();
+    let s = settings_of(dir.path());
+    let ask: Vec<&str> = s["permissions"]["ask"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    for want in [
+        "Bash(git push:*)",
+        "Bash(terraform apply*)",
+        "Bash(kubectl delete*)",
+        "Bash(npm publish*)",
+        "Bash(ssh *)",
+    ] {
+        assert!(ask.contains(&want), "missing {want}: {ask:?}");
+    }
+}
+
+#[test]
+fn sandbox_profile_is_opt_in() {
+    let dir = tempdir().unwrap();
+    claude_default("sbx0").scaffold(dir.path(), false).unwrap();
+    assert!(
+        settings_of(dir.path()).get("sandbox").is_none(),
+        "off by default"
+    );
+
+    let dir = tempdir().unwrap();
+    let mut p = claude_default("sbx1");
+    p.claude.sandbox.enabled = true;
+    p.claude.sandbox.extra_domains = vec!["artifacts.example.com".into()];
+    p.scaffold(dir.path(), false).unwrap();
+    let s = settings_of(dir.path());
+    assert_eq!(s["sandbox"]["enabled"], true);
+    assert_eq!(
+        s["sandbox"]["allowUnsandboxedCommands"], false,
+        "strict: no unsandboxed retries"
+    );
+    let domains: Vec<&str> = s["sandbox"]["network"]["allowedDomains"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    assert!(domains.contains(&"github.com") && domains.contains(&"registry.npmjs.org"));
+    assert!(domains.contains(&"artifacts.example.com"));
+}
+
+#[test]
+fn managed_policy_enforces_the_safety_line() {
+    let v: serde_json::Value =
+        serde_json::from_str(&ocgen::claude::managed_settings_json()).unwrap();
+    assert_eq!(v["permissions"]["disableBypassPermissionsMode"], "disable");
+    assert!(v["permissions"]["deny"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|d| d == "Read(./**/*.tfstate)"));
+    assert!(v["permissions"]["ask"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|d| d == "Bash(terraform apply*)"));
+}
+
+// ---------------------------------------------------------------- verify -----
+
+fn verify_no_claude(dir: &Path) -> Vec<ocgen::verify::Check> {
+    let p = Project::load_state(dir).unwrap();
+    ocgen::verify::verify(
+        &p,
+        dir,
+        &ocgen::verify::Options {
+            run_claude: false,
+            run_check: false,
+        },
+    )
+}
+
+fn status_of(checks: &[ocgen::verify::Check], name: &str) -> ocgen::verify::Status {
+    checks
+        .iter()
+        .find(|c| c.name.contains(name))
+        .unwrap_or_else(|| panic!("no check named {name}: {checks:?}"))
+        .status
+}
+
+#[test]
+fn verify_passes_a_fresh_project() {
+    use ocgen::verify::Status;
+    let dir = tempdir().unwrap();
+    let mut p = claude_default("vf");
+    p.claude.team.enabled = true;
+    p.claude.team.approval_gate = true;
+    p.scaffold(dir.path(), false).unwrap();
+    let checks = verify_no_claude(dir.path());
+    assert!(
+        !checks.iter().any(|c| c.status == Status::Fail),
+        "{checks:#?}"
+    );
+    for name in [
+        "up to date",
+        "settings.json",
+        "hook",
+        "statusline",
+        "approval gate",
+    ] {
+        assert_eq!(
+            status_of(&checks, name),
+            Status::Pass,
+            "{name}: {checks:#?}"
+        );
+    }
+    // Verification leaves no loop-guard state behind.
+    assert!(!dir.path().join(".claude/loop-guard").exists());
+}
+
+#[test]
+fn verify_catches_drift_bad_settings_broken_hooks_and_statusline() {
+    use ocgen::verify::Status;
+    let dir = tempdir().unwrap();
+    let mut p = claude_default("vb");
+    p.claude.team.enabled = true;
+    p.claude.team.approval_gate = true;
+    p.scaffold(dir.path(), false).unwrap();
+
+    // Drift + an unknown key.
+    let mut s = settings_of(dir.path());
+    s["teamateMode"] = serde_json::json!("auto");
+    fs::write(
+        dir.path().join(".claude/settings.json"),
+        serde_json::to_string_pretty(&s).unwrap(),
+    )
+    .unwrap();
+    // A gate that no longer blocks, and a statusline that crashes.
+    fs::write(
+        dir.path().join(".claude/hooks/team-approval-gate.sh"),
+        "#!/bin/sh\nexit 0\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join(".claude/statusline.sh"),
+        "#!/bin/sh\nexit 3\n",
+    )
+    .unwrap();
+    fs::remove_file(dir.path().join(".claude/hooks/loop-guard.sh")).unwrap();
+
+    let checks = verify_no_claude(dir.path());
+    assert_eq!(status_of(&checks, "up to date"), Status::Warn);
+    assert_eq!(
+        status_of(&checks, "settings.json"),
+        Status::Warn,
+        "unknown key teamateMode"
+    );
+    assert_eq!(status_of(&checks, "statusline"), Status::Fail);
+    assert_eq!(
+        status_of(&checks, "hook scripts"),
+        Status::Fail,
+        "loop-guard.sh missing"
+    );
+    // With no compatible ocgen on PATH the command falls back to the (broken)
+    // script, so the gate must be reported as not blocking.
+    let gate = checks
+        .iter()
+        .find(|c| c.name.contains("approval gate"))
+        .unwrap();
+    assert!(
+        gate.status == Status::Fail || gate.detail.contains("ocgen hook"),
+        "{gate:?}"
+    );
+}
+
+// ----------------------------------------------------- credentials + store -----
+
+#[test]
+fn credentials_and_the_approval_store_are_off_limits() {
+    let dir = tempdir().unwrap();
+    claude_default("cr").scaffold(dir.path(), false).unwrap();
+    let s = settings_of(dir.path());
+    let deny: Vec<&str> = s["permissions"]["deny"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    for want in [
+        "Read(~/.ssh/**)",
+        "Read(~/.aws/**)",
+        "Read(~/.config/gh/**)",
+        "Read(~/.claude/ocgen/**)",
+        "Edit(~/.claude/ocgen/**)",
+        "Bash(ocgen approve*)",
+    ] {
+        assert!(deny.contains(&want), "missing {want}: {deny:?}");
+    }
+}
+
+#[test]
+fn sandbox_withholds_push_and_deploy_credentials_by_default() {
+    let dir = tempdir().unwrap();
+    let mut p = claude_default("sc");
+    p.claude.sandbox.enabled = true;
+    p.scaffold(dir.path(), false).unwrap();
+    let s = settings_of(dir.path());
+    let files: Vec<&str> = s["sandbox"]["credentials"]["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["path"].as_str().unwrap())
+        .collect();
+    assert!(
+        files.contains(&"~/.ssh") && files.contains(&"~/.config/gh") && files.contains(&"~/.aws")
+    );
+    assert!(s["sandbox"]["credentials"]["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|f| f["mode"] == "deny"));
+    let vars: Vec<&str> = s["sandbox"]["credentials"]["envVars"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["name"].as_str().unwrap())
+        .collect();
+    assert!(vars.contains(&"GH_TOKEN") && vars.contains(&"AWS_SECRET_ACCESS_KEY"));
+    let no_write: Vec<&str> = s["sandbox"]["filesystem"]["denyWrite"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    assert!(
+        no_write.contains(&"~/.claude/ocgen"),
+        "the approval store can't be written from the sandbox"
+    );
+
+    // Opting in to credentials keeps the sandbox but drops the credential block.
+    let dir = tempdir().unwrap();
+    let mut p = claude_default("sc2");
+    p.claude.sandbox.enabled = true;
+    p.claude.sandbox.allow_credentials = true;
+    p.scaffold(dir.path(), false).unwrap();
+    let s = settings_of(dir.path());
+    assert!(s["sandbox"].get("credentials").is_none());
+    assert!(
+        s["sandbox"]["filesystem"]["denyWrite"].is_array(),
+        "the store stays protected"
+    );
+}
+
+// ------------------------------------------------------------ check command -----
+
+#[test]
+fn check_command_is_wired_into_settings_and_rules() {
+    let dir = tempdir().unwrap();
+    let mut p = claude_default("chk");
+    p.claude.workflow.check_cmd = "cargo test".into();
+    p.claude.workflow.subagent_confidence = 0; // the check alone keeps the gate on
+    p.scaffold(dir.path(), false).unwrap();
+    let s = settings_of(dir.path());
+    assert_eq!(s["env"]["OCGEN_CHECK_CMD"], "cargo test");
+    assert!(
+        !hook_groups(&s, "SubagentStop").is_empty(),
+        "gate emitted for the check alone"
+    );
+    assert!(dir
+        .path()
+        .join(".claude/hooks/subagent-confidence-gate.sh")
+        .exists());
+    assert!(read(dir.path(), ".claude/rules/ocgen-workflow.md").contains("cargo test"));
+
+    // Off by default.
+    let dir = tempdir().unwrap();
+    claude_default("nochk").scaffold(dir.path(), false).unwrap();
+    assert!(settings_of(dir.path())["env"]
+        .get("OCGEN_CHECK_CMD")
+        .is_none());
+    let wf: Workflow = serde_json::from_str(r#"{"deliver": true}"#).unwrap();
+    assert!(wf.check_cmd.is_empty());
 }

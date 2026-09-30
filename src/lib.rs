@@ -6,15 +6,21 @@
 //! is just the interactive wizard that builds a `Project` and calls [`Project::scaffold`].
 
 pub mod agent;
+pub mod approval;
 pub mod archetype;
 pub mod claude;
+mod clock;
+pub mod diff;
 pub mod gitcheck;
+pub mod hooks;
 pub mod manifest;
 pub mod render;
+pub mod risk;
 pub mod seeds;
 pub mod target;
 pub mod templates;
 pub mod validate;
+pub mod verify;
 
 pub use agent::Agent;
 pub use archetype::Archetype;

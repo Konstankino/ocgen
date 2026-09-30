@@ -40,6 +40,21 @@ pub struct Agent {
     /// Claude Code isolation mode (Claude target only). `worktree` runs the
     /// subagent in its own enforced git worktree; empty = no isolation.
     pub isolation: String,
+    /// Claude Code `disallowedTools`: tools removed even if `tools` would allow them
+    /// (e.g. `Edit, Write, NotebookEdit` makes a role hard read-only).
+    pub disallowed_tools: String,
+    /// Claude Code `permissionMode` for this subagent (empty = inherit).
+    pub permission_mode: String,
+    /// Claude Code `effort` (low/medium/high/xhigh/max; empty = inherit).
+    pub effort: String,
+    /// Claude Code `memory` scope (user/project/local; empty = none).
+    pub memory: String,
+    /// Skills preloaded into the subagent's context (comma-separated names).
+    pub preload_skills: String,
+    /// Claude Code `background`: run as a background subagent.
+    pub background: bool,
+    /// Project MCP servers this subagent may use (comma-separated names).
+    pub mcp_servers: String,
     /// Markdown system-prompt body.
     pub body: String,
     /// Whether to emit an external `.opencode/prompts/<name>.txt` file.
@@ -108,6 +123,8 @@ impl Agent {
             isolation: arch.claude_isolation(),
             // `steps` doubles as the Claude subagent's `maxTurns` ceiling.
             steps: arch.claude_max_turns,
+            disallowed_tools: arch.claude_disallowed_tools.clone().unwrap_or_default(),
+            effort: arch.claude_effort.clone().unwrap_or_default(),
             ..Default::default()
         })
     }

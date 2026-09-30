@@ -39,6 +39,12 @@ pub struct Archetype {
     /// Claude Code `maxTurns` default for this role (None = unlimited).
     #[serde(default)]
     pub claude_max_turns: Option<u32>,
+    /// Claude Code `disallowedTools` default for this role.
+    #[serde(default)]
+    pub claude_disallowed_tools: Option<String>,
+    /// Claude Code `effort` default for this role.
+    #[serde(default)]
+    pub claude_effort: Option<String>,
 }
 
 impl Archetype {

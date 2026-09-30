@@ -3,5 +3,7 @@
   "displayName": "{{ display_name }}",
   "version": "{{ version }}",
   "description": "{{ description }}",
-  "author": { "name": "{{ owner }}" }
+  "author": { "name": "{{ owner }}" }{% if owner and repo %},
+  "homepage": "https://github.com/{{ owner }}/{{ repo }}",
+  "repository": "https://github.com/{{ owner }}/{{ repo }}"{% endif %}
 }

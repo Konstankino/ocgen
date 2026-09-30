@@ -63,15 +63,17 @@ pub fn url(s: &str) -> Result<(), String> {
 
 /// A Claude Code model alias.
 pub fn claude_model(s: &str) -> Result<(), String> {
-    const ALLOWED: [&str; 5] = ["opus", "sonnet", "haiku", "fable", "inherit"];
     let t = s.trim();
     if t.is_empty() {
         return Err("required (e.g. sonnet)".into());
     }
-    if ALLOWED.contains(&t) {
+    if crate::claude::is_valid_agent_model(t) {
         Ok(())
     } else {
-        Err(format!("must be one of: {}", ALLOWED.join(", ")))
+        Err(format!(
+            "use an alias ({}) or a full model ID like claude-opus-5-5",
+            crate::claude::AGENT_MODEL_ALIASES.join(", ")
+        ))
     }
 }
 
@@ -117,6 +119,19 @@ pub fn loop_budget(s: &str) -> Result<(), String> {
     match s.trim().parse::<u8>() {
         Ok(n) if n <= 20 => Ok(()),
         _ => Err("must be a whole number between 0 and 20".into()),
+    }
+}
+
+/// A skill name: lowercase letters, digits and hyphens, at most 64 chars.
+pub fn skill_name(s: &str) -> Result<(), String> {
+    if crate::claude::WORKFLOW_SKILLS.contains(&s) {
+        Err(format!(
+            "'{s}' is one of ocgen's generated workflow skills — pick another name"
+        ))
+    } else if crate::claude::is_valid_skill_name(s) {
+        Ok(())
+    } else {
+        Err("use lowercase letters, digits and '-' (≤ 64 chars), e.g. tf-plan-review".into())
     }
 }
 
@@ -247,6 +262,15 @@ mod tests {
         assert!(confidence_threshold("-1").is_err());
         assert!(confidence_threshold("").is_err());
         assert!(confidence_threshold("abc").is_err());
+    }
+
+    #[test]
+    fn skill_names() {
+        assert!(skill_name("tf-plan-review").is_ok());
+        assert!(skill_name("a1").is_ok());
+        for bad in ["Tf_Plan", "a b", "-lead", "", &"a".repeat(65)] {
+            assert!(skill_name(bad).is_err(), "{bad}");
+        }
     }
 
     #[test]

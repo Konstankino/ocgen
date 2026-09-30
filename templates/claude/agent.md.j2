@@ -14,5 +14,30 @@ isolation: {{ agent.isolation }}
 {% if agent.max_turns -%}
 maxTurns: {{ agent.max_turns }}
 {% endif -%}
+{% if agent.disallowed_tools -%}
+disallowedTools: {{ agent.disallowed_tools }}
+{% endif -%}
+{% if agent.permission_mode -%}
+permissionMode: {{ agent.permission_mode }}
+{% endif -%}
+{% if agent.effort -%}
+effort: {{ agent.effort }}
+{% endif -%}
+{% if agent.memory -%}
+memory: {{ agent.memory }}
+{% endif -%}
+{% if agent.skills -%}
+skills:
+{% for s in agent.skills %}  - {{ s }}
+{% endfor -%}
+{% endif -%}
+{% if agent.mcp_servers -%}
+mcpServers:
+{% for s in agent.mcp_servers %}  - {{ s }}
+{% endfor -%}
+{% endif -%}
+{% if agent.background -%}
+background: true
+{% endif -%}
 ---
 {{ agent.body }}

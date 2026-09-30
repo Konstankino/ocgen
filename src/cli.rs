@@ -68,12 +68,65 @@ pub enum Command {
     Doctor {
         /// Directory of the existing project (default: current dir).
         path: Option<String>,
+        /// Show what would change (with diffs) and write nothing.
+        #[arg(long)]
+        dry_run: bool,
+        /// Apply without asking for confirmation.
+        #[arg(long, short)]
+        yes: bool,
     },
     /// Show the full configuration of one agent.
     Show {
         #[command(subcommand)]
         what: ShowWhat,
     },
+    /// Run a generated project's hook (called by Claude Code, not by hand).
+    ///
+    /// Reads the event JSON on stdin and the gate settings from the environment,
+    /// exactly like the `.claude/hooks/*.sh` scripts it replaces.
+    Hook {
+        /// Hook name, e.g. team-approval-gate.
+        name: Option<String>,
+        /// Print the hook protocol version and exit (hook commands probe this
+        /// before using the binary, falling back to the scripts otherwise).
+        #[arg(long)]
+        check: bool,
+    },
+    /// Approve high-impact actions (pushes, deploys…) for a limited time.
+    ///
+    /// For a human, from their own terminal: it refuses to run under Claude Code
+    /// or without a terminal. The approval lives outside the project and expires
+    /// by itself.
+    Approve {
+        /// Directory of the existing project (default: current dir).
+        path: Option<String>,
+        /// How long the approval lasts.
+        #[arg(long, default_value_t = 30)]
+        minutes: u64,
+        /// Re-lock now.
+        #[arg(long)]
+        revoke: bool,
+        /// Show whether execution is approved, and for how long.
+        #[arg(long)]
+        status: bool,
+    },
+    /// Check that a generated project works: up to date, valid settings, hook
+    /// commands run, the approval gate blocks, the statusline renders, a
+    /// compatible ocgen is on PATH, and Claude Code's validator passes.
+    /// Exits 1 if any check fails (usable in CI).
+    Verify {
+        /// Directory of the existing project (default: current dir).
+        path: Option<String>,
+        /// Skip `claude plugin validate` (no Claude Code CLI needed).
+        #[arg(long)]
+        no_claude: bool,
+        /// Also run the project's check command (usually its tests; may be slow).
+        #[arg(long)]
+        run_check: bool,
+    },
+    /// Print a recommended organisation policy (managed-settings.json) that
+    /// projects can't override.
+    ManagedSettings,
     /// Explain every configurable agent/provider field in detail.
     #[command(visible_alias = "reference")]
     Fields,
@@ -126,6 +179,11 @@ pub enum AddWhat {
         /// Directory of the existing project (default: current dir).
         path: Option<String>,
     },
+    /// Add an MCP server to `.mcp.json` (Claude projects only).
+    Mcp {
+        /// Directory of the existing project (default: current dir).
+        path: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -161,6 +219,14 @@ pub enum EditWhat {
     /// Edit an existing Claude Code skill.
     Skill {
         /// Name of the skill to edit (otherwise you pick from a list).
+        name: Option<String>,
+        /// Directory of the existing project.
+        #[arg(short, long, default_value = ".")]
+        path: String,
+    },
+    /// Edit or remove an MCP server (Claude projects only).
+    Mcp {
+        /// Name of the server (otherwise you pick from a list).
         name: Option<String>,
         /// Directory of the existing project.
         #[arg(short, long, default_value = ".")]

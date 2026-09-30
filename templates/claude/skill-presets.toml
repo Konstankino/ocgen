@@ -4,7 +4,8 @@
 
 [[preset]]
 name = "command"
-description = "A user-run task Claude will not auto-invoke."
+choose_when = "a procedure you run by name (/name) that has side effects; it never runs on its own"
+description = "Run this git task step by step when the user types its /name; Claude never starts it on its own."
 allowed_tools = "Bash(git status:*), Bash(git add:*), Bash(git commit:*)"
 disable_model_invocation = true
 [preset.body]
@@ -21,7 +22,8 @@ Ukrainian = """Виконай задачу крок за кроком:
 
 [[preset]]
 name = "knowledge"
-description = "Background reference knowledge Claude loads automatically."
+choose_when = "conventions or domain rules Claude should apply automatically when relevant"
+description = "Conventions and gotchas for <topic>. Use when working on <topic> or when its rules apply."
 [preset.body]
 English = """Guidance for <topic>:
 
@@ -36,8 +38,10 @@ Ukrainian = """Настанови щодо <теми>:
 
 [[preset]]
 name = "improve-prompt"
-description = "Improve a prompt or an agent's system prompt using Anthropic's technique."
+choose_when = "rewriting a prompt or an agent's system prompt on request; asks before writing back"
+description = "Improve a prompt or an agent's system prompt using Anthropic's technique. Run it with /name on the prompt to sharpen."
 allowed_tools = "Read, Edit, Write, Grep, Glob"
+disable_model_invocation = true
 [preset.body]
 English = """Improve the prompt in $ARGUMENTS (inline text, a file path, or an agent name).
 For an agent/skill file, improve only the system-prompt body and preserve the YAML frontmatter.
@@ -62,7 +66,8 @@ Ukrainian = """Покращ промпт із $ARGUMENTS (текст, шлях �
 
 [[preset]]
 name = "forked-research"
-description = "Research a topic thoroughly in an isolated subagent."
+choose_when = "heavy reading across many files in an isolated subagent; you get a summary back"
+description = "Research a topic thoroughly in an isolated subagent. Use when a question needs broad reading across many files."
 context_fork = true
 agent = "Explore"
 [preset.body]

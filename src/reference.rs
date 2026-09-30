@@ -169,14 +169,37 @@ const PROVIDER_FIELDS: &[Field] = &[
 
 const CLAUDE_FIELDS: &[Field] = &[
     Field {
-        label: "model (alias)",
-        detail: "For the Claude Code target an agent's model is a Claude alias, not a                  provider/model id. One of opus, sonnet, haiku, fable, or inherit (use the                  session's model). There are no per-agent providers or base URLs in Claude Code.",
-        example: "sonnet",
+        label: "model (alias or ID)",
+        detail: "For the Claude Code target an agent's model is a Claude alias — opus, sonnet, \
+                 haiku, fable, or inherit (use the session's model) — or a full model ID such as \
+                 claude-opus-5-5 (add [1m] for the 1M-token context). An alias follows the newest \
+                 model; a full ID pins one. There are no per-agent providers or base URLs.",
+        example: "sonnet  or  claude-opus-5-5",
     },
     Field {
         label: "tools",
         detail: "A comma-separated allow-list of the tools a subagent may use, written to its                  frontmatter. Empty means it inherits every tool. This replaces OpenCode's                  permission block for the Claude target.",
         example: "Read, Grep, Edit, Write",
+    },
+    Field {
+        label: "subagent controls",
+        detail: "disallowedTools removes tools even if `tools` allows them (the explorer, reviewer \
+                 and verifier ship with Edit, Write, NotebookEdit denied, so they are hard read-only); \
+                 effort (low/medium/high/xhigh/max) trades cost for depth (the reviewer uses high); \
+                 permissionMode (plan/acceptEdits/dontAsk/default); memory (project = committed \
+                 .claude/agent-memory/, local = git-ignored, user = every project); background; \
+                 skills to preload; and the MCP servers it may use. All optional; set them in \
+                 `ocgen add/edit agent`.",
+        example: "disallowedTools: Edit, Write   effort: high",
+    },
+    Field {
+        label: "mcp servers",
+        detail: "Project MCP servers live in .mcp.json at the repo root: stdio (a local command) or \
+                 http/sse (a URL). Reference secrets as ${VAR}, never literal values — `landscape` \
+                 flags literal tokens. Pre-approving writes enabledMcpjsonServers so the team isn't \
+                 prompted once they trust the folder. Add with `ocgen add mcp`; change or remove \
+                 with `ocgen edit mcp`.",
+        example: "tf: stdio  npx -y terraform-mcp   env TF_TOKEN=${TF_TOKEN}",
     },
     Field {
         label: "mode (coordinator)",
@@ -198,7 +221,15 @@ const CLAUDE_FIELDS: &[Field] = &[
     },
     Field {
         label: "skill",
-        detail: "A reusable capability written to .claude/skills/<name>/SKILL.md, with a name, a                  description that tells Claude when to use it, an optional allowed-tools list, and                  a body. Author one with `ocgen add skill`.",
+        detail: "A reusable capability written to .claude/skills/<name>/SKILL.md. The description \
+                 is the trigger — Claude loads the skill from it alone — so say what it does and \
+                 when (\"Use when …\"). Name: lowercase letters, digits, hyphens (≤ 64). Keep the \
+                 body short (detail in reference.md, logic in scripts/), grant the fewest \
+                 allowed-tools (scope Bash as Bash(cmd:*)), and make anything with side effects \
+                 user-run only. `ocgen add skill` checks these and `ocgen landscape` reports them. \
+                 Optional: paths (globs that limit activation), arguments ($name), \
+                 disallowed-tools, effort, background (forked skills). ocgen's own workflows \
+                 (/deliver, /inquire, …) are skills too, so their names are reserved.",
         example: "commit",
     },
     Field {
@@ -227,11 +258,23 @@ const CLAUDE_FIELDS: &[Field] = &[
         label: "execution approval gate",
         detail: "Deterministic human-approval line for high-impact EXTERNAL actions (ssh, cloud \
                  mutations, git push/merge, gh pr merge/release, terraform/kubectl/helm, deploys, \
-                 publishes). A PreToolUse hook pattern-matches the command and blocks it until a \
-                 human creates .claude/team/execution-approved from their own terminal; agents are \
-                 refused if they try to create the marker themselves. Emitted independently of the \
-                 quality-gate hook stubs so it is never silently off.",
+                 publishes). A PreToolUse hook matches the command (through flags and quoting) and \
+                 blocks it until a human runs `ocgen approve` from their own terminal. The \
+                 approval is time-limited (30 minutes by default) and stored outside the project \
+                 (~/.claude/ocgen/approvals), so an agent can't create it; the command itself \
+                 refuses to run under Claude Code. A git pre-push hook blocks any unapproved \
+                 push however it is launched, and reads of credentials are denied. Emitted \
+                 independently of the quality-gate hook stubs so it is never silently off.",
         example: "on by default with --team;  --no-approval-gate to disable",
+    },
+    Field {
+        label: "check command",
+        detail: "A command that must exit 0 before a worker that changed files may finish, and \
+                 before a team task may complete — e.g. cargo test or terraform validate. An \
+                 objective gate next to the self-reported confidence: a failing check sends the \
+                 work back with the tail of its output, whatever confidence was stated. It runs \
+                 in the worker's own directory. Empty = off.",
+        example: "cargo test",
     },
     Field {
         label: "loop guard",

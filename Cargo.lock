@@ -442,6 +442,7 @@ dependencies = [
  "dirs",
  "minijinja",
  "predicates",
+ "regex",
  "rust-embed",
  "serde",
  "serde_json",

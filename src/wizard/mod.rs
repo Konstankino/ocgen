@@ -5,10 +5,10 @@ use std::path::Path;
 
 use anyhow::{anyhow, bail, Context, Result};
 use console::style;
-use dialoguer::{theme::ColorfulTheme, Confirm, Editor, Input, MultiSelect, Select};
+use dialoguer::{theme::ColorfulTheme, Editor};
 
 use ocgen::agent::{self, Agent};
-use ocgen::claude::{Output, Powerups, Skill, Team};
+use ocgen::claude::{Output, Powerups, Team};
 use ocgen::manifest::{Manifest, Model, Provider};
 use ocgen::render::Project;
 use ocgen::target::Target;
@@ -16,7 +16,18 @@ use ocgen::templates;
 use ocgen::validate::{self, unique_ident};
 
 use crate::cli::{OutputArg, TargetArg, TeamCli};
+use crate::prompt::{
+    ask, ask_color, ask_confirm, ask_multi, ask_optional_v, ask_select, ask_v, edit_multiline,
+};
 use crate::ui;
+
+mod mcp;
+mod skill;
+#[cfg(test)]
+mod tests;
+
+pub use mcp::{run_add_mcp, run_edit_mcp};
+pub use skill::{run_add_skill, run_edit_skill};
 
 // Per-field help, shown dimmed above each prompt so the user is reminded what it means.
 const HELP_NAME: &str = "Identifier → file name and @mention. Lowercase, no spaces (e.g. editor).";
@@ -46,6 +57,7 @@ const HELP_DESC: &str =
 const HELP_PERMS: &str =
     "What it may do (YAML): edit, bash rules, webfetch. Primary agents also get a task block.";
 const HELP_BODY: &str = "The agent's system prompt/persona; $ARGUMENTS = the user's task.";
+const HELP_SKILL_BODY: &str = "Numbered steps Claude follows ($ARGUMENTS = the input). Keep it short: long reference goes in reference.md, deterministic logic in scripts/.";
 const HELP_PROMPTFILE: &str = "Keep the prompt in prompts/<name>.txt (good for long coordinators).";
 const HELP_PROMPTBODY: &str =
     "External prompt content; may reference {{ subagents }} to list the team.";
@@ -55,162 +67,6 @@ const HELP_PNPM: &str = "The @ai-sdk adapter package for this endpoint.";
 const HELP_PURL: &str = "The provider's OpenAI-compatible API base URL.";
 const HELP_MID: &str = "The provider's model identifier (used in model refs).";
 const HELP_MNAME: &str = "Human-readable model name.";
-
-// ---------- prompt helpers (each prints its help line first) ----------
-
-fn hint(help: &str) {
-    if !help.is_empty() {
-        println!("  {} {}", style("›").dim(), style(help).dim());
-    }
-}
-
-fn ask(
-    theme: &ColorfulTheme,
-    prompt: &str,
-    help: &str,
-    default: Option<&str>,
-    allow_empty: bool,
-) -> Result<String> {
-    hint(help);
-    let mut b = Input::<String>::with_theme(theme)
-        .with_prompt(prompt)
-        .allow_empty(allow_empty);
-    if let Some(d) = default {
-        b = b.default(d.to_string());
-    }
-    Ok(b.interact_text()?)
-}
-
-/// Required input that re-prompts until `validator` accepts it.
-fn ask_v(
-    theme: &ColorfulTheme,
-    prompt: &str,
-    help: &str,
-    default: Option<&str>,
-    validator: impl Fn(&str) -> Result<(), String> + 'static,
-) -> Result<String> {
-    hint(help);
-    let mut b = Input::<String>::with_theme(theme)
-        .with_prompt(prompt)
-        .validate_with(move |s: &String| validator(s.trim()));
-    if let Some(d) = default {
-        b = b.default(d.to_string());
-    }
-    Ok(b.interact_text()?.trim().to_string())
-}
-
-/// Optional editable input, pre-filled with the current value. Enter keeps it,
-/// editing changes it, and empty or `-` clears it. Non-empty values are validated.
-fn ask_optional_v(
-    theme: &ColorfulTheme,
-    prompt: &str,
-    help: &str,
-    current: &str,
-    validator: impl Fn(&str) -> Result<(), String> + 'static,
-) -> Result<String> {
-    hint(help);
-    let mut input = Input::<String>::with_theme(theme)
-        .with_prompt(prompt)
-        .allow_empty(true)
-        .validate_with(move |s: &String| {
-            let t = s.trim();
-            if t.is_empty() || t == "-" {
-                Ok(())
-            } else {
-                validator(t)
-            }
-        });
-    if !current.is_empty() {
-        input = input.with_initial_text(current.to_string());
-    }
-    let value = input.interact_text()?;
-    Ok(if value.trim() == "-" {
-        String::new()
-    } else {
-        value.trim().to_string()
-    })
-}
-
-fn ask_select(
-    theme: &ColorfulTheme,
-    prompt: &str,
-    help: &str,
-    items: &[String],
-    default_idx: usize,
-) -> Result<usize> {
-    hint(help);
-    Ok(Select::with_theme(theme)
-        .with_prompt(prompt)
-        .items(items)
-        .default(default_idx.min(items.len().saturating_sub(1)))
-        .interact()?)
-}
-
-fn ask_confirm(theme: &ColorfulTheme, prompt: &str, help: &str, default: bool) -> Result<bool> {
-    hint(help);
-    Ok(Confirm::with_theme(theme)
-        .with_prompt(prompt)
-        .default(default)
-        .interact()?)
-}
-
-/// Pick an agent colour from the OpenCode theme palette (each shown with a swatch
-/// of how it looks), or choose a custom hex colour.
-fn ask_color(theme: &ColorfulTheme, help: &str, current: &str) -> Result<String> {
-    hint(help);
-    let mut labels: Vec<String> = ui::THEME_COLORS
-        .iter()
-        .map(|(name, _)| {
-            let swatch = ui::color_swatch(name).unwrap_or_default();
-            format!("{swatch} {name}")
-        })
-        .collect();
-    let custom_label = format!("{} custom hex…", ui::muted("◇"));
-    labels.push(custom_label);
-
-    let default_idx = ui::THEME_COLORS
-        .iter()
-        .position(|(name, _)| *name == current)
-        .unwrap_or(ui::THEME_COLORS.len()); // last item = custom
-
-    let idx = Select::with_theme(theme)
-        .with_prompt("  Color")
-        .items(&labels)
-        .default(default_idx)
-        .interact()?;
-
-    if idx < ui::THEME_COLORS.len() {
-        Ok(ui::THEME_COLORS[idx].0.to_string())
-    } else {
-        let seed = if current.starts_with('#') {
-            current
-        } else {
-            "#4ec9b0"
-        };
-        ask_v(
-            theme,
-            "    Hex colour (rendered as ■ in OpenCode)",
-            "",
-            Some(seed),
-            validate::hex,
-        )
-    }
-}
-
-/// Hybrid multi-line edit: show the seeded default, and open $EDITOR only if asked.
-fn edit_multiline(theme: &ColorfulTheme, label: &str, help: &str, seeded: &str) -> Result<String> {
-    hint(help);
-    println!("  {} (current default):", style(label).bold());
-    for line in seeded.lines() {
-        println!("    {}", style(line).dim());
-    }
-    if ask_confirm(theme, &format!("Edit {label} in $EDITOR?"), "", false)? {
-        if let Some(edited) = Editor::new().edit(seeded)? {
-            return Ok(edited);
-        }
-    }
-    Ok(seeded.to_string())
-}
 
 // ---------- top-level commands ----------
 
@@ -443,7 +299,7 @@ fn build_claude_project(
     if !ask_confirm(
         theme,
         "Include power-user defaults (permissions, hooks, output style, statusline)?",
-        "Writes a settings.json tuned for CLI power users.",
+        "Writes a settings.json tuned for CLI power users. Its statusline replaces your personal one in this project — keep yours by setting statusLine in .claude/settings.local.json.",
         true,
     )? {
         p.claude.powerups = Powerups {
@@ -452,6 +308,29 @@ fn build_claude_project(
             output_style: false,
             statusline: false,
         };
+    }
+    configure_hooks_extra(theme, &mut p)?;
+    p.claude.sandbox.enabled = ask_confirm(
+        theme,
+        "Enable the sandbox (OS-level containment of shell commands)?",
+        "Bash runs with limited file and network access (Seatbelt on macOS, bubblewrap on Linux). Safer, but new network hosts prompt until allowed. Off by default.",
+        false,
+    )?;
+    if p.claude.sandbox.enabled {
+        let extra = ask(
+            theme,
+            "  Extra allowed domains (comma-separated; optional)",
+            "GitHub and the npm/crates/PyPI/Go/Terraform registries are already allowed.",
+            Some(&p.claude.sandbox.extra_domains.join(", ")),
+            true,
+        )?;
+        p.claude.sandbox.extra_domains = ocgen::claude::split_list(&extra);
+        p.claude.sandbox.allow_credentials = ask_confirm(
+            theme,
+            "  Let sandboxed commands use your push/deploy credentials?",
+            "No (recommended): ~/.ssh, the gh token, AWS and kube config are withheld, so an agent can't push or deploy however the command is phrased — you do those steps.",
+            false,
+        )?;
     }
     if !ask_confirm(
         theme,
@@ -489,7 +368,7 @@ fn build_claude_project(
     p.claude.workflow.inquire = ask_confirm(
         theme,
         "Include the /inquire codebase Q&A command?",
-        "Sharpens your questions, answers with file:line evidence, suggests smarter next questions, keeps a git-ignored ledger in .claude/notes/.",
+        "Sharpens your questions, answers with file:line evidence, ends with one hint toward the next, keeps a git-ignored ledger in .claude/notes/.",
         true,
     )?;
     p.claude.workflow.subagent_confidence = ask_v(
@@ -501,6 +380,13 @@ fn build_claude_project(
     )?
     .parse::<u8>()
     .unwrap_or(96);
+    p.claude.workflow.check_cmd = ask(
+        theme,
+        "Check command that must pass before a worker finishes (optional)",
+        "An objective gate next to self-reported confidence, e.g. cargo test, npm test, terraform validate. It runs in the worker's own directory; keep it reasonably fast.",
+        Some(&p.claude.workflow.check_cmd),
+        true,
+    )?;
     p.claude.workflow.loop_guard_max = ask_v(
         theme,
         "Max times a gate may block the same agent before escalating (0–20, 0 = unlimited)",
@@ -616,8 +502,8 @@ fn configure_claude_team(theme: &ColorfulTheme, seed: &Team) -> Result<Team> {
     let approval_gate = ask_confirm(
         theme,
         "Gate high-impact external actions behind human approval?",
-        "Deterministic PreToolUse hook blocks ssh, cloud mutations, git push/merge, deploys \
-         & publishes until a human creates .claude/team/execution-approved.",
+        "Blocks ssh, cloud mutations, git push/merge, deploys & publishes until a human runs \
+         `ocgen approve` in their own terminal (time-limited; agents can't approve).",
         seed.approval_gate,
     )?;
     Ok(Team {
@@ -697,12 +583,43 @@ fn collect_claude_agents(
             break;
         }
         let names: Vec<String> = agents.iter().map(|a| a.name.clone()).collect();
-        agents.push(prompt_claude_agent(theme, language, &names)?);
+        agents.push(prompt_claude_agent(
+            theme,
+            language,
+            &names,
+            &ClaudeAgentCtx::default(),
+        )?);
     }
     Ok(agents)
 }
 
-fn prompt_claude_agent(theme: &ColorfulTheme, language: &str, taken: &[String]) -> Result<Agent> {
+/// Project facts the Claude agent editor offers as choices.
+#[derive(Default)]
+struct ClaudeAgentCtx {
+    skills: Vec<String>,
+    mcp_servers: Vec<String>,
+}
+
+impl ClaudeAgentCtx {
+    fn of(project: &Project) -> Self {
+        Self {
+            skills: project.skills.iter().map(|s| s.name.clone()).collect(),
+            mcp_servers: project
+                .claude
+                .mcp_servers
+                .iter()
+                .map(|s| s.name.clone())
+                .collect(),
+        }
+    }
+}
+
+fn prompt_claude_agent(
+    theme: &ColorfulTheme,
+    language: &str,
+    taken: &[String],
+    ctx: &ClaudeAgentCtx,
+) -> Result<Agent> {
     // Preset first, so the (generic) role name seeds the agent name.
     let mut presets = templates::archetype_names();
     let blank = "blank (custom role)".to_string();
@@ -729,7 +646,98 @@ fn prompt_claude_agent(theme: &ColorfulTheme, language: &str, taken: &[String]) 
         Agent::from_archetype_claude(&name, &presets[pidx], language)?
     };
     seed.name = name;
-    configure_claude_agent(theme, language, seed, false, taken)
+    configure_claude_agent(theme, language, seed, false, taken, ctx)
+}
+
+/// The subagent-only frontmatter: hard tool denies, effort, permission mode,
+/// memory, background, preloaded skills and MCP servers. Each prompt says why.
+fn configure_claude_agent_extras(
+    theme: &ColorfulTheme,
+    a: &mut Agent,
+    ctx: &ClaudeAgentCtx,
+) -> Result<()> {
+    use ocgen::claude::{split_list, EFFORT_LEVELS, MEMORY_SCOPES};
+    a.disallowed_tools = ask(
+        theme,
+        "  Disallowed tools (optional)",
+        "Removed even if tools would allow them — Edit, Write, NotebookEdit makes a role hard read-only.",
+        Some(&a.disallowed_tools),
+        true,
+    )?;
+    let pick = |label: &str, help: &str, opts: &[&str], none: &str, cur: &str| -> Result<String> {
+        let mut items = vec![none.to_string()];
+        items.extend(opts.iter().map(|s| s.to_string()));
+        let idx = opts
+            .iter()
+            .position(|o| *o == cur)
+            .map(|i| i + 1)
+            .unwrap_or(0);
+        let i = ask_select(theme, label, help, &items, idx)?;
+        Ok(if i == 0 {
+            String::new()
+        } else {
+            opts[i - 1].to_string()
+        })
+    };
+    a.effort = pick(
+        "  Effort",
+        "Higher thinks harder but costs more: high for reviewers, low for quick lookups.",
+        &EFFORT_LEVELS,
+        "inherit (session effort)",
+        &a.effort,
+    )?;
+    a.permission_mode = pick(
+        "  Permission mode",
+        "plan = read-only analysis; acceptEdits = edits without asking. Leave inherit unless you need it.",
+        &["plan", "acceptEdits", "dontAsk", "default"],
+        "inherit",
+        &a.permission_mode,
+    )?;
+    a.memory = pick(
+        "  Memory",
+        "Lets the agent keep notes across sessions: project = committed .claude/agent-memory/, local = git-ignored, user = all projects.",
+        &MEMORY_SCOPES,
+        "none",
+        &a.memory,
+    )?;
+    a.background = ask_confirm(
+        theme,
+        "  Run in the background?",
+        "It works while you keep talking to the main session.",
+        a.background,
+    )?;
+    let multi = |label: &str, help: &str, items: &[String], cur: &str| -> Result<String> {
+        if items.is_empty() {
+            return Ok(cur.to_string());
+        }
+        let now = split_list(cur);
+        let defaults: Vec<bool> = items.iter().map(|i| now.contains(i)).collect();
+        let chosen = ask_multi(
+            theme,
+            label,
+            help,
+            &items.iter().map(|x| x.to_string()).collect::<Vec<_>>(),
+            &defaults,
+        )?;
+        Ok(chosen
+            .iter()
+            .map(|&i| items[i].clone())
+            .collect::<Vec<_>>()
+            .join(", "))
+    };
+    a.preload_skills = multi(
+        "  Preload skills",
+        "Their full text is loaded when the agent starts — only for skills it always needs.",
+        &ctx.skills,
+        &a.preload_skills,
+    )?;
+    a.mcp_servers = multi(
+        "  MCP servers it may use",
+        "mcp__<server> is added to its tools automatically.",
+        &ctx.mcp_servers,
+        &a.mcp_servers,
+    )?;
+    Ok(())
 }
 
 /// Walk a Claude agent's fields (mode, alias, tools, description, body), seeded
@@ -740,6 +748,7 @@ fn configure_claude_agent(
     mut a: Agent,
     allow_rename: bool,
     taken: &[String],
+    ctx: &ClaudeAgentCtx,
 ) -> Result<Agent> {
     if allow_rename {
         a.name = ask_v(
@@ -762,7 +771,7 @@ fn configure_claude_agent(
     a.model = ask_v(
         theme,
         "  Model alias",
-        "opus / sonnet / haiku / inherit",
+        "opus / sonnet / haiku / fable / inherit, or a full ID like claude-opus-5-5",
         Some(if a.model.trim().is_empty() {
             "opus"
         } else {
@@ -787,6 +796,7 @@ fn configure_claude_agent(
             validate::steps,
         )?;
         a.steps = turns.parse().ok();
+        configure_claude_agent_extras(theme, &mut a, ctx)?;
     }
     a.description = ask(
         theme,
@@ -859,7 +869,12 @@ pub fn run_add_agent(path_arg: Option<String>) -> Result<()> {
 
     let taken: Vec<String> = project.agents.iter().map(|a| a.name.clone()).collect();
     let agent = if project.target == Target::ClaudeCode {
-        prompt_claude_agent(&theme, &project.language, &taken)?
+        prompt_claude_agent(
+            &theme,
+            &project.language,
+            &taken,
+            &ClaudeAgentCtx::of(&project),
+        )?
     } else {
         prompt_agent(&theme, &project.providers, &project.language, &taken)?
     };
@@ -924,6 +939,7 @@ pub fn run_edit_agent(path: String, name_arg: Option<String>) -> Result<()> {
             project.agents[idx].clone(),
             true,
             &taken,
+            &ClaudeAgentCtx::of(&project),
         )?
     } else {
         configure_agent(
@@ -1053,7 +1069,9 @@ pub fn run_edit_provider(path: String, key_arg: Option<String>) -> Result<()> {
 
 /// `ocgen doctor` — repair a project's config and rewrite its files. Also upgrades
 /// an old-format state file to the current schema.
-pub fn run_doctor(path: String) -> Result<()> {
+pub fn run_doctor(path: String, dry_run: bool, yes: bool) -> Result<()> {
+    use ocgen::render::ChangeKind;
+    let theme = ColorfulTheme::default();
     let (target, mut project) = Project::discover(Path::new(&path))?;
 
     ui::banner("doctor");
@@ -1071,9 +1089,67 @@ pub fn run_doctor(path: String) -> Result<()> {
         }
     }
 
+    // Show exactly what regenerating would do before touching anything.
+    let plan = project.plan_changes(&target)?;
+    let changed: Vec<_> = plan
+        .iter()
+        .filter(|c| c.kind != ChangeKind::Unchanged)
+        .collect();
+    let unchanged = plan.len() - changed.len();
+    ui::section(&format!("Changes ({})", changed.len()));
+    if changed.is_empty() {
+        ui::success("every generated file is up to date");
+    }
+    for c in &changed {
+        print_change(c);
+    }
+    if unchanged > 0 {
+        println!("  {}", ui::muted(&format!("{unchanged} file(s) unchanged")));
+    }
+    if changed.iter().any(|c| c.hand_edited == Some(true)) {
+        ui::tip("ocgen owns these files and rewrites them. Keep personal settings in .claude/settings.local.json (never touched); change the rest with `ocgen edit …` or `ocgen templates edit`.");
+    }
+
+    if dry_run {
+        println!("\n{}", style("dry run — nothing written").bold());
+        return Ok(());
+    }
+    if !changed.is_empty()
+        && !yes
+        && crate::prompt::can_ask()
+        && !ask_confirm(
+            &theme,
+            "Apply these changes?",
+            "The previous versions are backed up first.",
+            true,
+        )?
+    {
+        println!("Nothing written.");
+        return Ok(());
+    }
+
+    let backup = Project::backup(&target, &plan)?;
     // Rewrite everything (regenerates files and upgrades the state file schema).
-    let written = project.scaffold(&target, true)?;
-    report_written(&written);
+    project.scaffold(&target, true)?;
+    match project.install_pre_push(&target)? {
+        ocgen::render::PrePush::Installed(_) => {
+            println!("  {}", ui::muted("git pre-push hook: installed (blocks unapproved pushes made under Claude Code)"))
+        }
+        ocgen::render::PrePush::Foreign(_) => ui::warning(
+            "another git pre-push hook is in place — add `sh .claude/hooks/git-pre-push.sh || exit 1` to it to gate pushes",
+        ),
+        ocgen::render::PrePush::NotApplicable => {}
+    }
+    println!();
+    ui::success(&format!("applied {} change(s)", changed.len()));
+    if let Some(b) = backup {
+        let shown = b.strip_prefix(&target).unwrap_or(&b).display().to_string();
+        println!(
+            "  {} {shown}/  {}",
+            style("backup:").bold(),
+            ui::muted("(previous versions; copy a file back to restore it)")
+        );
+    }
     // Not auto-fixable: the project's .gitignore belongs to the user.
     if project.target == Target::ClaudeCode
         && ocgen::gitcheck::claude_config_ignored(&target) == Some(true)
@@ -1081,6 +1157,37 @@ pub fn run_doctor(path: String) -> Result<()> {
         ui::warning(ocgen::gitcheck::IGNORED_CONFIG_WARNING);
     }
     Ok(())
+}
+
+/// One planned change: a marker, the path, why, and a short diff.
+fn print_change(c: &ocgen::render::FileChange) {
+    use ocgen::diff::{hunks, line_diff, DiffLine};
+    use ocgen::render::ChangeKind;
+    let (mark, note) = match c.kind {
+        ChangeKind::Added => (style("+").green(), "new".to_string()),
+        ChangeKind::Removed => (style("-").red(), "stale — no longer generated".to_string()),
+        ChangeKind::Modified => (
+            style("~").yellow(),
+            match c.hand_edited {
+                Some(true) if c.rel.ends_with("settings.json") => "edited by hand — your edits will be replaced (backed up); personal settings belong in .claude/settings.local.json".to_string(),
+                Some(true) => "edited by hand — your edits will be replaced (backed up)".to_string(),
+                Some(false) => "updated by ocgen".to_string(),
+                None => "differs (this project predates edit tracking)".to_string(),
+            },
+        ),
+        ChangeKind::Unchanged => return,
+    };
+    println!("  {mark} {}  {}", style(&c.rel).bold(), ui::muted(&note));
+    if let (Some(old), Some(new)) = (&c.old, &c.new) {
+        for line in hunks(&line_diff(old, new), 1, 12) {
+            match line {
+                Some(DiffLine::Removed(l)) => println!("      {}", style(format!("- {l}")).red()),
+                Some(DiffLine::Added(l)) => println!("      {}", style(format!("+ {l}")).green()),
+                Some(DiffLine::Same(l)) => println!("      {}", ui::muted(&format!("  {l}"))),
+                None => println!("      {}", ui::muted("…")),
+            }
+        }
+    }
 }
 
 // ---------- providers ----------
@@ -1630,243 +1737,39 @@ fn report_written(written: &[std::path::PathBuf]) {
     ui::file_tree(written);
 }
 
-/// `ocgen add skill` — author a new Claude Code skill and re-scaffold.
-pub fn run_add_skill(path_arg: Option<String>) -> Result<()> {
-    let theme = ColorfulTheme::default();
-    let start = path_arg.unwrap_or_else(|| ".".to_string());
-    let (target, mut project) = Project::discover(Path::new(&start))?;
-    if project.target != Target::ClaudeCode {
-        bail!("skills are a Claude Code feature — open a Claude project (`ocgen new --target claude`)");
-    }
-    println!(
-        "Adding a skill to {}.\n",
-        style(&project.project_name).bold()
-    );
-    let taken: Vec<String> = project.skills.iter().map(|s| s.name.clone()).collect();
-
-    let presets = ocgen::claude::skill_presets()?;
-    let mut labels: Vec<String> = presets
-        .iter()
-        .map(|p| format!("{} — {}", p.name, p.description))
-        .collect();
-    labels.push("blank (from scratch)".to_string());
-    let idx = ask_select(
-        &theme,
-        "Start from preset",
-        "Presets seed the tools, frontmatter and a numbered-step body.",
-        &labels,
-        0,
-    )?;
-    let seed = if idx < presets.len() {
-        presets[idx].to_skill("", &project.language)
-    } else {
-        Skill {
-            body: "Describe the steps this skill performs.\n".to_string(),
+/// Opt-in hooks beyond the gates. Declining the power-user defaults turns them
+/// all off (a minimal settings.json); otherwise each is offered with its reason.
+fn configure_hooks_extra(theme: &ColorfulTheme, p: &mut Project) -> Result<()> {
+    if !p.claude.powerups.hooks {
+        p.claude.hooks_extra = ocgen::claude::HooksExtra {
+            compact_context: false,
             ..Default::default()
-        }
-    };
-
-    let skill = configure_skill(&theme, seed, false, &taken)?;
-    project.skills.push(skill);
-    let written = project.scaffold(&target, true)?;
-    report_written(&written);
+        };
+        return Ok(());
+    }
+    let items = [
+        "Re-inject context after compaction — re-points Claude at the rules and any /inquire notes",
+        "Desktop notification when Claude needs you or a turn fails",
+        "Log settings/skills changes made during a session (.claude/audit/, git-ignored)",
+    ];
+    let x = &p.claude.hooks_extra;
+    let defaults = [x.compact_context, x.notify, x.config_audit];
+    let chosen = ask_multi(
+        theme,
+        "Extra hooks",
+        "Space toggles, Enter confirms. None of these ever block Claude.",
+        &items.iter().map(|x| x.to_string()).collect::<Vec<_>>(),
+        &defaults,
+    )?;
+    p.claude.hooks_extra.compact_context = chosen.contains(&0);
+    p.claude.hooks_extra.notify = chosen.contains(&1);
+    p.claude.hooks_extra.config_audit = chosen.contains(&2);
+    p.claude.hooks_extra.format_cmd = ask(
+        theme,
+        "Formatter to run after Claude edits a file (optional)",
+        "e.g. cargo fmt, terraform fmt -recursive, npx prettier --write . — failures never block.",
+        Some(&p.claude.hooks_extra.format_cmd),
+        true,
+    )?;
     Ok(())
-}
-
-/// `ocgen edit skill` — modify an existing skill and re-scaffold.
-pub fn run_edit_skill(path: String, name_arg: Option<String>) -> Result<()> {
-    let theme = ColorfulTheme::default();
-    let (target, mut project) = Project::discover(Path::new(&path))?;
-    if project.target != Target::ClaudeCode {
-        bail!("skills are a Claude Code feature");
-    }
-    if project.skills.is_empty() {
-        bail!("this project has no skills to edit (add one with `ocgen add skill`)");
-    }
-    let idx = match name_arg {
-        Some(n) => project
-            .skills
-            .iter()
-            .position(|s| s.name == n)
-            .ok_or_else(|| {
-                let have = project
-                    .skills
-                    .iter()
-                    .map(|s| s.name.clone())
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                anyhow!("no skill named '{n}' (have: {have})")
-            })?,
-        None => {
-            let labels: Vec<String> = project
-                .skills
-                .iter()
-                .map(|s| format!("{} — {}", s.name, s.description))
-                .collect();
-            ask_select(&theme, "Which skill to edit?", "", &labels, 0)?
-        }
-    };
-    let old_name = project.skills[idx].name.clone();
-    println!(
-        "\nEditing skill {} — Enter keeps each value.\n",
-        style(&old_name).bold()
-    );
-    let taken: Vec<String> = project
-        .skills
-        .iter()
-        .enumerate()
-        .filter(|(i, _)| *i != idx)
-        .map(|(_, s)| s.name.clone())
-        .collect();
-    let edited = configure_skill(&theme, project.skills[idx].clone(), true, &taken)?;
-    let new_name = edited.name.clone();
-    project.skills[idx] = edited;
-    let written = project.scaffold(&target, true)?;
-    if new_name != old_name {
-        Project::remove_claude_skill_dir(&target, &old_name)?;
-        println!("Renamed skill {old_name} → {new_name}");
-    }
-    report_written(&written);
-    Ok(())
-}
-
-fn configure_skill(
-    theme: &ColorfulTheme,
-    mut s: Skill,
-    allow_rename: bool,
-    taken: &[String],
-) -> Result<Skill> {
-    if s.name.is_empty() || allow_rename {
-        s.name = ask_v(
-            theme,
-            "  Skill name",
-            "Identifier → /skill-name and its folder.",
-            if s.name.is_empty() {
-                None
-            } else {
-                Some(s.name.as_str())
-            },
-            unique_ident(taken.to_vec(), "skill name"),
-        )?;
-    }
-    s.description = ask(
-        theme,
-        "  Description",
-        "Guides when Claude should invoke the skill.",
-        if s.description.is_empty() {
-            None
-        } else {
-            Some(&s.description)
-        },
-        false,
-    )?;
-    s.when_to_use = ask(
-        theme,
-        "  When to use (extra trigger context; optional)",
-        "Appended to the description to help Claude auto-invoke it.",
-        Some(&s.when_to_use),
-        true,
-    )?;
-    s.allowed_tools = pick_tools(theme, &s.allowed_tools)?;
-    s.argument_hint = ask(
-        theme,
-        "  Argument hint (optional)",
-        "Shown in autocomplete, e.g. [issue] or [file] [format].",
-        Some(&s.argument_hint),
-        true,
-    )?;
-    s.disable_model_invocation = ask_confirm(
-        theme,
-        "  User-run only (disable auto-invocation)?",
-        "A task you trigger with /name; Claude won't run it on its own.",
-        s.disable_model_invocation,
-    )?;
-    s.hidden_from_menu = ask_confirm(
-        theme,
-        "  Hide from the / menu (Claude-only knowledge)?",
-        "Sets user-invocable: false — only Claude loads it, never you.",
-        s.hidden_from_menu,
-    )?;
-    s.context_fork = ask_confirm(
-        theme,
-        "  Run in an isolated subagent (context: fork)?",
-        "Runs the skill in a forked context; pick which agent next.",
-        s.context_fork,
-    )?;
-    if s.context_fork {
-        s.agent = ask(
-            theme,
-            "  Fork into agent",
-            "Subagent type, e.g. Explore / Plan / general-purpose.",
-            Some(if s.agent.is_empty() {
-                "Explore"
-            } else {
-                &s.agent
-            }),
-            true,
-        )?;
-    } else {
-        s.agent = String::new();
-    }
-    s.model = ask(
-        theme,
-        "  Model alias for this skill (optional)",
-        "opus / sonnet / haiku / inherit; empty = session model.",
-        Some(&s.model),
-        true,
-    )?;
-    s.body = edit_multiline(theme, "Skill body", HELP_BODY, &s.body)?;
-    Ok(s)
-}
-
-/// Multi-select the built-in tools, then collect any Bash(...)/mcp__ patterns,
-/// warning (not rejecting) on unrecognized names.
-fn pick_tools(theme: &ColorfulTheme, current: &str) -> Result<String> {
-    let tools = ocgen::claude::CLAUDE_TOOLS;
-    let selected_now: Vec<String> = current
-        .split(',')
-        .map(|x| x.trim().to_string())
-        .filter(|x| !x.is_empty())
-        .collect();
-    let defaults: Vec<bool> = tools
-        .iter()
-        .map(|t| selected_now.iter().any(|x| x == t))
-        .collect();
-    hint("Space toggles, Enter confirms. Add Bash(...)/mcp__ patterns at the next prompt.");
-    let chosen = MultiSelect::with_theme(theme)
-        .with_prompt("  Allowed tools (pre-approved during the skill's turn)")
-        .items(&tools)
-        .defaults(&defaults)
-        .interact()?;
-    let mut all: Vec<String> = chosen.iter().map(|&i| tools[i].to_string()).collect();
-    let custom_seed = selected_now
-        .iter()
-        .filter(|x| !tools.contains(&x.as_str()))
-        .cloned()
-        .collect::<Vec<_>>()
-        .join(", ");
-    let custom = ask(
-        theme,
-        "  Extra tool patterns (comma-separated; empty = none)",
-        "e.g. Bash(git commit:*), mcp__github__create_pr",
-        Some(&custom_seed),
-        true,
-    )?;
-    for c in custom
-        .split(',')
-        .map(|x| x.trim())
-        .filter(|x| !x.is_empty())
-    {
-        all.push(c.to_string());
-    }
-    let joined = all.join(", ");
-    let unknown = ocgen::claude::unknown_tools(&joined);
-    if !unknown.is_empty() {
-        println!(
-            "  {} unrecognized: {} (kept — fine for MCP/custom, but check for typos)",
-            style("warning:").yellow(),
-            unknown.join(", ")
-        );
-    }
-    Ok(joined)
 }

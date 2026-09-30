@@ -15,6 +15,15 @@ For any complex or multi-step prompt, build self-checking into the plan — "don
 - **Rate your confidence.** State a confidence for each verified task and don't move on below a
   high bar (~95%) — re-scope or dig deeper instead of guessing.
 {% endif %}
+{% if check_cmd %}
+## The project check
+
+`{{ check_cmd }}` must pass before a worker that changed files may finish, and before a team
+task may be completed — a hook runs it and sends the work back while it fails, whatever
+confidence was stated. Run it yourself before you declare anything done, fix what it reports,
+and never claim success over a failing check. If it can't pass for a reason outside your
+change, stop and say so with the output.
+{% endif %}
 ## Loop discipline
 
 Never grind on the same problem indefinitely:
@@ -98,7 +107,8 @@ into one team (teammates share one working directory, and a team converges on a 
 
 When the goal is to **understand** code rather than change it, run `/inquire <topic or question>`:
 it sharpens each question before answering, cites `file:line` evidence tagged Verified or Inferred,
-and suggests the next smarter questions by lens (structure, flow, contract, rationale, change
-impact, failure). Findings accumulate in a git-ignored ledger under `.claude/notes/`, so a later
+and ends each answer with one hint — where your understanding is thinnest, by lens (structure,
+flow, contract, rationale, change impact, failure) — never a ready-made next question. Findings
+accumulate in a git-ignored ledger under `.claude/notes/`, so a later
 session can resume from its open questions. Hand off to `/deliver` once you know what to change.
 {% endif %}

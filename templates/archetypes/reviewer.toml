@@ -17,6 +17,8 @@ permissions = """
 claude_model = "opus"
 tools = "Read, Grep, Glob"
 claude_max_turns = 30
+claude_disallowed_tools = "Edit, Write, NotebookEdit"
+claude_effort = "high"
 
 [description]
 Ukrainian = "Незалежне ревʼю іншою моделлю: коректність, дизайн, ризики; тільки читання"

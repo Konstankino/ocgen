@@ -1,10 +1,11 @@
 ---
-description: Understand a codebase by asking questions — sharpen each one, answer with evidence, get nudged to the next
+description: Understand a codebase by asking questions — sharpen each one, answer with evidence, get a hint toward the next
 argument-hint: "[topic or first question — empty to resume]"
 ---
 Help me understand this codebase: $ARGUMENTS
 
-Be my research partner, not an oracle: answer with evidence, and coach me toward better questions.
+Be my research partner, not an oracle: answer with evidence, and coach me toward better questions
+— with hints, never by writing the next question for me.
 Stay read-only — the only file written is the ledger, and a background helper writes it (step 4).
 
 ## 0. Resume or orient
@@ -19,15 +20,15 @@ studying — which is read-only — belongs in the main checkout.
   matches, resume it; otherwise start a new ledger and orient.
 
 **Refresher** (when resuming — keep it to one screen, before anything else):
-1. **Where we left off** — the ledger's last question, in one line, and its pending next questions.
+1. **Where we left off** — the ledger's last question, in one line, and the hint that followed it.
 2. **What you know** — the ledger's **Mental model** bullets.
 3. **What changed since** — run `git log --oneline <ledger Commit>..HEAD -- <files cited in the
    ledger>`. Mark every answer whose cited files changed as **Stale — re-verify**, and offer to
    re-check those first. If this isn't a git repo, say that you can't check for changes.
 4. **Warm-up** (optional, one line) — offer 2 quick recall questions from earlier answers; skip it
    if I decline.
-5. Ask whether to continue with one of the pending questions, re-verify stale answers, or ask
-   something new.
+5. Ask what I want to ask next — following that hint, re-verifying stale answers, or something
+   new. Don't propose the question.
 
 **Orient** (new topic): in parallel and read-only (explorer subagents where useful), map entry
 points, the module map, core types and data flow, build/test commands, and recent git-activity
@@ -46,18 +47,27 @@ questions, and read-only runs of tests or the binary when that settles it. Answe
 - tag each claim **Verified** (you read or ran it) or **Inferred** (with `Confidence: NN%`);
 - name what you did not check.
 
-## 3. Nudge — the next smarter questions
-Offer 3 next questions. Tag each with a lens and say why it is high-value *now* — the gap in the
-map it closes, or the Inferred claim it would verify:
-- **Structure** — what are the parts and their boundaries?
-- **Flow** — trace one concrete input or request end-to-end.
-- **Contract** — invariants, types, and error handling at a boundary.
-- **Rationale** — why is it this way? (history, commits, rejected alternatives)
-- **Change impact** — what breaks if X changes? Where would feature Y go?
-- **Failure** — edge cases, concurrency, what is untested?
+## 3. Nudge — one hint
+End each answer with **one hint**: a single line, starting `Hint:`, that points at where my
+understanding is thinnest — the gap in the map, or an Inferred claim nobody has verified — and
+names the lens that would expose it. A hint says *where to look*, not *what to ask*.
 
-Prefer lenses I haven't used yet, and concrete traces over "how does X work". If I keep asking
-"what" questions, push me toward "why" and "what if".
+**Never list** candidate next questions, and don't phrase the hint as a question: I learn more
+when I form the question myself. If I ask for more help, give another hint (a different lens, or a
+little more specific) — still not a ready-made question.
+
+The lenses to draw on:
+- **Structure** — the parts and their boundaries.
+- **Flow** — one concrete input or request, traced end-to-end.
+- **Contract** — invariants, types, and error handling at a boundary.
+- **Rationale** — why it is this way (history, commits, rejected alternatives).
+- **Change impact** — what breaks if something changes; where a new feature would go.
+- **Failure** — edge cases, concurrency, what is untested.
+
+Prefer a lens I haven't used yet, and point at something concrete (a file, a boundary, a claim)
+rather than a topic. If I keep asking "what" questions, hint toward "why" and "what if".
+Example: `Hint: (Failure) the retry path in src/queue.rs is only Inferred — nothing here shows
+what happens when the broker is down.`
 
 ## 4. Update the ledger — quietly
 Update it after **every** answer — I may close the session at any moment without saying stop.
@@ -75,7 +85,7 @@ Topic: <human-readable topic>
 Updated: <date>   Commit: <output of git rev-parse --short HEAD>
 ## Resume point
 Last question: <the question as sharpened>
-Next questions: <the 3 pending suggestions, lens-tagged>
+Hint: <the hint that followed it, with its lens>
 ## Mental model
 <≤ 7 bullets: what I understand so far>
 ```

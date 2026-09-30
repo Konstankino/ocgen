@@ -396,7 +396,7 @@ fn fields_includes_claude_section() {
         .assert()
         .success()
         .stdout(contains("Claude Code target fields"))
-        .stdout(contains("model (alias)"))
+        .stdout(contains("model (alias or ID)"))
         .stdout(contains("tools"))
         .stdout(contains("agent teams"));
 }
@@ -551,6 +551,7 @@ fn claude_landscape_plugin_opus_and_no_workflow_no_subagents() {
         deliver: false,
         inquire: false,
         loop_guard_max: 0,
+        check_cmd: String::new(),
         subagent_confidence: 0,
     };
     let mut boss = Agent::blank("boss", "custom", "");
@@ -662,4 +663,207 @@ fn landscape_shows_agent_teams_when_enabled() {
         .stdout(contains("≥96%"))
         .stdout(contains("risk rounds"))
         .stdout(contains("approval-gate"));
+}
+
+#[test]
+fn landscape_warns_about_a_vague_skill() {
+    let dir = tempdir().unwrap();
+    let m = Manifest::load().unwrap();
+    let mut p = Project::from_manifest(&m, "English");
+    p.target = Target::ClaudeCode;
+    p.project_name = "kit".into();
+    p.providers.clear();
+    p.agents = agent::claude_default_pipeline("English").unwrap();
+    p.skills.push(Skill {
+        name: "helper".into(),
+        description: "TF helper".into(),
+        allowed_tools: "Bash".into(),
+        body: "do it".into(),
+        ..Default::default()
+    });
+    p.scaffold(dir.path(), false).unwrap();
+
+    ocgen()
+        .arg("landscape")
+        .arg(dir.path())
+        .assert()
+        .success()
+        .stdout(contains("skill 'helper'"))
+        .stdout(contains("too short to trigger"))
+        .stdout(contains("Bash(git status:*)"));
+}
+
+#[test]
+fn add_mcp_requires_a_claude_project_and_help_lists_it() {
+    let dir = tempdir().unwrap();
+    scaffold_default(dir.path());
+    ocgen()
+        .args(["add", "mcp"])
+        .arg(dir.path())
+        .assert()
+        .failure()
+        .stderr(contains("Claude Code feature"));
+    ocgen()
+        .args(["add", "--help"])
+        .assert()
+        .success()
+        .stdout(contains("mcp"));
+    ocgen()
+        .args(["edit", "--help"])
+        .assert()
+        .success()
+        .stdout(contains("mcp"));
+}
+
+#[test]
+fn landscape_lists_mcp_servers() {
+    let dir = tempdir().unwrap();
+    let m = Manifest::load().unwrap();
+    let mut p = Project::from_manifest(&m, "English");
+    p.target = Target::ClaudeCode;
+    p.project_name = "kit".into();
+    p.providers.clear();
+    p.agents = agent::claude_default_pipeline("English").unwrap();
+    p.claude.mcp_servers.push(ocgen::claude::McpServer {
+        name: "tf".into(),
+        transport: "stdio".into(),
+        command: "npx".into(),
+        ..Default::default()
+    });
+    p.scaffold(dir.path(), false).unwrap();
+    ocgen()
+        .arg("landscape")
+        .arg(dir.path())
+        .assert()
+        .success()
+        .stdout(contains("MCP servers"))
+        .stdout(contains("npx"));
+}
+
+#[test]
+fn doctor_dry_run_shows_the_plan_and_writes_nothing() {
+    let dir = tempdir().unwrap();
+    let m = Manifest::load().unwrap();
+    let mut p = Project::from_manifest(&m, "English");
+    p.target = Target::ClaudeCode;
+    p.project_name = "dr".into();
+    p.providers.clear();
+    p.agents = agent::claude_default_pipeline("English").unwrap();
+    p.scaffold(dir.path(), false).unwrap();
+    std::fs::write(
+        dir.path().join(".claude/settings.json"),
+        "{\"model\":\"mine\"}\n",
+    )
+    .unwrap();
+
+    ocgen()
+        .args(["doctor", "--dry-run"])
+        .arg(dir.path())
+        .assert()
+        .success()
+        .stdout(contains(".claude/settings.json"))
+        .stdout(contains("edited by hand"))
+        .stdout(contains("settings.local.json"))
+        .stdout(contains("dry run"));
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join(".claude/settings.json")).unwrap(),
+        "{\"model\":\"mine\"}\n",
+        "dry run leaves files alone"
+    );
+    assert!(!dir.path().join(".ocgen-backup").exists());
+
+    ocgen()
+        .args(["doctor", "--yes"])
+        .arg(dir.path())
+        .assert()
+        .success()
+        .stdout(contains(".ocgen-backup/"));
+    let backups: Vec<_> = std::fs::read_dir(dir.path().join(".ocgen-backup"))
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().is_dir())
+        .collect();
+    assert_eq!(backups.len(), 1);
+    assert_eq!(
+        std::fs::read_to_string(backups[0].path().join(".claude/settings.json")).unwrap(),
+        "{\"model\":\"mine\"}\n"
+    );
+}
+
+#[test]
+fn managed_settings_prints_a_deployable_policy() {
+    ocgen()
+        .arg("managed-settings")
+        .assert()
+        .success()
+        .stdout(contains("disableBypassPermissionsMode"))
+        // The deploy note goes to stderr so stdout stays pipeable JSON.
+        .stderr(contains("managed-settings.json"));
+}
+
+#[test]
+fn verify_exits_nonzero_on_failure() {
+    let dir = tempdir().unwrap();
+    let m = Manifest::load().unwrap();
+    let mut p = Project::from_manifest(&m, "English");
+    p.target = Target::ClaudeCode;
+    p.project_name = "vc".into();
+    p.providers.clear();
+    p.agents = agent::claude_default_pipeline("English").unwrap();
+    p.scaffold(dir.path(), false).unwrap();
+    ocgen()
+        .args(["verify", "--no-claude"])
+        .arg(dir.path())
+        .assert()
+        .success()
+        .stdout(contains("up to date"));
+    std::fs::write(dir.path().join(".claude/statusline.sh"), "exit 3\n").unwrap();
+    ocgen()
+        .args(["verify", "--no-claude"])
+        .arg(dir.path())
+        .assert()
+        .failure()
+        .stdout(contains("statusline"));
+}
+
+#[test]
+fn approve_refuses_to_run_for_an_agent() {
+    let dir = tempdir().unwrap();
+    let home = tempdir().unwrap();
+    let m = Manifest::load().unwrap();
+    let mut p = Project::from_manifest(&m, "English");
+    p.target = Target::ClaudeCode;
+    p.project_name = "ap".into();
+    p.providers.clear();
+    p.agents = agent::claude_default_pipeline("English").unwrap();
+    p.scaffold(dir.path(), false).unwrap();
+
+    // Under Claude Code (CLAUDECODE set) — refused, nothing written.
+    ocgen()
+        .arg("approve")
+        .arg(dir.path())
+        .env("HOME", home.path())
+        .env("CLAUDECODE", "1")
+        .assert()
+        .failure()
+        .stderr(contains("human"));
+    // Not a terminal (piped, as any tool call would be) — refused too.
+    ocgen()
+        .arg("approve")
+        .arg(dir.path())
+        .env("HOME", home.path())
+        .env_remove("CLAUDECODE")
+        .assert()
+        .failure()
+        .stderr(contains("terminal"));
+    assert!(!home.path().join(".claude/ocgen").exists());
+
+    // Reading the status is always allowed.
+    ocgen()
+        .args(["approve", "--status"])
+        .arg(dir.path())
+        .env("HOME", home.path())
+        .assert()
+        .success()
+        .stdout(contains("locked"));
 }

@@ -18,6 +18,7 @@ permissions = """
 claude_model = "opus"
 tools = "Read, Grep, Glob, WebFetch, WebSearch"
 claude_max_turns = 40
+claude_disallowed_tools = "Edit, Write, NotebookEdit"
 
 [description]
 Ukrainian = "Досліджує код та вхідні дані, звітує про знахідки; тільки читання"

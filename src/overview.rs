@@ -6,7 +6,7 @@ use std::path::Path;
 
 use anyhow::{anyhow, bail, Result};
 use console::style;
-use dialoguer::{theme::ColorfulTheme, Select};
+use dialoguer::theme::ColorfulTheme;
 
 use ocgen::agent::Agent;
 use ocgen::render::Project;
@@ -201,11 +201,7 @@ pub fn show_agent(path: String, name: Option<String>) -> Result<()> {
                 .iter()
                 .map(|a| format!("{} — {}, {}/{}", a.name, a.mode, a.provider, a.model))
                 .collect();
-            Select::with_theme(&ColorfulTheme::default())
-                .with_prompt("Which agent?")
-                .items(&labels)
-                .default(0)
-                .interact()?
+            crate::prompt::ask_select(&ColorfulTheme::default(), "Which agent?", "", &labels, 0)?
         }
     };
 
@@ -433,6 +429,45 @@ fn run_claude(root: &Path, project: &Project) -> Result<()> {
         ui::table(&["NAME", "DESCRIPTION"], &srows);
     }
 
+    if !project.claude.mcp_servers.is_empty() {
+        ui::section(&format!(
+            "MCP servers ({})",
+            project.claude.mcp_servers.len()
+        ));
+        let rows: Vec<Vec<String>> = project
+            .claude
+            .mcp_servers
+            .iter()
+            .map(|m| {
+                let users: Vec<&str> = project
+                    .agents
+                    .iter()
+                    .filter(|a| ocgen::claude::split_list(&a.mcp_servers).contains(&m.name))
+                    .map(|a| a.name.as_str())
+                    .collect();
+                vec![
+                    style(&m.name).bold().to_string(),
+                    m.transport.clone(),
+                    ui::truncate(&m.target(), 40),
+                    if m.pre_approve {
+                        "yes".into()
+                    } else {
+                        ui::muted("no")
+                    },
+                    if users.is_empty() {
+                        ui::muted("(main session)")
+                    } else {
+                        users.join(", ")
+                    },
+                ]
+            })
+            .collect();
+        ui::table(
+            &["NAME", "TRANSPORT", "RUNS", "PRE-APPROVED", "AGENTS"],
+            &rows,
+        );
+    }
+
     ui::section("Setup");
     let mut wf = Vec::new();
     if project.claude.workflow.intake {
@@ -453,6 +488,24 @@ fn run_claude(root: &Path, project: &Project) -> Result<()> {
             ui::muted("(none)")
         } else {
             wf.join(", ")
+        },
+    );
+    ui::kv(
+        "check",
+        &match project.claude.workflow.check_cmd.trim() {
+            "" => ui::muted("(none — gates rely on stated confidence)"),
+            c => format!("`{c}` must pass before work is accepted"),
+        },
+    );
+    ui::kv(
+        "sandbox",
+        &if project.claude.sandbox.enabled {
+            format!(
+                "on (strict; {} extra domain(s))",
+                project.claude.sandbox.extra_domains.len()
+            )
+        } else {
+            ui::muted("off")
         },
     );
     let mut out = Vec::new();
@@ -598,6 +651,26 @@ fn print_agent_claude(project: &Project, root: &Path, idx: usize) {
                 .map(|s| s.to_string())
                 .unwrap_or_else(|| ui::muted("(unlimited)")),
         );
+        for (label, value, unset) in [
+            ("disallowed tools", &a.disallowed_tools, "(none)"),
+            ("effort", &a.effort, "(inherit)"),
+            ("permission mode", &a.permission_mode, "(inherit)"),
+            ("memory", &a.memory, "(none)"),
+            ("preload skills", &a.preload_skills, "(none)"),
+            ("mcp servers", &a.mcp_servers, "(none)"),
+        ] {
+            ui::kv(
+                label,
+                &if value.trim().is_empty() {
+                    ui::muted(unset)
+                } else {
+                    value.trim().to_string()
+                },
+            );
+        }
+        if a.background {
+            ui::kv("background", "yes");
+        }
     }
     ui::kv("color", &color_cell(&a.color));
     ui::kv("description", &dash(&a.description));
@@ -645,4 +718,97 @@ fn print_agent_claude(project: &Project, root: &Path, idx: usize) {
         style("✦").cyan(),
         ui::muted(&format!("edit with `ocgen edit agent {}`", a.name))
     );
+}
+
+/// `ocgen verify`: print every check; returns false if any failed.
+pub fn run_verify(path: String, run_claude: bool, run_check: bool) -> Result<bool> {
+    use ocgen::verify::{verify, Options, Status};
+    let (root, project) = Project::discover(Path::new(&path))?;
+    ui::banner("verify");
+    ui::kv("project", &style(&project.project_name).bold().to_string());
+    ui::kv("path", &ui::muted(&root.display().to_string()));
+    println!();
+    let checks = verify(
+        &project,
+        &root,
+        &Options {
+            run_claude,
+            run_check,
+        },
+    );
+    for c in &checks {
+        let mark = match c.status {
+            Status::Pass => style("✔").green(),
+            Status::Warn => style("▲").yellow(),
+            Status::Fail => style("✘").red(),
+            Status::Skip => style("○").dim(),
+        };
+        println!(
+            "  {mark} {}  {}",
+            style(&c.name).bold(),
+            ui::muted(&c.detail)
+        );
+    }
+    let count = |s: Status| checks.iter().filter(|c| c.status == s).count();
+    let (fail, warn) = (count(Status::Fail), count(Status::Warn));
+    println!();
+    if fail > 0 {
+        println!(
+            "  {} {fail} failed, {warn} warning(s) — `ocgen doctor` fixes most of these",
+            style("✘").red()
+        );
+    } else if warn > 0 {
+        println!("  {} passed with {warn} warning(s)", style("✔").green());
+    } else {
+        ui::success("all checks passed");
+    }
+    Ok(fail == 0)
+}
+
+/// `ocgen approve`: a human unlocks high-impact actions for a limited time.
+pub fn run_approve(path: String, minutes: u64, revoke: bool, status: bool) -> Result<()> {
+    use ocgen::approval;
+    use std::io::IsTerminal;
+    let (root, project) = Project::discover(Path::new(&path))?;
+    let home =
+        dirs::home_dir().ok_or_else(|| anyhow!("could not determine your home directory"))?;
+    let show = |left: Option<u64>| match left {
+        Some(s) => println!(
+            "{} {} — approved for another {} min",
+            style("unlocked").yellow().bold(),
+            project.project_name,
+            s.div_ceil(60)
+        ),
+        None => println!(
+            "{} {} — high-impact actions need `ocgen approve`",
+            style("locked").green().bold(),
+            project.project_name
+        ),
+    };
+    if status {
+        show(approval::remaining(&home, &root));
+        return Ok(());
+    }
+    // Only a human, in their own terminal, may change the approval: an agent's
+    // tool call runs under Claude Code (CLAUDECODE) and has no terminal.
+    if std::env::vars().any(|(k, _)| k == "CLAUDECODE" || k.starts_with("CLAUDE_CODE_")) {
+        bail!(
+            "`ocgen approve` must be run by a human, outside Claude Code — open your own terminal"
+        );
+    }
+    if !std::io::stdin().is_terminal() {
+        bail!("`ocgen approve` needs an interactive terminal (it is for a human, not a script)");
+    }
+    if revoke {
+        if approval::revoke(&home, &root)? {
+            println!("Re-locked {}.", project.project_name);
+        } else {
+            println!("{} was already locked.", project.project_name);
+        }
+        return Ok(());
+    }
+    approval::grant(&home, &root, minutes)?;
+    show(approval::remaining(&home, &root));
+    ui::tip("it re-locks by itself; `ocgen approve --revoke` re-locks now");
+    Ok(())
 }

@@ -7,8 +7,14 @@ when_to_use: {{ skill.when_to_use }}
 {% if skill.argument_hint -%}
 argument-hint: {{ skill.argument_hint }}
 {% endif -%}
+{% if skill.arguments -%}
+arguments: {{ skill.arguments }}
+{% endif -%}
 {% if skill.allowed_tools -%}
 allowed-tools: {{ skill.allowed_tools }}
+{% endif -%}
+{% if skill.disallowed_tools -%}
+disallowed-tools: {{ skill.disallowed_tools }}
 {% endif -%}
 {% if skill.disable_model_invocation -%}
 disable-model-invocation: true
@@ -19,10 +25,21 @@ user-invocable: false
 {% if skill.model -%}
 model: {{ skill.model }}
 {% endif -%}
+{% if skill.effort -%}
+effort: {{ skill.effort }}
+{% endif -%}
+{% if paths -%}
+paths:
+{% for p in paths %}  - "{{ p }}"
+{% endfor -%}
+{% endif -%}
 {% if skill.context_fork -%}
 context: fork
 {% if skill.agent -%}
 agent: {{ skill.agent }}
+{% endif -%}
+{% if skill.background -%}
+background: true
 {% endif -%}
 {% endif -%}
 ---
