@@ -340,3 +340,27 @@ fn new_cancel_writes_nothing() {
     assert!(!tmp.path().join(".claude/agents").exists());
     assert!(!tmp.path().join(".ocgen-backup").exists());
 }
+
+#[test]
+fn edit_permissions_walks_add_and_remove() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = claude_project(tmp.path());
+    script(&[
+        "Add",                 // what now?
+        "allow",               // which list
+        "Bash(gh run view:*)", // the rule
+        "Add",
+        "deny",
+        "Read(./secrets/**)",
+        "Remove",             // what now?
+        "Read(./secrets/**)", // which rule
+        "Done",
+    ]);
+    super::run_edit_permissions(path, Default::default()).unwrap();
+    assert_eq!(script_remaining(), 0);
+
+    let p = reload(tmp.path());
+    assert_eq!(p.claude.permissions.allow, ["Bash(gh run view:*)"]);
+    assert!(p.claude.permissions.deny.is_empty());
+    assert!(read(tmp.path(), SETTINGS).contains("Bash(gh run view:*)"));
+}

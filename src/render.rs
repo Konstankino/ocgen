@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::agent::Agent;
-use crate::claude::{ClaudeConfig, Skill};
+use crate::claude::{ClaudeConfig, PermissionRules, RuleList, Skill};
 use crate::manifest::{Manifest, Provider};
 use crate::target::Target;
 use crate::templates;
@@ -722,19 +722,20 @@ impl Project {
             "model": model
         });
         let obj = root.as_object_mut().unwrap();
-        if self.claude.powerups.permissions {
-            let mut deny = vec!["Bash(rm -rf:*)"];
-            deny.extend(crate::claude::SECRET_READ_DENY);
-            deny.extend(crate::claude::GUARD_DENY);
-            obj.insert(
-                "permissions".into(),
-                json!({
-                    "allow": ["Read","Grep","Glob","Edit","Write","Bash(git status:*)","Bash(git diff:*)","Bash(git log:*)"],
-                    // Asked even in auto mode: a second line behind the approval gate.
-                    "ask": crate::claude::HIGH_IMPACT_ASK,
-                    "deny": deny
-                }),
-            );
+        // The generated rules, then the user's own (`ocgen edit permissions`).
+        let mut rules = self.generated_permissions();
+        for (list, rule) in self.claude.permissions.entries() {
+            // Only ever appended: the user's rules can't drop a generated guard.
+            let _ = rules.add(list, &rule);
+        }
+        if !rules.is_empty() {
+            let mut perms = serde_json::Map::new();
+            for list in RuleList::ALL {
+                if !rules.list(list).is_empty() {
+                    perms.insert(list.key().into(), json!(rules.list(list)));
+                }
+            }
+            obj.insert("permissions".into(), Value::Object(perms));
         }
         if self.claude.sandbox.enabled {
             let mut domains: Vec<String> = crate::claude::SANDBOX_DOMAINS
@@ -879,6 +880,48 @@ impl Project {
             );
         }
         env
+    }
+
+    /// The permission rules ocgen generates itself, before the user's own.
+    pub fn generated_permissions(&self) -> PermissionRules {
+        if !self.claude.powerups.permissions {
+            return PermissionRules::default();
+        }
+        let owned = |v: &[&str]| v.iter().map(|s| s.to_string()).collect();
+        let mut deny = vec!["Bash(rm -rf:*)"];
+        deny.extend(crate::claude::SECRET_READ_DENY);
+        deny.extend(crate::claude::GUARD_DENY);
+        PermissionRules {
+            allow: owned(&[
+                "Read",
+                "Grep",
+                "Glob",
+                "Edit",
+                "Write",
+                "Bash(git status:*)",
+                "Bash(git diff:*)",
+                "Bash(git log:*)",
+            ]),
+            // Asked even in auto mode: a second line behind the approval gate.
+            ask: owned(&crate::claude::HIGH_IMPACT_ASK),
+            deny: owned(&deny),
+        }
+    }
+
+    /// The generated list that overrides `rule` in list `list`, if any. Claude
+    /// Code checks deny, then ask, then allow, so e.g. an allow for a rule the
+    /// generated ask list holds has no effect.
+    pub fn shadowing_rule(&self, list: RuleList, rule: &str) -> Option<RuleList> {
+        let g = self.generated_permissions();
+        let earlier: &[RuleList] = match list {
+            RuleList::Allow => &[RuleList::Deny, RuleList::Ask],
+            RuleList::Ask => &[RuleList::Deny],
+            RuleList::Deny => &[],
+        };
+        earlier
+            .iter()
+            .copied()
+            .find(|l| g.list(*l).iter().any(|r| r == rule.trim()))
     }
 
     /// The hooks table, shared by `settings.json` and the plugin's `hooks.json`.

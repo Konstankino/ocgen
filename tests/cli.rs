@@ -911,3 +911,128 @@ fn help_is_not_tied_to_one_target() {
         .stdout(contains("claude"))
         .stdout(contains("[default: opencode]").not());
 }
+
+#[test]
+fn edit_permissions_adds_and_removes_rules_from_flags() {
+    let dir = tempdir().unwrap();
+    scaffold_claude(dir.path());
+    let settings = |d: &Path| -> serde_json::Value {
+        serde_json::from_str(&std::fs::read_to_string(d.join(".claude/settings.json")).unwrap())
+            .unwrap()
+    };
+
+    ocgen()
+        .args(["edit", "permissions", "-p"])
+        .arg(dir.path())
+        .args([
+            "--allow",
+            "Bash(gh run view:*)",
+            "--allow",
+            "Bash(gh run list:*)",
+        ])
+        .args(["--deny", "Read(./secrets/**)"])
+        .assert()
+        .success()
+        .stdout(contains("Bash(gh run view:*)"));
+    let s = settings(dir.path());
+    let allow = s["permissions"]["allow"].as_array().unwrap();
+    assert!(allow.contains(&"Bash(gh run view:*)".into()));
+    assert!(allow.contains(&"Bash(gh run list:*)".into()));
+    assert!(s["permissions"]["deny"]
+        .as_array()
+        .unwrap()
+        .contains(&"Read(./secrets/**)".into()));
+
+    ocgen()
+        .args(["edit", "permissions", "-p"])
+        .arg(dir.path())
+        .args(["--remove", "Bash(gh run list:*)"])
+        .assert()
+        .success();
+    let allow = settings(dir.path())["permissions"]["allow"].clone();
+    assert!(!allow
+        .as_array()
+        .unwrap()
+        .contains(&"Bash(gh run list:*)".into()));
+    assert!(allow
+        .as_array()
+        .unwrap()
+        .contains(&"Bash(gh run view:*)".into()));
+
+    // An allow that a generated ask/deny rule overrides is accepted, with a warning.
+    ocgen()
+        .args(["edit", "permissions", "-p"])
+        .arg(dir.path())
+        .args(["--allow", "Bash(git push:*)"])
+        .assert()
+        .success()
+        .stdout(contains("no effect"));
+}
+
+#[test]
+fn edit_permissions_rejects_bad_input_and_guards_target() {
+    let dir = tempdir().unwrap();
+    scaffold_claude(dir.path());
+    let before = std::fs::read_to_string(dir.path().join(".claude/settings.json")).unwrap();
+    ocgen()
+        .args(["edit", "permissions", "-p"])
+        .arg(dir.path())
+        .args(["--allow", "Bash(gh"])
+        .assert()
+        .failure()
+        .stderr(contains("Bash(gh"));
+    ocgen()
+        .args(["edit", "permissions", "-p"])
+        .arg(dir.path())
+        .args(["--remove", "Bash(nothing:*)"])
+        .assert()
+        .failure()
+        .stderr(contains("not one of"));
+    let after = std::fs::read_to_string(dir.path().join(".claude/settings.json")).unwrap();
+    assert_eq!(before, after, "nothing written on error");
+
+    // Without flags it is interactive, so with no terminal it says what to pass.
+    ocgen()
+        .args(["edit", "permissions", "-p"])
+        .arg(dir.path())
+        .assert()
+        .failure()
+        .stderr(contains("--allow"));
+
+    // OpenCode permissions are per agent.
+    let oc = tempdir().unwrap();
+    scaffold_default(oc.path());
+    ocgen()
+        .args(["edit", "permissions", "-p"])
+        .arg(oc.path())
+        .args(["--allow", "Read"])
+        .assert()
+        .failure()
+        .stderr(contains("ocgen edit agent"));
+}
+
+#[test]
+fn edit_permissions_help_explains_rules_and_shows_examples() {
+    // The parent `edit` help points at it with an example too.
+    ocgen()
+        .args(["edit", "--help"])
+        .assert()
+        .success()
+        .stdout(contains("Examples:"))
+        .stdout(contains("ocgen edit permissions --allow"));
+    // Examples show in both the short (-h) and the full (--help) help.
+    ocgen()
+        .args(["edit", "permissions", "-h"])
+        .assert()
+        .success()
+        .stdout(contains("Examples:"));
+    ocgen()
+        .args(["edit", "permissions", "--help"])
+        .assert()
+        .success()
+        .stdout(contains("Tool(specifier)"))
+        .stdout(contains("deny, then ask, then allow"))
+        .stdout(contains("Examples:"))
+        .stdout(contains("ocgen edit permissions --remove"))
+        .stdout(contains("--allow <RULE>"));
+}

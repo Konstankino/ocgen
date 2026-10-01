@@ -54,6 +54,7 @@ pub enum Command {
         what: AddWhat,
     },
     /// Edit something in an existing project.
+    #[command(after_help = EDIT_EXAMPLES)]
     Edit {
         #[command(subcommand)]
         what: EditWhat,
@@ -238,6 +239,72 @@ pub enum EditWhat {
         #[arg(short, long, default_value = ".")]
         path: String,
     },
+    /// Add or remove your own permission rules in settings.json (Claude projects only).
+    ///
+    /// Your rules are saved in the project state and appended to the rules ocgen
+    /// generates, so `doctor`, `add` and `edit` keep them. The generated rules,
+    /// including the approval-gate guards, always stay; only your own can be removed.
+    ///
+    /// Claude Code checks deny, then ask, then allow: an allow rule that a generated
+    /// ask or deny rule also matches has no effect, and ocgen warns about it.
+    ///
+    /// With flags the changes apply directly (usable from scripts and from Claude
+    /// itself); without flags the command is interactive.
+    #[command(after_help = PERMISSIONS_EXAMPLES)]
+    Permissions {
+        /// Directory of the existing project.
+        #[arg(short, long, default_value = ".")]
+        path: String,
+        #[command(flatten)]
+        changes: PermissionsCli,
+    },
+}
+
+const EDIT_EXAMPLES: &str = "\
+Examples:
+  ocgen edit agent reviewer                       # walk every field of one agent
+  ocgen edit skill -p ./my-project                # pick a skill from a list
+  ocgen edit team                                 # turn Agent Teams and its gates on/off
+  ocgen edit permissions --allow \"Bash(gh run view:*)\"   # stop a command from asking
+
+Run `ocgen edit <COMMAND> --help` for a command's options.";
+
+const PERMISSIONS_EXAMPLES: &str = "\
+Rules:
+  Tool or Tool(specifier), e.g. Read, Bash(gh run view:*), Read(./docs/**),
+  WebFetch(domain:example.com), mcp__github__get_issue. Quote them in the shell.
+
+Examples:
+  ocgen edit permissions                                   # interactive
+  ocgen edit permissions --allow \"Bash(gh run view:*)\" --allow \"Bash(gh run list:*)\"
+  ocgen edit permissions --ask \"Bash(docker push:*)\" --deny \"Read(./secrets/**)\"
+  ocgen edit permissions --remove \"Bash(gh run list:*)\"
+  ocgen edit permissions -p ./my-project --allow WebSearch";
+
+/// Permission rule changes given on the command line (`ocgen edit permissions`).
+#[derive(clap::Args, Default)]
+pub struct PermissionsCli {
+    /// Rule to allow without asking, e.g. "Bash(gh run view:*)" (repeatable).
+    #[arg(long, value_name = "RULE")]
+    pub allow: Vec<String>,
+    /// Rule to always confirm, even in auto mode (repeatable).
+    #[arg(long, value_name = "RULE")]
+    pub ask: Vec<String>,
+    /// Rule to never allow (repeatable).
+    #[arg(long, value_name = "RULE")]
+    pub deny: Vec<String>,
+    /// One of your rules to remove, from whichever list holds it (repeatable).
+    #[arg(long, value_name = "RULE")]
+    pub remove: Vec<String>,
+}
+
+impl PermissionsCli {
+    pub fn is_empty(&self) -> bool {
+        self.allow.is_empty()
+            && self.ask.is_empty()
+            && self.deny.is_empty()
+            && self.remove.is_empty()
+    }
 }
 
 #[derive(Subcommand)]

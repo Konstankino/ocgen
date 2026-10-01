@@ -4200,3 +4200,121 @@ fn verify_flags_hooks_that_cannot_run_in_bash() {
     let none = serde_json::json!({});
     assert_eq!(hook_shell(&none, true, None).status, Status::Skip);
 }
+
+// ------------------------------------------------------------- extra permissions -----
+
+#[test]
+fn permission_rules_validate_and_stay_in_one_list() {
+    use ocgen::claude::{PermissionRules, RuleList};
+    let mut r = PermissionRules::default();
+    assert!(r.add(RuleList::Allow, "Bash(gh run view:*)").unwrap());
+    assert!(r.add(RuleList::Deny, "Read(./secrets/**)").unwrap());
+    assert!(r.add(RuleList::Allow, "mcp__github__get_issue").unwrap());
+    // Adding it again is a no-op.
+    assert!(!r.add(RuleList::Allow, "Bash(gh run view:*)").unwrap());
+    assert_eq!(r.allow, ["Bash(gh run view:*)", "mcp__github__get_issue"]);
+
+    // A rule lives in one list only.
+    let err = r.add(RuleList::Ask, "Read(./secrets/**)").unwrap_err();
+    assert!(err.to_string().contains("deny"), "{err}");
+
+    // Malformed rules are rejected.
+    for bad in ["", "Bash(gh", "bash run", "Bash()", "Read(a)\nEdit(b)"] {
+        assert!(r.add(RuleList::Allow, bad).is_err(), "accepted {bad:?}");
+    }
+
+    assert!(r.remove("Read(./secrets/**)"));
+    assert!(!r.remove("Read(./secrets/**)"));
+    assert!(r.deny.is_empty());
+}
+
+#[test]
+fn extra_permissions_are_merged_into_settings_and_survive_regeneration() {
+    use ocgen::claude::RuleList;
+    let dir = tempdir().unwrap();
+    let mut p = claude_default("perm");
+    let extra = &mut p.claude.permissions;
+    extra.add(RuleList::Allow, "Bash(gh run view:*)").unwrap();
+    extra.add(RuleList::Allow, "Read").unwrap(); // already generated: not repeated
+    extra.add(RuleList::Ask, "Bash(docker push:*)").unwrap();
+    extra.add(RuleList::Deny, "Read(./secrets/**)").unwrap();
+    p.scaffold(dir.path(), false).unwrap();
+
+    let perms = settings_of(dir.path())["permissions"].clone();
+    let list = |k: &str| -> Vec<String> {
+        perms[k]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect()
+    };
+    let allow = list("allow");
+    assert_eq!(
+        allow.first().map(String::as_str),
+        Some("Read"),
+        "generated first"
+    );
+    assert_eq!(allow.iter().filter(|r| *r == "Read").count(), 1);
+    assert_eq!(
+        allow.last().map(String::as_str),
+        Some("Bash(gh run view:*)")
+    );
+    assert!(list("ask").contains(&"Bash(docker push:*)".to_string()));
+    assert!(list("ask").contains(&"Bash(git push:*)".to_string()));
+    let deny = list("deny");
+    assert!(deny.contains(&"Read(./secrets/**)".to_string()));
+    assert!(
+        deny.contains(&"Bash(ocgen approve*)".to_string()),
+        "guards kept"
+    );
+
+    // The rules are part of the saved state, so a later re-render keeps them.
+    let (_, state) = Project::discover(dir.path()).unwrap();
+    assert_eq!(state.claude.permissions.allow.len(), 2);
+    state.scaffold(dir.path(), true).unwrap();
+    assert!(read(dir.path(), ".claude/settings.json").contains("Bash(gh run view:*)"));
+}
+
+#[test]
+fn extra_permissions_are_written_even_without_the_permission_defaults() {
+    use ocgen::claude::RuleList;
+    let dir = tempdir().unwrap();
+    let mut p = claude_default("bare");
+    p.claude.powerups.permissions = false;
+    p.scaffold(dir.path(), false).unwrap();
+    assert!(settings_of(dir.path()).get("permissions").is_none());
+
+    p.claude
+        .permissions
+        .add(RuleList::Allow, "Bash(gh run view:*)")
+        .unwrap();
+    p.scaffold(dir.path(), true).unwrap();
+    let perms = settings_of(dir.path())["permissions"].clone();
+    assert_eq!(perms["allow"], serde_json::json!(["Bash(gh run view:*)"]));
+    assert!(perms.get("deny").is_none());
+}
+
+#[test]
+fn allow_rules_shadowed_by_generated_deny_or_ask_are_reported() {
+    use ocgen::claude::RuleList;
+    let p = claude_default("shadow");
+    // Deny and ask win over allow in Claude Code, so these allows do nothing.
+    assert_eq!(
+        p.shadowing_rule(RuleList::Allow, "Bash(git push:*)"),
+        Some(RuleList::Ask)
+    );
+    assert_eq!(
+        p.shadowing_rule(RuleList::Allow, "Bash(ocgen approve*)"),
+        Some(RuleList::Deny)
+    );
+    assert_eq!(
+        p.shadowing_rule(RuleList::Ask, "Bash(ocgen approve*)"),
+        Some(RuleList::Deny)
+    );
+    assert_eq!(
+        p.shadowing_rule(RuleList::Allow, "Bash(gh run view:*)"),
+        None
+    );
+    assert_eq!(p.shadowing_rule(RuleList::Deny, "Bash(git push:*)"), None);
+}

@@ -113,6 +113,105 @@ pub struct ClaudeConfig {
     pub hooks_extra: HooksExtra,
     /// Opt-in OS-level sandbox for shell commands.
     pub sandbox: SandboxProfile,
+    /// The user's own permission rules, added to the generated ones in
+    /// settings.json (`ocgen edit permissions`).
+    pub permissions: PermissionRules,
+}
+
+/// One of settings.json's permission lists. Claude Code checks deny first, then
+/// ask, then allow — so a rule in an earlier list wins.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuleList {
+    Allow,
+    Ask,
+    Deny,
+}
+
+impl RuleList {
+    pub const ALL: [RuleList; 3] = [RuleList::Allow, RuleList::Ask, RuleList::Deny];
+
+    /// The settings.json key.
+    pub fn key(self) -> &'static str {
+        match self {
+            RuleList::Allow => "allow",
+            RuleList::Ask => "ask",
+            RuleList::Deny => "deny",
+        }
+    }
+}
+
+/// Permission rules by list.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PermissionRules {
+    pub allow: Vec<String>,
+    pub ask: Vec<String>,
+    pub deny: Vec<String>,
+}
+
+impl PermissionRules {
+    pub fn list(&self, l: RuleList) -> &Vec<String> {
+        match l {
+            RuleList::Allow => &self.allow,
+            RuleList::Ask => &self.ask,
+            RuleList::Deny => &self.deny,
+        }
+    }
+
+    fn list_mut(&mut self, l: RuleList) -> &mut Vec<String> {
+        match l {
+            RuleList::Allow => &mut self.allow,
+            RuleList::Ask => &mut self.ask,
+            RuleList::Deny => &mut self.deny,
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.allow.is_empty() && self.ask.is_empty() && self.deny.is_empty()
+    }
+
+    /// Every rule with its list, in list order.
+    pub fn entries(&self) -> Vec<(RuleList, String)> {
+        RuleList::ALL
+            .iter()
+            .flat_map(|l| self.list(*l).iter().map(|r| (*l, r.clone())))
+            .collect()
+    }
+
+    /// Add `rule` to list `l`. `Ok(false)` when it is already there; an error when
+    /// it is malformed or already in another list (a rule lives in one list).
+    pub fn add(&mut self, l: RuleList, rule: &str) -> Result<bool> {
+        let rule = rule.trim();
+        crate::validate::permission_rule(rule).map_err(anyhow::Error::msg)?;
+        if let Some(other) = RuleList::ALL
+            .into_iter()
+            .find(|o| *o != l && self.list(*o).iter().any(|r| r == rule))
+        {
+            anyhow::bail!(
+                "{rule} is already in the {} list — remove it first",
+                other.key()
+            );
+        }
+        let list = self.list_mut(l);
+        if list.iter().any(|r| r == rule) {
+            return Ok(false);
+        }
+        list.push(rule.to_string());
+        Ok(true)
+    }
+
+    /// Remove `rule` from whichever list holds it. `false` when none does.
+    pub fn remove(&mut self, rule: &str) -> bool {
+        let rule = rule.trim();
+        let mut found = false;
+        for l in RuleList::ALL {
+            let list = self.list_mut(l);
+            let before = list.len();
+            list.retain(|r| r != rule);
+            found |= list.len() != before;
+        }
+        found
+    }
 }
 
 /// Opt-in sandbox profile: OS-level containment of Bash (Seatbelt on macOS,

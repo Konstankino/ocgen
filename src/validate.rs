@@ -146,6 +146,21 @@ pub fn nonempty_nospace(s: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// A Claude Code permission rule: `Tool` or `Tool(specifier)`, e.g. `Read`,
+/// `Bash(gh run view:*)`, `WebFetch(domain:example.com)`, `mcp__github__get_issue`.
+pub fn permission_rule(s: &str) -> Result<(), String> {
+    let re = regex::Regex::new(r"^[A-Za-z][A-Za-z0-9_-]*(\(.+\))?$").unwrap();
+    if s.is_empty() {
+        return Err("cannot be empty".into());
+    }
+    if s.contains(['\n', '\r']) || !re.is_match(s) {
+        return Err(format!(
+            "'{s}' isn't a permission rule — use Tool or Tool(specifier), e.g. Bash(gh run view:*)"
+        ));
+    }
+    Ok(())
+}
+
 /// Build a validator that enforces [`ident`] and rejects anything already in `taken`.
 pub fn unique_ident(taken: Vec<String>, noun: &'static str) -> impl Fn(&str) -> Result<(), String> {
     move |s: &str| {

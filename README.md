@@ -134,6 +134,7 @@ ocgen add agent ./my-project        # add one more agent to an existing project
 ocgen add skill ./my-project        # author a Claude Code skill (Claude projects)
 ocgen add mcp ./my-project          # add an MCP server to .mcp.json (Claude projects)
 ocgen edit mcp [name] -p ./dir      # change or remove an MCP server
+ocgen edit permissions -p ./dir --allow "Bash(gh run view:*)"   # your own settings.json permission rules (Claude projects)
 ocgen edit agent [name] -p ./dir    # tweak any field of an existing agent
 ocgen add provider ./my-project     # add another provider to an existing project
 ocgen edit provider [key] -p ./dir  # edit a provider and its models
@@ -204,7 +205,8 @@ current format.
 delete as stale (`-`) is listed with a short diff.
 - **Your hand edits are flagged by name.** ocgen fingerprints every file it writes, so it can
   tell your edits apart from its own updates. For a hand-edited `settings.json` it points you
-  to `.claude/settings.local.json`, which ocgen never touches.
+  to `.claude/settings.local.json`, which ocgen never touches. For permission rules the whole
+  project should share, use `ocgen edit permissions` instead.
 - **Confirmation:** in a terminal it asks before applying. `--yes` skips the question, and
   non-interactive runs such as CI apply directly.
 - **Backups:** before overwriting or deleting anything it copies the previous versions to
@@ -732,6 +734,7 @@ for a plugin; `--team` is off by default. (The `--base-url` flag is OpenCode-onl
 | Command | What it does |
 |---|---|
 | `ocgen add skill [dir]` | Author a new skill → `.claude/skills/<name>/SKILL.md` (name, description, allowed-tools, body). |
+| `ocgen edit permissions -p <dir> [--allow/--ask/--deny/--remove <RULE>]…` | Add or remove your own permission rules. They are saved in the state file and appended to ocgen's generated `allow`/`ask`/`deny` lists in `settings.json`, so regeneration keeps them. Generated rules (including the approval-gate guards) can't be removed. Warns when a generated `deny`/`ask` rule overrides yours. No flags = interactive. |
 | `ocgen edit skill [name] -p <dir>` | Edit an existing skill; renaming cleans up the old skill directory. Omit `[name]` to pick from a list. |
 
 **Review, repair, reference**
