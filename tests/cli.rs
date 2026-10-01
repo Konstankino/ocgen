@@ -1507,30 +1507,38 @@ fn notes_open_matches_topic_line_or_latest_and_prints_the_url() {
     }
 }
 
-/// A machine where no POSIX shell can be started (Windows with a per-user Git
-/// install puts only `Git\cmd` on PATH): verify says so once, instead of
-/// reporting every hook script as a syntax error and every hook as hung.
+/// A terminal with no `sh` on PATH — on Windows, a per-user Git install puts only
+/// `Git\cmd` there. Windows: verify still finds Git Bash in its install folder and
+/// runs every check with it, like Claude Code does, so nothing fails falsely.
+/// Elsewhere no shell starts at all: verify says so once, instead of reporting
+/// every hook script as a syntax error and every hook as hung.
 #[test]
-fn verify_without_a_shell_says_so_once() {
+fn verify_without_sh_on_path() {
     let dir = tempdir().unwrap();
     scaffold_claude(dir.path());
     let empty = tempdir().unwrap();
-    let out = ocgen()
+    let assert = ocgen()
         .args(["verify", "--no-claude"])
         .arg(dir.path())
         .env("PATH", empty.path())
-        .assert()
-        .failure()
-        .get_output()
-        .stdout
-        .clone();
-    let out = String::from_utf8_lossy(&out);
-    assert!(
-        out.contains("verify shell") && out.contains("can't start"),
-        "{out}"
-    );
+        .assert();
+    let out = String::from_utf8_lossy(&assert.get_output().stdout).into_owned();
     for misleading in ["syntax error", "did not finish", "not blocked", "let http"] {
         assert!(!out.contains(misleading), "{misleading}: {out}");
     }
-    assert!(out.contains("skipped"), "{out}");
+    if cfg!(windows) {
+        assert!(
+            out.contains("verify shell") && out.to_lowercase().contains("bash.exe"),
+            "{out}"
+        );
+        assert!(!out.contains("can't start"), "{out}");
+        assert!(out.contains("present and parse"), "{out}");
+    } else {
+        assert.failure();
+        assert!(
+            out.contains("verify shell") && out.contains("can't start"),
+            "{out}"
+        );
+        assert!(out.contains("skipped"), "{out}");
+    }
 }
