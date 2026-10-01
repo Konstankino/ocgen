@@ -1295,3 +1295,28 @@ fn doctor_help_has_examples() {
         .stdout(contains("ocgen doctor --dry-run"))
         .stdout(contains("hand-added permission rules"));
 }
+
+#[test]
+fn version_flag_reports_the_build_version() {
+    // Release builds take the tag's version (OCGEN_BUILD_VERSION, set by the
+    // release workflow); other builds fall back to Cargo.toml's.
+    let expected = option_env!("OCGEN_BUILD_VERSION").unwrap_or(env!("CARGO_PKG_VERSION"));
+    assert_eq!(ocgen::VERSION, expected);
+    ocgen()
+        .arg("--version")
+        .assert()
+        .success()
+        .stdout(contains(format!("ocgen {expected}")));
+}
+
+#[test]
+fn release_workflow_stamps_the_tag_version_into_the_binary() {
+    let wf = include_str!("../.github/workflows/release.yml");
+    // The tag (vX.Y.Z) becomes the version the binary reports…
+    assert!(wf.contains("OCGEN_BUILD_VERSION"), "{wf}");
+    assert!(wf.contains("GITHUB_REF_NAME#v"));
+    // …a tag that isn't a version fails the release…
+    assert!(wf.contains("is not a version tag"));
+    // …and each native build is checked to report it.
+    assert!(wf.contains("--version"));
+}

@@ -6,7 +6,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 #[derive(Parser)]
 #[command(
     name = "ocgen",
-    version,
+    version = ocgen::VERSION,
     about = "Interactive bootstrapper for LLM multi-agent projects (OpenCode, Claude Code)"
 )]
 pub struct Cli {

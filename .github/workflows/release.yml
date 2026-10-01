@@ -35,8 +35,35 @@ jobs:
         if: contains(matrix.target, 'linux-musl')
         run: sudo apt-get update && sudo apt-get install -y musl-tools
 
+      - name: Version from tag
+        # The binary reports the tag's version (vX.Y.Z → X.Y.Z), so every release
+        # bumps `ocgen --version` without editing Cargo.toml. A manual run that
+        # isn't on a tag keeps Cargo.toml's version.
+        shell: bash
+        run: |
+          if [ "${{ github.ref_type }}" != "tag" ]; then
+            echo "::notice::not a tag build — using Cargo.toml's version"
+            exit 0
+          fi
+          v="${GITHUB_REF_NAME#v}"
+          if ! printf '%s' "$v" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$'; then
+            echo "::error::'$GITHUB_REF_NAME' is not a version tag (expected vX.Y.Z)"
+            exit 1
+          fi
+          echo "OCGEN_BUILD_VERSION=$v" >> "$GITHUB_ENV"
+
       - name: Build
         run: cargo build --release --locked --bin ocgen --target ${{ matrix.target }}
+
+      - name: Check the version
+        # Native builds only (the x86_64 macOS binary is cross-built on Apple silicon).
+        if: matrix.target != 'x86_64-apple-darwin'
+        shell: bash
+        run: |
+          out="$("target/${{ matrix.target }}/release/ocgen${{ matrix.ext }}" --version)"
+          echo "$out"
+          want="${OCGEN_BUILD_VERSION:-$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)}"
+          [ "$out" = "ocgen $want" ] || { echo "::error::expected 'ocgen $want', got '$out'"; exit 1; }
 
       - name: Package
         shell: bash

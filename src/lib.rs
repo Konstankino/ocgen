@@ -5,6 +5,14 @@
 //! data model, and rendering a [`Project`] into files. The binary half (`main.rs`)
 //! is just the interactive wizard that builds a `Project` and calls [`Project::scaffold`].
 
+/// The version `ocgen --version` reports. Release builds get the tag's version
+/// (`OCGEN_BUILD_VERSION`, set by `.github/workflows/release.yml` from `vX.Y.Z`);
+/// any other build falls back to Cargo.toml's.
+pub const VERSION: &str = match option_env!("OCGEN_BUILD_VERSION") {
+    Some(v) => v,
+    None => env!("CARGO_PKG_VERSION"),
+};
+
 pub mod agent;
 pub mod approval;
 pub mod archetype;

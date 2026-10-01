@@ -51,7 +51,9 @@ cargo install --git https://github.com/Konstankino/ocgen ocgen
 
 New versions ship as GitHub Releases: pushing a version tag (`git tag v0.2.0 && git push
 --tags`) triggers [`.github/workflows/release.yml`](.github/workflows/release.yml), which
-builds and uploads binaries for Windows, macOS and Linux. To update:
+builds and uploads binaries for Windows, macOS and Linux. The binaries report the tag's
+version (`ocgen --version` → `ocgen 0.2.0`), so a release needs no Cargo.toml edit; a tag that
+isn't `vX.Y.Z` fails the release. Local builds report Cargo.toml's version. To update:
 
 - **Windows:** re-run the PowerShell one-liner, or `scoop update ocgen`.
 - **macOS / Linux:** re-run the `install.sh` one-liner.
