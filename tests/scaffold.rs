@@ -4811,7 +4811,7 @@ fn verify_checks_that_plain_http_fetches_are_blocked() {
     claude_default("vh").scaffold(dir.path(), false).unwrap();
     let checks = verify_no_claude(dir.path());
     assert_eq!(
-        status_of(&checks, "http:// WebFetch blocked"),
+        status_of(&checks, "WebFetch guard"),
         Status::Pass,
         "{checks:#?}"
     );
@@ -4836,8 +4836,56 @@ fn verify_checks_that_plain_http_fetches_are_blocked() {
     .unwrap();
     let checks = verify_no_claude(dir.path());
     assert_eq!(
-        status_of(&checks, "http:// WebFetch blocked"),
+        status_of(&checks, "WebFetch guard"),
         Status::Fail,
         "{checks:#?}"
     );
+}
+
+#[test]
+fn the_trusted_list_reaches_the_webfetch_guard_and_an_empty_one_trusts_nothing() {
+    let dir = tempdir().unwrap();
+    let mut p = claude_default("wg");
+    p.claude.intent.trusted_domains = vec!["docs.rs".into(), "*.amazon.com".into()];
+    p.claude.output = Output {
+        project: true,
+        plugin: true,
+    };
+    p.scaffold(dir.path(), false).unwrap();
+    assert_eq!(
+        settings_of(dir.path())["env"]["OCGEN_WEBFETCH_DOMAINS"],
+        "docs.rs *.amazon.com"
+    );
+    // Plugins can't set env: the list rides on the hook command.
+    let plugin = read(dir.path(), "plugin/wg/hooks/hooks.json");
+    assert!(
+        plugin.contains("OCGEN_WEBFETCH_DOMAINS='docs.rs *.amazon.com'"),
+        "{plugin}"
+    );
+
+    // An empty list: the variable is still set (to nothing), no WebFetch is
+    // pre-approved, and the skill says plainly that no site may be fetched.
+    let dir = tempdir().unwrap();
+    p.claude.intent.trusted_domains.clear();
+    p.scaffold(dir.path(), false).unwrap();
+    let s = settings_of(dir.path());
+    assert_eq!(s["env"]["OCGEN_WEBFETCH_DOMAINS"], "");
+    for list in ["allow", "ask"] {
+        assert!(
+            !s["permissions"][list]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|r| r.as_str().unwrap().starts_with("WebFetch")),
+            "{list} pre-approves WebFetch"
+        );
+    }
+    let md = read(dir.path(), ".claude/skills/intent/SKILL.md");
+    let tools = frontmatter(&md)
+        .into_iter()
+        .find_map(|l| l.strip_prefix("allowed-tools: ").map(String::from))
+        .unwrap();
+    assert!(!tools.contains("WebFetch"), "nothing pre-approved: {tools}");
+    assert!(!md.contains("trusted domains ()"));
+    assert!(md.contains("No documentation sites are trusted"), "{md}");
 }

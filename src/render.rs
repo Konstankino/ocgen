@@ -940,6 +940,13 @@ impl Project {
         if !check.is_empty() {
             env.insert("OCGEN_CHECK_CMD".into(), json!(check));
         }
+        if self.claude.workflow.intent {
+            // The WebFetch guard's trusted documentation sites (empty = none).
+            env.insert(
+                "OCGEN_WEBFETCH_DOMAINS".into(),
+                json!(self.claude.intent.trusted_domains.join(" ")),
+            );
+        }
         if self.has_blocking_hooks() {
             env.insert(
                 "LOOP_GUARD_MAX_BLOCKS".into(),

@@ -718,53 +718,128 @@ fn check_failure_shows_the_tail_of_its_output() {
 
 // ------------------------------------------------------ https-only WebFetch --
 
+const TRUSTED: &[(&str, &str)] = &[("OCGEN_WEBFETCH_DOMAINS", "docs.rs *.amazon.com")];
+const NO_SITES: &[(&str, &str)] = &[("OCGEN_WEBFETCH_DOMAINS", "")];
+
 #[test]
-fn https_only_fetch_parity() {
-    let step = |payload: &'static str| Step {
+fn webfetch_guard_parity() {
+    let step = |env: &'static [(&'static str, &'static str)], payload: &'static str| Step {
         hook: "https-only-fetch",
-        env: &[],
+        env,
         setup: none,
         payload,
     };
     check(
-        "https",
+        "webfetch",
         &[
-            // Plain HTTP is blocked, whatever the case or JSON escaping.
+            // Trusted hosts over https:// pass — exact host, any case, with a
+            // port or user part, and any subdomain of a `*.` entry.
             step(
+                TRUSTED,
+                r#"{"tool_name":"WebFetch","tool_input":{"url":"https://docs.rs/serde","prompt":"x"}}"#,
+            ),
+            step(
+                TRUSTED,
+                r#"{"tool_name":"WebFetch","tool_input":{"url":"https://DOCS.RS/","prompt":"x"}}"#,
+            ),
+            step(
+                TRUSTED,
+                r#"{"tool_name":"WebFetch","tool_input":{"url":"https://u@docs.rs:443/x?q=1#f","prompt":"x"}}"#,
+            ),
+            step(
+                TRUSTED,
+                r#"{"tool_name":"WebFetch","tool_input":{"url":"https://docs.aws.amazon.com/s3/","prompt":"x"}}"#,
+            ),
+            // Everything else is blocked: plain http (any case or escaping)…
+            step(
+                TRUSTED,
                 r#"{"tool_name":"WebFetch","tool_input":{"url":"http://docs.rs/serde","prompt":"x"}}"#,
             ),
-            step(r#"{"tool_name":"WebFetch","tool_input":{"url":"HTTP://Docs.RS/","prompt":"x"}}"#),
             step(
+                TRUSTED,
+                r#"{"tool_name":"WebFetch","tool_input":{"url":"HTTP://Docs.RS/","prompt":"x"}}"#,
+            ),
+            step(
+                TRUSTED,
                 r#"{"tool_name":"WebFetch","tool_input":{"url":"http:\/\/docs.rs\/","prompt":"x"}}"#,
             ),
             step(
+                TRUSTED,
                 r#"{"tool_name":"WebFetch","tool_input":{"url":"  http://docs.rs","prompt":"x"}}"#,
             ),
-            // HTTPS, or no URL at all, passes.
+            // …untrusted hosts, look-alikes, and the bare domain of a `*.` entry…
             step(
-                r#"{"tool_name":"WebFetch","tool_input":{"url":"https://docs.rs/serde","prompt":"x"}}"#,
+                TRUSTED,
+                r#"{"tool_name":"WebFetch","tool_input":{"url":"https://example.com/","prompt":"x"}}"#,
             ),
-            step(r#"{"tool_name":"WebFetch","tool_input":{"prompt":"x"}}"#),
-            step("not json"),
+            step(
+                TRUSTED,
+                r#"{"tool_name":"WebFetch","tool_input":{"url":"https://docs.rs.evil.com/","prompt":"x"}}"#,
+            ),
+            step(
+                TRUSTED,
+                r#"{"tool_name":"WebFetch","tool_input":{"url":"https://evildocs.rs/","prompt":"x"}}"#,
+            ),
+            step(
+                TRUSTED,
+                r#"{"tool_name":"WebFetch","tool_input":{"url":"https://amazon.com/","prompt":"x"}}"#,
+            ),
+            step(
+                TRUSTED,
+                r#"{"tool_name":"WebFetch","tool_input":{"url":"https://evil.com/?docs.rs","prompt":"x"}}"#,
+            ),
+            step(
+                TRUSTED,
+                r#"{"tool_name":"WebFetch","tool_input":{"url":"https://docs.rs@evil.com/","prompt":"x"}}"#,
+            ),
+            // …a URL it can't read (fail closed)…
+            step(
+                TRUSTED,
+                r#"{"tool_name":"WebFetch","tool_input":{"prompt":"x"}}"#,
+            ),
+            step(TRUSTED, "not json"),
+            // …and with no trusted sites (empty or unset), every fetch.
+            step(
+                NO_SITES,
+                r#"{"tool_name":"WebFetch","tool_input":{"url":"https://docs.rs/","prompt":"x"}}"#,
+            ),
+            step(
+                &[],
+                r#"{"tool_name":"WebFetch","tool_input":{"url":"https://docs.rs/","prompt":"x"}}"#,
+            ),
         ],
     );
-    let env = HashMap::new();
-    let blocked = ocgen::hooks::run(
-        "https-only-fetch",
-        r#"{"tool_name":"WebFetch","tool_input":{"url":"http://docs.rs/serde"}}"#,
-        &env,
-    );
-    assert_eq!(blocked.code, 2, "exit 2 blocks the call");
+    let env = |pairs: &[(&str, &str)]| -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    };
+    let run = |pairs: &[(&str, &str)], url: &str| {
+        let payload = serde_json::json!({ "tool_name": "WebFetch", "tool_input": { "url": url } });
+        ocgen::hooks::run("https-only-fetch", &payload.to_string(), &env(pairs))
+    };
+    assert_eq!(run(TRUSTED, "https://docs.rs/").code, 0);
+    let http = run(TRUSTED, "http://docs.rs/serde");
+    assert_eq!(http.code, 2, "exit 2 blocks the call");
     assert!(
-        blocked.stderr.contains("https://docs.rs/serde"),
-        "suggests the https URL: {}",
-        blocked.stderr
+        http.stderr.contains("https://docs.rs/serde"),
+        "suggests https: {}",
+        http.stderr
     );
-    let ok = ocgen::hooks::run(
-        "https-only-fetch",
-        r#"{"tool_name":"WebFetch","tool_input":{"url":"https://docs.rs/"}}"#,
-        &env,
+    let untrusted = run(TRUSTED, "https://example.com/x");
+    assert_eq!(untrusted.code, 2);
+    assert!(
+        untrusted.stderr.contains("example.com") && untrusted.stderr.contains("--trust-domain"),
+        "{}",
+        untrusted.stderr
     );
-    assert_eq!(ok.code, 0);
+    let none = run(NO_SITES, "https://docs.rs/");
+    assert_eq!(none.code, 2);
+    assert!(
+        none.stderr.contains("no documentation sites are trusted"),
+        "{}",
+        none.stderr
+    );
     assert!(ocgen::hooks::NAMES.contains(&"https-only-fetch"));
 }

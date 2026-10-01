@@ -534,9 +534,10 @@ fn hook_commands(root: &Path, settings: &Value) -> Check {
 /// The approval gate must block pushes — including phrasings with flags and via
 /// a deploy script — and allow ordinary work. Tested with an empty HOME so a
 /// current approval can't hide a broken gate.
-/// The WebFetch hook must block plain http:// and let https:// through.
+/// The WebFetch guard must allow only https:// fetches to trusted documentation
+/// sites: plain http://, untrusted hosts and look-alikes are blocked.
 fn https_only_fetch(root: &Path, settings: &Value) -> Check {
-    let name = "http:// WebFetch blocked";
+    let name = "WebFetch guard";
     let Some((_, cmd)) = hook_entries(settings)
         .into_iter()
         .find(|(e, c)| e == "PreToolUse" && c.contains("https-only-fetch"))
@@ -552,22 +553,49 @@ fn https_only_fetch(root: &Path, settings: &Value) -> Check {
         .to_string();
         run_sh(&cmd, &ev, &env, root, Duration::from_secs(20)).map(|x| x.0)
     };
-    let leaks: Vec<&str> = ["http://example.com/", "HTTP://example.com/"]
+    // A trusted host to probe with: the first entry (a `*.` entry → a subdomain).
+    let trusted: Option<String> = env
+        .get("OCGEN_WEBFETCH_DOMAINS")
+        .and_then(|l| l.split_whitespace().next())
+        .map(|d| match d.strip_prefix("*.") {
+            Some(rest) => format!("ocgen-verify.{rest}"),
+            None => d.to_string(),
+        });
+    let mut must_block = vec![
+        "http://example.com/".to_string(),
+        "HTTP://example.com/".to_string(),
+        "https://ocgen-verify.invalid/".to_string(),
+    ];
+    if let Some(t) = &trusted {
+        must_block.push(format!("http://{t}/"));
+        must_block.push(format!("https://{t}.ocgen-verify.invalid/"));
+    }
+    let leaks: Vec<String> = must_block
         .into_iter()
         .filter(|u| run(u) != Some(2))
         .collect();
-    let blocked_https = run("https://example.com/") != Some(0);
-    match (leaks.is_empty(), blocked_https) {
-        (true, false) => check(name, Status::Pass, "http:// is blocked, https:// allowed"),
-        (false, _) => check(
+    if !leaks.is_empty() {
+        return check(
             name,
             Status::Fail,
             format!("let {} through — run `ocgen doctor`", leaks.join(", ")),
+        );
+    }
+    match trusted {
+        None => check(
+            name,
+            Status::Pass,
+            "no documentation sites trusted — every WebFetch is blocked",
         ),
-        (true, true) => check(
+        Some(t) if run(&format!("https://{t}/")) != Some(0) => check(
             name,
             Status::Fail,
-            "blocks https:// too — run `ocgen doctor`",
+            format!("blocks the trusted https://{t}/ too — run `ocgen doctor`"),
+        ),
+        Some(_) => check(
+            name,
+            Status::Pass,
+            "only https:// to trusted documentation sites; http:// and other hosts are blocked",
         ),
     }
 }

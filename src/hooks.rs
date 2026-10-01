@@ -19,7 +19,7 @@ use serde_json::Value;
 /// hook command uses the binary only when `ocgen hook --check` prints exactly the
 /// protocol the project was generated with; any other ocgen (older or newer)
 /// falls back to the project's own scripts, which always match the project.
-pub const PROTOCOL: &str = "ocgen-hooks 4";
+pub const PROTOCOL: &str = "ocgen-hooks 5";
 
 /// Every hook `ocgen hook <name>` accepts (matching the script names minus `.sh`).
 pub const NAMES: [&str; 9] = [
@@ -602,7 +602,10 @@ impl<'a> Hook<'a> {
         }
     }
 
-    /// PreToolUse (WebFetch): documentation is fetched over https:// only.
+    /// PreToolUse (WebFetch): the WebFetch guard — https:// only, and only to a
+    /// trusted documentation site (`OCGEN_WEBFETCH_DOMAINS`, space-separated; a
+    /// leading `*.` trusts every subdomain, not the bare domain). An empty or unset
+    /// list trusts nothing; an unreadable URL is blocked (fail closed).
     fn https_only_fetch(&self) -> Outcome {
         let url = self
             .json
@@ -610,13 +613,44 @@ impl<'a> Hook<'a> {
             .and_then(Value::as_str)
             .unwrap_or("")
             .trim_start();
-        if url.to_ascii_lowercase().starts_with("http://") {
-            let rest = url.split_once("://").map_or(url, |(_, r)| r);
+        let lower = url.to_ascii_lowercase();
+        let Some(rest) = lower.strip_prefix("https://") else {
+            return Outcome::block(if lower.starts_with("http://") {
+                let rest = url.split_once("://").map_or(url, |(_, r)| r);
+                format!("Blocked: plain http:// is not allowed for WebFetch in this project — fetch https://{rest} instead, or skip the page if it has no HTTPS version.\n")
+            } else if lower.is_empty() {
+                "Blocked: could not read the WebFetch URL, so it can't be checked against the trusted documentation sites.\n".to_string()
+            } else {
+                "Blocked: only https:// URLs may be fetched in this project.\n".to_string()
+            });
+        };
+        // The host: drop path/query/fragment, user part, port and a trailing dot.
+        let host = rest.split(['/', '?', '#']).next().unwrap_or("");
+        let host = host.rsplit('@').next().unwrap_or(host);
+        let host = host.split(':').next().unwrap_or(host);
+        let host = host.strip_suffix('.').unwrap_or(host);
+        let list = self.env("OCGEN_WEBFETCH_DOMAINS");
+        if list.trim().is_empty() {
             return Outcome::block(format!(
-                "Blocked: plain http:// is not allowed for WebFetch in this project — fetch https://{rest} instead, or skip the page if it has no HTTPS version.\n"
+                "Blocked: no documentation sites are trusted in this project, so WebFetch is off. Ask the user to trust one with `ocgen edit intent --trust-domain {host}`, or skip it.\n"
             ));
         }
-        Outcome::allow()
+        let trusted = list.split_whitespace().any(|d| {
+            let d = d.to_ascii_lowercase();
+            match d.strip_prefix('*') {
+                Some(suffix) if suffix.starts_with('.') => {
+                    host.ends_with(suffix) && host != &suffix[1..]
+                }
+                _ => host == d,
+            }
+        });
+        if trusted {
+            Outcome::allow()
+        } else {
+            Outcome::block(format!(
+                "Blocked: {host} is not a trusted documentation site for this project (trusted: {list}). Ask the user to trust it with `ocgen edit intent --trust-domain {host}`, or skip it.\n"
+            ))
+        }
     }
 
     fn config_audit(&self) -> Outcome {

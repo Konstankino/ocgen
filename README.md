@@ -233,7 +233,8 @@ delete as stale (`-`) is listed with a short diff.
   `CLAUDE_CODE_GIT_BASH_PATH`);
 - the approval gate blocks `git push` and allows `git status`, using the real generated
   command;
-- with `/intent`, the WebFetch hook blocks `http://` URLs and allows `https://` ones;
+- with `/intent`, the WebFetch guard allows only `https://` fetches to trusted docs sites and
+  blocks `http://`, other hosts and look-alikes;
 - the statusline renders;
 - a compatible `ocgen` is on your `PATH`; a stale binary is flagged;
 - `.claude/` is tracked by git;
@@ -547,10 +548,13 @@ GitHub issue (wizard: "Include the /intent command…"; on by default). You star
    performance) and what would make it wrong — with numbered findings (F1, F2…), each Verified
    (`file:line`) or Inferred (`Confidence: NN%`).
    The read-only git and `gh` commands it needs, and `WebFetch` for a list of **trusted official
-   docs sites**, are pre-approved while `/intent` runs (the skill's `allowed-tools`); everything
-   else still asks. Docs are fetched over `https://` only — never `http://`: a `PreToolUse` hook
-   (`.claude/hooks/https-only-fetch.sh`, matcher `WebFetch`) blocks any `WebFetch` to an
-   `http://` URL and points Claude at the `https://` one, and `ocgen verify` checks that it does.
+   docs sites**, are pre-approved while `/intent` runs (the skill's `allowed-tools`); other tools
+   still ask.
+   **The WebFetch guard** — a `PreToolUse` hook (`.claude/hooks/https-only-fetch.sh`, matcher
+   `WebFetch`) — allows a fetch only over `https://` and only to a trusted site; plain `http://`,
+   any other host and look-alikes (`docs.rs.evil.com`) are blocked, even in auto or
+   bypass-permissions mode. An **empty trusted list trusts nothing**: every WebFetch is blocked.
+   The guard applies to every session in the project, and `ocgen verify` checks it.
 3. **Plan and approve** — options with a recommendation, scope, risks with mitigations, acceptance
    criteria. Every statement cites its findings (F#) or is labelled an Assumption; it iterates on
    your push-back until you approve.
@@ -619,7 +623,7 @@ and inside the ocgen binary (`ocgen hook <name>`). The generated hook command us
 binary when a compatible ocgen is installed, and the script otherwise:
 
 ```sh
-if [ "$(ocgen hook --check 2>/dev/null)" = "ocgen-hooks 4" ]; then ocgen hook team-approval-gate; else sh ".../team-approval-gate.sh"; fi
+if [ "$(ocgen hook --check 2>/dev/null)" = "ocgen-hooks 5" ]; then ocgen hook team-approval-gate; else sh ".../team-approval-gate.sh"; fi
 ```
 
 - **The binary gives you** real JSON parsing instead of `grep`, and hooks that work on
