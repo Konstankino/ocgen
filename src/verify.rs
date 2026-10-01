@@ -150,6 +150,7 @@ pub fn verify(project: &Project, root: &Path, opts: &Options) -> Vec<Check> {
         out.push(hook_shell(s, cfg!(windows), find_git_bash(s).as_deref()));
         out.push(approval_gate(root, s));
         out.push(https_only_fetch(root, s));
+        out.push(notes_view(root, s));
         out.push(pre_push(project, root));
         out.push(statusline(root, s));
     }
@@ -596,6 +597,76 @@ fn https_only_fetch(root: &Path, settings: &Value) -> Check {
             name,
             Status::Pass,
             "only https:// to trusted documentation sites; http:// and other hosts are blocked",
+        ),
+    }
+}
+
+/// The /inquire notes view: after a ledger is written, the hook renders its
+/// HTML page. Probed on a scratch ledger with the browser switched off.
+fn notes_view(root: &Path, settings: &Value) -> Check {
+    let name = "/inquire notes view";
+    let Some((_, cmd)) = hook_entries(settings)
+        .into_iter()
+        .find(|(e, c)| e == "PostToolUse" && c.contains("inquire-notes"))
+    else {
+        return check(name, Status::Skip, "/inquire not enabled");
+    };
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let scratch =
+        std::env::temp_dir().join(format!("ocgen-verify-notes-{}-{nanos}", std::process::id()));
+    let notes = scratch.join(".claude/notes");
+    let md = notes.join("verify.md");
+    if std::fs::create_dir_all(&notes).is_err()
+        || std::fs::write(
+            &md,
+            "Topic: ocgen verify ledger\n## Q&A log\n### Q1 · Flow · Verified\nQ: Does the view render?\n",
+        )
+        .is_err()
+    {
+        let _ = std::fs::remove_dir_all(&scratch);
+        return check(name, Status::Warn, "could not create a scratch ledger to probe with");
+    }
+    let mut env = hook_env(root, settings);
+    env.insert("OCGEN_NOTES_OPEN".into(), "0".into());
+    let ev = serde_json::json!({
+        "session_id": "ocgen-verify", "tool_name": "Write",
+        "tool_input": { "file_path": crate::paths::for_shell(&md) }
+    })
+    .to_string();
+    let ran = run_sh(&cmd, &ev, &env, root, Duration::from_secs(20));
+    let rendered = std::fs::read_to_string(notes.join("verify.html"))
+        .is_ok_and(|h| h.contains("ocgen verify ledger"));
+    let _ = std::fs::remove_dir_all(&scratch);
+    match ran {
+        None => check(name, Status::Fail, "the hook did not finish"),
+        Some((code, _, err)) if code != 0 => check(
+            name,
+            Status::Fail,
+            format!(
+                "the hook exited {code} ({}) — it must never fail a write; run `ocgen doctor`",
+                err.lines().next().unwrap_or("").trim()
+            ),
+        ),
+        Some(_) if rendered => check(
+            name,
+            Status::Pass,
+            "each ledger gets an HTML page that refreshes the tab showing it",
+        ),
+        Some(_) if !ocgen_hook_ok() => check(
+            name,
+            Status::Warn,
+            format!(
+                "needs ocgen ({}) on PATH — without it ledgers stay Markdown only",
+                crate::hooks::PROTOCOL
+            ),
+        ),
+        Some(_) => check(
+            name,
+            Status::Fail,
+            "the hook ran but wrote no HTML page — run `ocgen doctor`",
         ),
     }
 }

@@ -19,10 +19,10 @@ use serde_json::Value;
 /// hook command uses the binary only when `ocgen hook --check` prints exactly the
 /// protocol the project was generated with; any other ocgen (older or newer)
 /// falls back to the project's own scripts, which always match the project.
-pub const PROTOCOL: &str = "ocgen-hooks 5";
+pub const PROTOCOL: &str = "ocgen-hooks 6";
 
 /// Every hook `ocgen hook <name>` accepts (matching the script names minus `.sh`).
-pub const NAMES: [&str; 9] = [
+pub const NAMES: [&str; 10] = [
     "subagent-confidence-gate",
     "team-task-completed",
     "team-task-created",
@@ -32,6 +32,7 @@ pub const NAMES: [&str; 9] = [
     "format",
     "config-audit",
     "https-only-fetch",
+    "inquire-notes",
 ];
 
 /// What a hook tells Claude Code: exit code plus stdout/stderr.
@@ -68,6 +69,7 @@ pub fn run(name: &str, payload: &str, env: &HashMap<String, String>) -> Outcome 
         "format" => h.format(),
         "config-audit" => h.config_audit(),
         "https-only-fetch" => h.https_only_fetch(),
+        "inquire-notes" => h.inquire_notes(),
         other => Outcome {
             code: 1,
             stdout: String::new(),
@@ -650,6 +652,43 @@ impl<'a> Hook<'a> {
             Outcome::block(format!(
                 "Blocked: {host} is not a trusted documentation site for this project (trusted: {list}). Ask the user to trust it with `ocgen edit intent --trust-domain {host}`, or skip it.\n"
             ))
+        }
+    }
+
+    /// PostToolUse (Write|Edit|MultiEdit): when an /inquire ledger was written,
+    /// render its HTML view and show it (refresh an open tab, else open one).
+    /// Never blocks — the ledger is already written; problems are one stderr line.
+    fn inquire_notes(&self) -> Outcome {
+        use crate::notes;
+        let path = self
+            .json
+            .pointer("/tool_input/file_path")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let note = |msg: String| Outcome {
+            code: 0,
+            stdout: String::new(),
+            stderr: format!("inquire-notes: {msg}\n"),
+        };
+        match notes::ledger_target(path) {
+            notes::Target::NotLedger => return Outcome::allow(),
+            notes::Target::BadSlug => {
+                return note(format!(
+                    "{path} has no HTML view — name ledgers with a lowercase-hyphen slug (e.g. request-flow.md)"
+                ))
+            }
+            notes::Target::Ledger { .. } => {}
+        }
+        let md = match Path::new(path) {
+            p if p.is_absolute() => p.to_path_buf(),
+            p => self.project().join(p),
+        };
+        if let Err(e) = notes::render_file(&md) {
+            return note(format!("could not render the HTML view: {e:#}"));
+        }
+        match notes::show(&md, self.env, false) {
+            Ok(_) => Outcome::allow(),
+            Err(e) => note(format!("could not show the HTML view: {e:#}")),
         }
     }
 

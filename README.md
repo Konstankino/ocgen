@@ -288,7 +288,7 @@ repo used for a plugin's marketplace and release workflow; `--team` enables
 .claude/skills/intake/SKILL.md       # /intake — a structured requirements interview
 .claude/skills/refine/SKILL.md       # /refine — propose, take reasoned push-back, iterate
 .claude/skills/deliver/SKILL.md      # /deliver — route → sharpen → requirements → plan → research → gated execution (you run it)
-.claude/skills/inquire/SKILL.md      # /inquire — understand a codebase with evidence and next-question nudges
+.claude/skills/inquire/SKILL.md      # /inquire — understand a codebase with evidence and one hint per answer; resumable ledger with a live HTML view
 .claude/skills/intent/SKILL.md       # /intent — prompt → investigate → approved plan → numbered intent file → issue draft (you run it)
 .claude/intent/issue-template.md     # /intent's GitHub issue structure — yours, written once
 .claude/intent/intent-template.md    # /intent's intent-file (ADR) structure — yours, written once
@@ -318,6 +318,9 @@ its workflows as `.claude/skills/<name>/SKILL.md`. You still type `/deliver`, `/
 - **Reserved names:** a skill of your own can't take a workflow name.
 
 **Extra hooks** (offered with the power-user defaults; none of them ever block Claude):
+- **`/inquire` HTML view** (on with `/inquire`): after each write to a ledger in
+  `.claude/notes/`, ocgen renders its HTML page and refreshes the browser tab that shows it
+  (see [The visual ledger](#the-visual-ledger)).
 - **Re-inject context after compaction** (on by default): when a conversation is compacted,
   Claude is re-pointed at `.claude/rules/` and any `/inquire` notes in `.claude/notes/`.
 - **Desktop notifications:** when Claude needs you, or a turn fails (`osascript` on macOS,
@@ -524,6 +527,53 @@ new. For a short break in the same session, `claude --continue` (or `claude --re
 to pick a conversation) restores the full chat instead. The ledger is the better choice after a
 longer gap, because it gives a compact recap and catches code changes.
 
+##### The visual ledger
+
+Every ledger has an HTML page next to it, `.claude/notes/<topic>.html`, and the two always
+match: **ocgen renders the page from the Markdown** — the model only ever writes the `.md`. The
+page shows the ledger at a glance:
+
+- the topic, last update and commit, with counts of questions, Verified, Inferred, stale and open;
+- **where you left off**: the last question and its hint;
+- your **mental model**, and a **lens coverage** bar — which lenses your questions have used
+  so far (a gap there is a good place to look next);
+- the **map**, with a Mermaid diagram of the main parts;
+- the **Q&A timeline**: one card per answer with its lens, a Verified / Inferred NN% / Stale
+  badge, `file:line` citations, discrepancies and the hint;
+- open questions and the glossary. It follows your system's light or dark theme.
+
+**It opens and refreshes by itself.** A `PostToolUse` hook (`inquire-notes`) runs after every
+write to a ledger: it re-renders the page and shows it. The first update opens the page in your
+default browser; later updates **refresh the tab that already shows it** instead of opening
+another. Close the tab, and the next update opens a fresh one. This works the same on macOS,
+Linux and Windows: ocgen runs a small viewer on `127.0.0.1` that each open tab stays connected
+to, so it knows which tabs are open without scripting a particular browser. The viewer stops by
+itself after 30 idle minutes with no tab open.
+
+To keep that working, the ledger's layout is fixed by the skill (headings, `### Q<n> · <Lens> ·
+<Verified|Inferred NN%>` entries with `Q:`/`A:`/`Cites:`/`Hint:` lines), and the helper writes it
+with the Write or Edit tool, so the hook sees every write. Older ledgers still render, and are
+converted on their next update.
+
+| Command / variable | What it does |
+|---|---|
+| `ocgen notes open [topic] [-p dir]` | Render a ledger and show it: refresh its tab, or open one. Picks by file name, then by `Topic:` line; with no topic, the latest ledger. `/inquire` runs this when it resumes. |
+| `ocgen notes render <file.md>…` | Render pages without showing them. |
+| `OCGEN_NOTES_OPEN=0` | Never open a browser (pages are still rendered). `=1` always does. |
+| `OCGEN_NOTES_BROWSER` | Open pages with this command instead of the system default (`open`, `xdg-open`, `start`). |
+
+**When nothing opens.** In CI (`CI` is set) and on Linux without a display, the hook only renders
+the pages; `ocgen notes open` still opens one when you ask. The page and the live view need the
+ocgen binary on `PATH` (the bundled script fallback does nothing), and `ocgen verify` tells you
+when it is missing. If the viewer can't start (a sandbox, say), the page is opened once as a
+plain file and won't refresh by itself.
+
+**Privacy.** The viewer listens on loopback only, every URL carries a random token, and requests
+for any other host are refused, so other sites can't read your notes. The diagrams use Mermaid
+from `cdn.jsdelivr.net` (a pinned version with an integrity hash); no note content is sent
+anywhere, and without a network the diagram's source is shown instead. Browsers allow about six
+live connections per host, so keep fewer than six ledger pages open at once.
+
 To add these commands to an existing project, re-render it with `ocgen doctor [dir]` (projects
 created by older versions get `/inquire` switched on automatically).
 
@@ -623,12 +673,14 @@ and inside the ocgen binary (`ocgen hook <name>`). The generated hook command us
 binary when a compatible ocgen is installed, and the script otherwise:
 
 ```sh
-if [ "$(ocgen hook --check 2>/dev/null)" = "ocgen-hooks 5" ]; then ocgen hook team-approval-gate; else sh ".../team-approval-gate.sh"; fi
+if [ "$(ocgen hook --check 2>/dev/null)" = "ocgen-hooks 6" ]; then ocgen hook team-approval-gate; else sh ".../team-approval-gate.sh"; fi
 ```
 
 - **The binary gives you** real JSON parsing instead of `grep`, and hooks that work on
   **native Windows**.
 - **The scripts keep the project working** for teammates and CI machines without ocgen.
+  The one exception is `inquire-notes`, which renders `/inquire`'s HTML view: its script does
+  nothing, so without ocgen the ledgers stay Markdown only.
   They need only a POSIX `sh` (Git Bash on Windows): `jq` is used when present and is never
   required, and Windows paths (`C:\Users\...`) are handled in both implementations.
 - **A stale binary can't weaken a gate.** The command uses the binary only when it reports
@@ -819,9 +871,11 @@ for a plugin; `--team` is off by default. (The `--base-url` flag is OpenCode-onl
 |---|---|
 | `ocgen landscape [dir]` (alias `horizon`) | Read-only overview: agents (alias/tools/colour), skills, workflow/output/team setup, delegation topology, and a **Checks** section. |
 | `ocgen doctor [dir] [--dry-run] [--yes]` | Repair the project and rewrite files (invalid models, colours, empty roles, bad enum values, older state files). Shows a per-file plan with diffs, flags hand edits, asks first, and backs up to `.ocgen-backup/`. |
-| `ocgen verify [dir] [--no-claude]` | Check the project works: up to date, settings valid, hooks run (in bash; Git Bash present on Windows), the approval gate blocks, http:// WebFetch is blocked, the statusline renders, ocgen on PATH is current, Claude Code validation passes. Exits 1 on failure. |
+| `ocgen verify [dir] [--no-claude]` | Check the project works: up to date, settings valid, hooks run (in bash; Git Bash present on Windows), the approval gate blocks, http:// WebFetch is blocked, `/inquire` ledgers get their HTML view, the statusline renders, ocgen on PATH is current, Claude Code validation passes. Exits 1 on failure. |
 | `ocgen approve [dir] [--minutes N] [--status] [--revoke]` | A human approves high-impact actions for a limited time. Refuses to run under Claude Code or without a terminal. |
 | `ocgen verify [dir] --run-check` | Also run the project's check command. |
+| `ocgen notes open [topic]` | Show an `/inquire` ledger's HTML page: refresh the tab that shows it, or open one ([details](#the-visual-ledger)). |
+| `ocgen notes render <file.md>…` | Render ledgers to their HTML pages without opening them. |
 | `ocgen managed-settings` | Print a recommended organisation policy (`managed-settings.json`): no bypass mode, secrets unreadable, high-impact commands always ask, strict sandbox. |
 | `ocgen fields` (alias `reference`) | Explain every configurable field, including the Claude-specific ones (alias, tools, skills, output/plugin, agent teams). |
 
@@ -868,6 +922,7 @@ claude/agent.md.j2              # one generic Claude subagent
 claude/CLAUDE.md.j2             # project instructions + roster
 claude/commands/*.md.j2         # multi / intake / refine / deliver / inquire / intent / team… (rendered as skills)
 claude/intent/*.md              # default /intent issue and intent-file templates (copied into new projects)
+claude/notes/ledger.html.j2     # the /inquire ledger's HTML page
 claude/skill/SKILL.md.j2        # one generic skill
 claude/skill-presets.toml       # add-skill presets (command / knowledge / forked-research)
 claude/hooks/team-*.sh          # Agent Teams quality-gate hook stubs

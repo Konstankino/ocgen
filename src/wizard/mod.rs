@@ -543,7 +543,7 @@ fn build_claude_project(
     p.claude.workflow.inquire = ask_confirm(
         theme,
         "Include the /inquire codebase Q&A command?",
-        "Sharpens your questions, answers with file:line evidence, ends with one hint toward the next, keeps a git-ignored ledger in .claude/notes/.",
+        "Sharpens your questions, answers with file:line evidence, ends with one hint toward the next, keeps a git-ignored ledger in .claude/notes/ with an HTML view that refreshes in your browser.",
         true,
     )?;
     let (intent, intent_settings) =

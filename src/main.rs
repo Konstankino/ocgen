@@ -8,7 +8,9 @@ mod wizard;
 use anyhow::Result;
 use clap::Parser;
 
-use cli::{AddWhat, Cli, Command, EditWhat, OutputArg, ShowWhat, TeamCli, TemplatesAction};
+use cli::{
+    AddWhat, Cli, Command, EditWhat, NotesAction, OutputArg, ShowWhat, TeamCli, TemplatesAction,
+};
 use ocgen::templates;
 
 fn main() -> Result<()> {
@@ -135,6 +137,52 @@ fn main() -> Result<()> {
             }
             TemplatesAction::Edit { path } => wizard::run_templates_edit(path)?,
         },
+        Command::Notes { action } => run_notes(action)?,
     }
     Ok(())
+}
+
+fn run_notes(action: NotesAction) -> Result<()> {
+    use ocgen::notes::{self, Shown};
+    match action {
+        NotesAction::Open { topic, path } => {
+            let dir = notes::notes_dir(std::path::Path::new(&path)).ok_or_else(|| {
+                anyhow::anyhow!("no .claude/notes/ above {path} — start a ledger with /inquire")
+            })?;
+            let md = notes::find_ledger(&dir, topic.as_deref())?;
+            let html = notes::render_file(&md)?;
+            let env: std::collections::HashMap<String, String> = std::env::vars().collect();
+            match notes::show(&md, &env, true)? {
+                Shown::Off => println!(
+                    "Rendered {} (not opened: OCGEN_NOTES_OPEN=0)",
+                    html.display()
+                ),
+                Shown::Reloaded(n) => println!(
+                    "Refreshed {n} open tab(s) of {}",
+                    notes::viewer::read_info(&dir)
+                        .map(|i| i.url(&slug_of(&md)))
+                        .unwrap_or_else(|| html.display().to_string())
+                ),
+                Shown::Pending => println!("A tab for {} is opening", html.display()),
+                Shown::Opened(url) => println!("Opened {url}"),
+                Shown::OpenedFile(p) | Shown::FileAlreadyOpened(p) => {
+                    println!("Opened {} (live refresh unavailable)", p.display())
+                }
+            }
+        }
+        NotesAction::Render { files } => {
+            for f in files {
+                let html = notes::render_file(std::path::Path::new(&f))?;
+                println!("{}", html.display());
+            }
+        }
+        NotesAction::Serve { dir } => notes::viewer::serve(std::path::Path::new(&dir))?,
+    }
+    Ok(())
+}
+
+fn slug_of(md: &std::path::Path) -> String {
+    md.file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default()
 }

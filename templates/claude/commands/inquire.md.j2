@@ -1,6 +1,7 @@
 ---
 description: Understand a codebase by asking questions — sharpen each one, answer with evidence, get a hint toward the next
 argument-hint: "[topic or first question — empty to resume]"
+allowed-tools: Bash(ocgen notes open:*)
 ---
 Help me understand this codebase: $ARGUMENTS
 
@@ -9,8 +10,11 @@ Be my research partner, not an oracle: answer with evidence, and coach me toward
 Stay read-only — the only file written is the ledger, and a background helper writes it (step 4).
 
 ## 0. Resume or orient
-Each topic has a ledger at `.claude/notes/<topic-slug>.md`; make sure `.claude/notes/` is git-ignored
-(add the line if it is missing). If this session runs inside a worktree (its path is under
+Each topic has a ledger at `.claude/notes/<topic-slug>.md` — the slug is lowercase letters, digits
+and hyphens (`request-flow`); make sure `.claude/notes/` is git-ignored (add the line if it is
+missing). Each ledger has a visual companion, `.claude/notes/<topic-slug>.html`: ocgen renders it
+from the Markdown after every write and shows it in my browser, refreshing the tab that already
+shows it — never write or edit the `.html` yourself. If this session runs inside a worktree (its path is under
 `.claude/worktrees/`), warn me first: notes written here are lost when the worktree is removed, so
 studying — which is read-only — belongs in the main checkout.
 
@@ -19,12 +23,14 @@ studying — which is read-only — belongs in the main checkout.
 - **With arguments:** match an existing ledger by its file name or its `Topic:` line. If one
   matches, resume it; otherwise start a new ledger and orient.
 
-**Refresher** (when resuming — keep it to one screen, before anything else):
+**Refresher** (when resuming — keep it to one screen, before anything else). First run
+`ocgen notes open <topic-slug>` to put the ledger's page in front of me; if that fails (no ocgen),
+carry on without it.
 1. **Where we left off** — the ledger's last question, in one line, and the hint that followed it.
 2. **What you know** — the ledger's **Mental model** bullets.
 3. **What changed since** — run `git log --oneline <ledger Commit>..HEAD -- <files cited in the
-   ledger>`. Mark every answer whose cited files changed as **Stale — re-verify**, and offer to
-   re-check those first. If this isn't a git repo, say that you can't check for changes.
+   ledger>`. Mark every answer whose cited files changed as **Stale — re-verify** (the helper
+   appends ` · Stale` to its `### Q` heading), and offer to re-check those first. If this isn't a git repo, say that you can't check for changes.
 4. **Warm-up** (optional, one line) — offer 2 quick recall questions from earlier answers; skip it
    if I decline.
 5. Ask what I want to ask next — following that hint, re-verifying stale answers, or something
@@ -32,7 +38,8 @@ studying — which is read-only — belongs in the main checkout.
 
 **Orient** (new topic): in parallel and read-only (explorer subagents where useful), map entry
 points, the module map, core types and data flow, build/test commands, and recent git-activity
-hotspots. Write the ledger (format in step 4) with a one-screen **map**, and show me the map.
+hotspots. Write the ledger (format in step 4) with a one-screen **map** — bullets plus a
+`mermaid` flowchart of the main parts (≤ 15 nodes, labels in double quotes) — and show me the map.
 
 ## 1. Sharpen the question
 Before answering, restate what I'm really after. If the question is vague, rests on an unverified
@@ -76,24 +83,45 @@ read. Instead hand the update to a **background subagent** (`model: haiku` is en
 text to write, and carry on with the conversation. Keep one ledger writer at a time — if the
 previous update is still running, wait for it before starting the next, so they never collide.
 Only if subagents are unavailable, edit it directly and keep the change small. Don't mention the
-update in your reply.
+update in your reply. The helper writes with the **Write or Edit tool**, never through Bash: the
+write is what triggers ocgen to re-render the HTML page, so a Bash write leaves the page stale.
 
-The ledger keeps this header at the top, rewritten each time:
+The ledger has exactly this layout (ocgen draws its page from it — keep the headings and keys):
 
-```
+````
 Topic: <human-readable topic>
 Updated: <date>   Commit: <output of git rev-parse --short HEAD>
 ## Resume point
 Last question: <the question as sharpened>
-Hint: <the hint that followed it, with its lens>
+Hint: (<Lens>) <the hint that followed it>
 ## Mental model
-<≤ 7 bullets: what I understand so far>
+- <≤ 7 bullets: what I understand so far>
+## Map
+- <one screen of bullets: entry points, modules, data flow>
+```mermaid
+flowchart LR
+  cli["src/cli.rs"] --> core["src/lib.rs"]
 ```
+## Q&A log
+### Q<n> · <Lens> · <Verified|Inferred NN%>
+Q: <the question as sharpened>
+A: <one-line answer>
+Cites: <file:line>, <file:line>
+Hint: (<Lens>) <the hint>
+## Open questions
+- <open question or hypothesis>
+## Glossary
+- **<term>** — <meaning, with its file>
+````
 
-Below it, append the answer to the **Q&A log** in ≤ 4 lines: the question, a one-line answer, the key
-`file:line` citations, and Verified or Inferred (discrepancies you found get one extra line each).
-Refresh the **Map**, the **Glossary** of project terms, and **Open questions / hypotheses**. It's a
-reference to resume from, not a transcript — the full answer is already in our conversation.
+Rewrite the header (down to **Mental model**) each time. Append each answer to the **Q&A log** in
+≤ 4 lines: the `Q:` `A:` `Cites:` `Hint:` lines under a `### Q<n>` heading that names the lens the
+question used (one of the six in step 3) and its evidence — `Verified`, or `Inferred` with its
+confidence (`Inferred 70%`); a stale answer gets ` · Stale` appended to its heading, and each
+discrepancy you found gets one extra `Note:` line. Refresh the **Map** (diagram included), the
+**Glossary** of project terms, and **Open questions**. If the ledger is in an older layout, convert
+it on this update. It's a reference to resume from, not a transcript — the full answer is already in
+our conversation.
 
 ## 5. Checkpoint
 Every ~5 questions, or when I ask: summarize my mental model in ≤ 10 bullets (and have the

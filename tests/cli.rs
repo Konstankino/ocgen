@@ -1403,3 +1403,106 @@ fn edit_intent_trusts_and_untrusts_domains() {
         .success()
         .stdout(contains("--trust-domain"));
 }
+
+// ------------------------------------------------------------ ocgen notes --
+
+const NOTES_LEDGER: &str = "Topic: Request flow\nUpdated: 2026-10-01   Commit: abc1234\n\
+## Q&A log\n### Q1 · Flow · Verified\nQ: How?\nA: Like this.\n";
+
+fn notes_project() -> (tempfile::TempDir, std::path::PathBuf) {
+    let dir = tempdir().unwrap();
+    let notes = dir.path().join(".claude/notes");
+    std::fs::create_dir_all(&notes).unwrap();
+    std::fs::write(notes.join("request-flow.md"), NOTES_LEDGER).unwrap();
+    std::fs::write(
+        notes.join("older.md"),
+        "Topic: Something older\n## Q&A log\n",
+    )
+    .unwrap();
+    (dir, notes)
+}
+
+#[test]
+fn notes_help_lists_open_and_render() {
+    ocgen()
+        .args(["notes", "--help"])
+        .assert()
+        .success()
+        .stdout(contains("open"))
+        .stdout(contains("render"))
+        .stdout(contains("OCGEN_NOTES_OPEN"))
+        .stdout(contains("serve").not());
+    ocgen()
+        .arg("--help")
+        .assert()
+        .success()
+        .stdout(contains("notes"));
+}
+
+#[test]
+fn notes_render_writes_the_html() {
+    let (_dir, notes) = notes_project();
+    let md = notes.join("request-flow.md");
+    ocgen()
+        .args(["notes", "render"])
+        .arg(&md)
+        .assert()
+        .success()
+        .stdout(contains("request-flow.html"));
+    let page = std::fs::read_to_string(notes.join("request-flow.html")).unwrap();
+    assert!(page.contains("Request flow") && page.contains("badge verified"));
+}
+
+#[test]
+fn notes_open_matches_topic_line_or_latest_and_prints_the_url() {
+    let (dir, notes) = notes_project();
+    let log = dir.path().join("opened.log");
+    let fake = dir.path().join("fake.sh");
+    std::fs::write(
+        &fake,
+        format!(
+            "printf '%s\\n' \"$1\" >> '{}'\n",
+            ocgen::paths::for_shell(&log)
+        ),
+    )
+    .unwrap();
+    let browser = format!("sh '{}'", ocgen::paths::for_shell(&fake));
+    let run = |args: &[&str]| {
+        ocgen()
+            .args(["notes", "open"])
+            .args(args)
+            .arg("--path")
+            .arg(dir.path())
+            .env("OCGEN_NOTES_BROWSER", &browser)
+            .env("OCGEN_NOTES_IDLE_SECS", "30")
+            .env_remove("OCGEN_NOTES_OPEN")
+            .assert()
+            .success()
+    };
+    // By Topic: line (a substring), even in CI: an explicit open always shows.
+    run(&["something older"]).stdout(contains("Opened http://127.0.0.1:"));
+    assert!(notes.join("older.html").is_file());
+    // By slug, then the most recently changed one.
+    run(&["request-flow"]).stdout(contains("request-flow.html"));
+    std::fs::write(
+        notes.join("older.md"),
+        "Topic: Something older\n## Q&A log\n- x\n",
+    )
+    .unwrap();
+    run(&[]).stdout(contains("older.html"));
+    let opened = std::fs::read_to_string(&log).unwrap();
+    assert_eq!(opened.lines().count(), 3, "{opened}");
+    assert!(opened.lines().all(ocgen::notes::browser::is_viewer_url));
+    // Unknown topics name the ledgers there are.
+    ocgen()
+        .args(["notes", "open", "nope"])
+        .arg("--path")
+        .arg(dir.path())
+        .env("OCGEN_NOTES_OPEN", "0")
+        .assert()
+        .failure()
+        .stderr(contains("request-flow"));
+    if let Some(info) = ocgen::notes::viewer::read_info(&notes) {
+        ocgen::notes::viewer::quit(&info);
+    }
+}

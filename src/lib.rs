@@ -22,6 +22,7 @@ pub mod diff;
 pub mod gitcheck;
 pub mod hooks;
 pub mod manifest;
+pub mod notes;
 pub mod paths;
 pub mod render;
 pub mod risk;

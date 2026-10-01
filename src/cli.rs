@@ -143,6 +143,50 @@ pub enum Command {
         #[command(subcommand)]
         action: TemplatesAction,
     },
+    /// Show /inquire ledgers (.claude/notes/*.md) as HTML pages.
+    ///
+    /// Each ledger has a sibling .html that ocgen renders from the Markdown. A
+    /// hook re-renders it after every write and refreshes the browser tab that
+    /// shows it (opening one when none does); these commands do it by hand.
+    #[command(after_help = NOTES_EXAMPLES)]
+    Notes {
+        #[command(subcommand)]
+        action: NotesAction,
+    },
+}
+
+const NOTES_EXAMPLES: &str = "Examples:
+  ocgen notes open                       the most recently updated ledger
+  ocgen notes open request-flow          by file name (slug)
+  ocgen notes open \"request flow\"        by its Topic: line
+  ocgen notes render .claude/notes/request-flow.md
+
+Environment:
+  OCGEN_NOTES_OPEN=0     never open a browser (=1: always, even in CI or without a display)
+  OCGEN_NOTES_BROWSER    a command to open pages with instead of the system default";
+
+#[derive(Subcommand)]
+pub enum NotesAction {
+    /// Render a ledger and show it: refresh the tab that shows it, or open one.
+    Open {
+        /// Ledger slug or topic (default: the most recently updated ledger).
+        topic: Option<String>,
+        /// Directory inside the project (default: current dir).
+        #[arg(long, short, default_value = ".")]
+        path: String,
+    },
+    /// Render ledgers to their HTML pages without showing them.
+    Render {
+        /// Ledger files (.claude/notes/<topic>.md).
+        #[arg(required = true)]
+        files: Vec<String>,
+    },
+    /// Run the live viewer for a notes directory (started by the hook).
+    #[command(hide = true)]
+    Serve {
+        /// The .claude/notes directory.
+        dir: String,
+    },
 }
 
 /// Team governance defaults gathered from CLI flags, used to seed the wizard's

@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta name="generator" content="ocgen — rendered from the /inquire Markdown ledger; edit the .md, not this file">
+<title>{{ topic }} · /inquire</title>
+<style>
+:root {
+  --bg: #f7f7f5; --surface: #ffffff; --surface-2: #f0f0ec; --text: #1d1d1b; --muted: #6b6b66;
+  --border: #e2e2dc; --accent: #3b5bdb; --code-bg: #f0f0ec;
+  --verified: #2b8a3e; --verified-bg: #e6f4ea; --inferred: #b35c00; --inferred-bg: #fff1e0;
+  --stale: #c92a2a; --stale-bg: #fdecec; --note-bg: #fff8e1; --note-border: #f2c94c;
+  --l-structure: #3b5bdb; --l-flow: #0c8599; --l-contract: #7048e8; --l-rationale: #c2255c;
+  --l-change-impact: #e67700; --l-failure: #c92a2a; --l-other: #868e96; --on-lens: #ffffff;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #161615; --surface: #1f1f1d; --surface-2: #272724; --text: #ececea; --muted: #a3a39c;
+    --border: #34342f; --accent: #91a7ff; --code-bg: #2b2b28;
+    --verified: #8ce99a; --verified-bg: #1d3323; --inferred: #ffc078; --inferred-bg: #3a2a15;
+    --stale: #ffa8a8; --stale-bg: #3d1f1f; --note-bg: #332c14; --note-border: #a68a2d;
+    --l-structure: #748ffc; --l-flow: #3bc9db; --l-contract: #b197fc; --l-rationale: #f783ac;
+    --l-change-impact: #ffa94d; --l-failure: #ff8787; --l-other: #adb5bd; --on-lens: #161615;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+main { max-width: 980px; margin: 0 auto; padding: 32px 16px 64px; }
+h1 { font-size: 28px; line-height: 1.25; margin: 4px 0 12px; }
+h2 { font-size: 13px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 0 0 12px; }
+h4 { margin: 12px 0 6px; }
+code { font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: var(--code-bg); padding: 1px 5px; border-radius: 4px; }
+pre { background: var(--code-bg); padding: 12px; border-radius: 8px; overflow-x: auto; }
+pre code { background: none; padding: 0; }
+pre.mermaid { background: var(--surface); text-align: center; }
+pre.mermaid svg { max-width: 100%; height: auto; }
+a { color: var(--accent); }
+table { border-collapse: collapse; width: 100%; }
+th, td { text-align: left; vertical-align: top; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+th { color: var(--muted); font-weight: 600; }
+.eyebrow { color: var(--muted); font-size: 13px; }
+.meta { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; color: var(--muted); font-size: 13px; }
+.pill { background: var(--surface-2); border: 1px solid var(--border); border-radius: 999px; padding: 2px 10px; color: var(--text); }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 18px 20px; margin: 16px 0; }
+.resume { border-left: 4px solid var(--accent); }
+.resume .q { font-size: 17px; font-weight: 600; margin: 0 0 8px; }
+.hint { color: var(--muted); }
+.lens-tag { display: inline-block; font-size: 12px; font-weight: 600; border-radius: 4px; padding: 0 6px; margin-right: 6px; color: var(--on-lens); background: var(--l-other); }
+.grid { display: grid; grid-template-columns: 1fr; gap: 0 16px; }
+@media (min-width: 760px) { .grid { grid-template-columns: 3fr 2fr; } }
+.lens-bar { display: flex; height: 12px; border-radius: 6px; overflow: hidden; background: var(--surface-2); margin: 4px 0 12px; }
+.lens-bar span { display: block; height: 100%; }
+.legend { list-style: none; padding: 0; margin: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 4px 12px; font-size: 13px; }
+.legend li { display: flex; align-items: center; gap: 6px; }
+.legend .dot { width: 10px; height: 10px; border-radius: 50%; flex: none; background: var(--l-other); }
+.legend .unused { color: var(--muted); }
+.structure { background: var(--l-structure) !important; } .flow { background: var(--l-flow) !important; }
+.contract { background: var(--l-contract) !important; } .rationale { background: var(--l-rationale) !important; }
+.change-impact { background: var(--l-change-impact) !important; } .failure { background: var(--l-failure) !important; }
+.other { background: var(--l-other) !important; }
+.timeline { position: relative; margin-left: 10px; padding-left: 22px; border-left: 2px solid var(--border); }
+.entry { position: relative; }
+.entry::before { content: ""; position: absolute; left: -31px; top: 22px; width: 14px; height: 14px; border-radius: 50%; background: var(--surface); border: 3px solid var(--accent); }
+.entry.is-stale::before { border-color: var(--stale); }
+.entry-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 8px; }
+.qn { font-weight: 700; color: var(--muted); }
+.badge { font-size: 12px; font-weight: 600; border-radius: 999px; padding: 1px 9px; }
+.badge.verified { color: var(--verified); background: var(--verified-bg); }
+.badge.inferred { color: var(--inferred); background: var(--inferred-bg); }
+.badge.stale { color: var(--stale); background: var(--stale-bg); }
+.entry .question { font-weight: 600; margin: 0 0 6px; }
+.entry .answer { margin: 0 0 8px; }
+.cites { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
+.note { background: var(--note-bg); border-left: 3px solid var(--note-border); padding: 6px 10px; border-radius: 4px; margin: 6px 0; font-size: 14px; }
+.open-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
+.open-list li { background: var(--surface-2); border-radius: 8px; padding: 8px 12px; }
+.open-list li::before { content: "?"; display: inline-block; width: 20px; font-weight: 700; color: var(--accent); }
+.empty { color: var(--muted); font-style: italic; }
+.offline { display: none; position: sticky; top: 0; z-index: 2; background: var(--stale-bg); color: var(--stale); padding: 8px 16px; text-align: center; font-size: 14px; }
+body[data-viewer="offline"] .offline { display: block; }
+footer { color: var(--muted); font-size: 12px; margin-top: 32px; text-align: center; }
+</style>
+</head>
+<body>
+<div class="offline">Live view disconnected — this page won't refresh by itself. Run <code>ocgen notes open</code> to reconnect.</div>
+<main>
+  <header>
+    <div class="eyebrow">/inquire ledger</div>
+    <h1>{{ topic }}</h1>
+    <div class="meta">
+      {% if updated %}<span>Updated {{ updated }}</span>{% endif %}
+      {% if commit %}<span>at <code>{{ commit }}</code></span>{% endif %}
+      <span class="pill">{{ count_questions }} question{% if count_questions != 1 %}s{% endif %}</span>
+      <span class="pill">{{ count_verified }} verified</span>
+      <span class="pill">{{ count_inferred }} inferred</span>
+      {% if count_stale %}<span class="pill">{{ count_stale }} stale</span>{% endif %}
+      <span class="pill">{{ count_open }} open</span>
+    </div>
+  </header>
+
+  {% if resume_question or resume_hint %}
+  <section class="card resume">
+    <h2>Where we left off</h2>
+    {% if resume_question %}<p class="q">{{ resume_question }}</p>{% endif %}
+    {% if resume_hint %}<p class="hint">{% if resume_hint_lens %}<span class="lens-tag {{ resume_hint_lens|lower|replace(' ', '-') }}">{{ resume_hint_lens }}</span>{% endif %}Hint: {{ resume_hint }}</p>{% endif %}
+  </section>
+  {% endif %}
+
+  <div class="grid">
+    <section class="card">
+      <h2>Mental model</h2>
+      {% if mental_model %}<ul>{% for m in mental_model %}<li>{{ m }}</li>{% endfor %}</ul>
+      {% else %}<p class="empty">Nothing yet.</p>{% endif %}
+    </section>
+    <section class="card">
+      <h2>Lens coverage</h2>
+      <div class="lens-bar" role="img" aria-label="Questions per lens">
+        {% for l in lenses %}{% if l.count %}<span class="{{ l.class }}" style="width: {{ l.pct }}%" title="{{ l.name }}: {{ l.count }}"></span>{% endif %}{% endfor %}
+      </div>
+      <ul class="legend">
+        {% for l in lenses %}<li{% if not l.count %} class="unused"{% endif %}><span class="dot {{ l.class }}"></span>{{ l.name }} · {{ l.count }}</li>{% endfor %}
+      </ul>
+    </section>
+  </div>
+
+  {% if map_html or mermaid %}
+  <section class="card">
+    <h2>Map</h2>
+    {{ map_html }}
+    {% for m in mermaid %}<pre class="mermaid">{{ m }}</pre>
+    {% endfor %}
+  </section>
+  {% endif %}
+
+  <section>
+    <h2>Q&amp;A log</h2>
+    {% if entries %}
+    <div class="timeline">
+      {% for e in entries %}
+      <article class="card entry{% if e.stale %} is-stale{% endif %}" id="{{ e.id }}">
+        <div class="entry-head">
+          <span class="qn">Q{{ e.n }}</span>
+          <span class="lens-tag {{ e.lens_class }}">{{ e.lens }}</span>
+          {% if e.evidence == "verified" %}<span class="badge verified">Verified</span>
+          {% elif e.evidence == "inferred" %}<span class="badge inferred">Inferred{% if e.confidence %} {{ e.confidence }}{% endif %}</span>{% endif %}
+          {% if e.stale %}<span class="badge stale">Stale — re-verify</span>{% endif %}
+        </div>
+        {% if e.q %}<p class="question">{{ e.q }}</p>{% endif %}
+        {% if e.a %}<p class="answer">{{ e.a }}</p>{% endif %}
+        {{ e.extra }}
+        {% if e.cites %}<div class="cites">{% for c in e.cites %}{{ c }}{% endfor %}</div>{% endif %}
+        {% for n in e.notes %}<div class="note">{{ n }}</div>{% endfor %}
+        {% if e.hint %}<p class="hint">{% if e.hint_lens %}<span class="lens-tag {{ e.hint_lens|lower|replace(' ', '-') }}">{{ e.hint_lens }}</span>{% endif %}Hint: {{ e.hint }}</p>{% endif %}
+      </article>
+      {% endfor %}
+    </div>
+    {% endif %}
+    {% if qa_html %}<div class="card">{{ qa_html }}</div>{% endif %}
+    {% if not entries and not qa_html %}<p class="empty">No questions answered yet.</p>{% endif %}
+  </section>
+
+  <section class="card">
+    <h2>Open questions</h2>
+    {% if open_questions %}<ul class="open-list">{% for q in open_questions %}<li>{{ q }}</li>{% endfor %}</ul>
+    {% else %}<p class="empty">None recorded.</p>{% endif %}
+  </section>
+
+  {% if glossary %}
+  <section class="card">
+    <h2>Glossary</h2>
+    <table>
+      <tr><th>Term</th><th>Meaning</th></tr>
+      {% for g in glossary %}<tr><td><strong>{{ g.term }}</strong></td><td>{{ g.def }}</td></tr>
+      {% endfor %}
+    </table>
+  </section>
+  {% endif %}
+
+  {% for s in extra %}
+  <section class="card">
+    <h2>{{ s.title }}</h2>
+    {{ s.html }}
+  </section>
+  {% endfor %}
+
+  <footer>Rendered by ocgen from the Markdown ledger next to this file — the .md is the source of truth.</footer>
+</main>
+{% if has_mermaid %}
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11.17.2/dist/mermaid.min.js" integrity="sha384-EOXBFmc3gx5mb+vn0vPvvGqACToJD24hhacX5Yx+8NUUQrHIle/Qi5Bg9o3zKwW2" crossorigin="anonymous"></script>
+<script>
+if (window.mermaid) {
+  var dark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+  window.mermaid.initialize({ startOnLoad: false, securityLevel: "strict", theme: dark ? "dark" : "neutral" });
+  window.mermaid.run({ querySelector: "pre.mermaid", suppressErrors: true });
+}
+</script>
+{% endif %}
+</body>
+</html>

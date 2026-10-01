@@ -1385,6 +1385,7 @@ fn claude_team_enabled_without_hook_stubs() {
     a.body = "b".into();
     p.agents = vec![a];
     p.claude.workflow.intent = false; // its https-only WebFetch hook isn't a team hook
+    p.claude.workflow.inquire = false; // nor is its notes-view hook
 
     let dir = tempdir().unwrap();
     p.scaffold(dir.path(), false).unwrap();
@@ -2151,6 +2152,24 @@ fn inquire_command_and_router() {
     // Ledger writes go to a quiet background subagent, not inline diffs.
     assert!(cmd.contains("background subagent") && cmd.contains("haiku"));
     assert!(cmd.contains("≤ 4 lines"));
+    // A structured ledger the HTML view can draw: numbered entries tagged with
+    // lens and evidence, a mermaid map, open questions and a glossary.
+    for needle in [
+        "### Q<n> · <Lens> · <Verified|Inferred NN%>",
+        "```mermaid",
+        "## Open questions",
+        "## Glossary",
+        " · Stale",
+    ] {
+        assert!(cmd.contains(needle), "ledger format lacks {needle}");
+    }
+    // The HTML view is ocgen's job: written with Write/Edit so the hook sees
+    // it, never edited by the model, reopened on resume.
+    assert!(cmd.contains(".claude/notes/<topic-slug>.html"));
+    assert!(cmd.contains("Write or Edit tool"));
+    assert!(cmd.contains("never write or edit the `.html`"));
+    assert!(cmd.contains("ocgen notes open <topic-slug>"));
+    assert!(cmd.contains("allowed-tools: Bash(ocgen notes open:*)"));
     assert!(
         !cmd.contains("{{") && !cmd.contains("{%"),
         "unrendered Jinja"
@@ -3422,13 +3441,16 @@ fn optional_hooks_are_wired_with_their_scripts() {
         assert!(ok.success(), "{script} parses");
     }
 
-    // Off by default: none of them.
+    // Off by default: none of them (PostToolUse only has the /inquire notes view).
     let dir2 = tempdir().unwrap();
     claude_default("hoff").scaffold(dir2.path(), false).unwrap();
     let s2 = settings_of(dir2.path());
-    for ev in ["Notification", "PostToolUse", "ConfigChange"] {
+    for ev in ["Notification", "ConfigChange"] {
         assert!(hook_groups(&s2, ev).is_empty(), "{ev} off by default");
     }
+    assert!(!hook_groups(&s2, "PostToolUse")
+        .iter()
+        .any(|g| g.to_string().contains("format.sh")));
     assert!(!dir2.path().join(".claude/hooks/notify.sh").exists());
 }
 
@@ -4888,4 +4910,118 @@ fn the_trusted_list_reaches_the_webfetch_guard_and_an_empty_one_trusts_nothing()
     assert!(!tools.contains("WebFetch"), "nothing pre-approved: {tools}");
     assert!(!md.contains("trusted domains ()"));
     assert!(md.contains("No documentation sites are trusted"), "{md}");
+}
+
+// ------------------------------------------------------ /inquire HTML view --
+
+#[test]
+fn inquire_registers_the_notes_hook() {
+    let dir = tempdir().unwrap();
+    let mut p = claude_default("nv");
+    p.claude.hooks_extra.format_cmd = "cargo fmt".into();
+    p.claude.output = Output {
+        project: true,
+        plugin: true,
+    };
+    p.claude.plugin.repo_owner = "me".into();
+    p.claude.plugin.repo_name = "nv".into();
+    p.scaffold(dir.path(), false).unwrap();
+
+    let s = settings_of(dir.path());
+    let groups = hook_groups(&s, "PostToolUse");
+    assert!(
+        groups[0].to_string().contains("format.sh"),
+        "the formatter stays first"
+    );
+    let notes = groups
+        .iter()
+        .find(|g| g.to_string().contains("inquire-notes"))
+        .expect("a PostToolUse group for the notes view");
+    assert_eq!(notes["matcher"], "Write|Edit|MultiEdit");
+    let cmd = notes["hooks"][0]["command"].as_str().unwrap();
+    assert!(
+        cmd.contains("ocgen hook inquire-notes") && cmd.contains("ocgen-hooks 6"),
+        "{cmd}"
+    );
+    assert_eq!(notes["hooks"][0]["shell"], "bash");
+    let script = dir.path().join(".claude/hooks/inquire-notes.sh");
+    assert!(std::process::Command::new("sh")
+        .arg("-n")
+        .arg(&script)
+        .status()
+        .unwrap()
+        .success());
+    let plugin: serde_json::Value =
+        serde_json::from_str(&read(dir.path(), "plugin/nv/hooks/hooks.json")).unwrap();
+    assert!(plugin["hooks"]["PostToolUse"]
+        .to_string()
+        .contains("${CLAUDE_PLUGIN_ROOT}/hooks/inquire-notes.sh"));
+    assert!(dir
+        .path()
+        .join("plugin/nv/hooks/inquire-notes.sh")
+        .is_file());
+
+    // Off with /inquire.
+    let dir = tempdir().unwrap();
+    let mut p = claude_default("nv2");
+    p.claude.workflow.inquire = false;
+    p.scaffold(dir.path(), false).unwrap();
+    assert!(!settings_of(dir.path())
+        .to_string()
+        .contains("inquire-notes"));
+    assert!(!dir.path().join(".claude/hooks/inquire-notes.sh").exists());
+}
+
+#[test]
+fn verify_reports_the_notes_view() {
+    use ocgen::verify::Status;
+    let dir = tempdir().unwrap();
+    claude_default("vn").scaffold(dir.path(), false).unwrap();
+    // Whatever ocgen is on PATH, a working project never fails this check.
+    let checks = verify_no_claude(dir.path());
+    assert_ne!(
+        status_of(&checks, "notes view"),
+        Status::Fail,
+        "{checks:#?}"
+    );
+
+    // With the current binary, the view renders.
+    let set_cmd = |cmd: String| {
+        let mut s = settings_of(dir.path());
+        for g in s["hooks"]["PostToolUse"].as_array_mut().unwrap() {
+            if g.to_string().contains("inquire-notes") {
+                g["hooks"][0]["command"] = cmd.clone().into();
+            }
+        }
+        fs::write(
+            dir.path().join(".claude/settings.json"),
+            serde_json::to_string_pretty(&s).unwrap(),
+        )
+        .unwrap();
+    };
+    let bin = ocgen::paths::for_shell(Path::new(env!("CARGO_BIN_EXE_ocgen")));
+    set_cmd(format!("\"{bin}\" hook inquire-notes # inquire-notes"));
+    let checks = verify_no_claude(dir.path());
+    assert_eq!(
+        status_of(&checks, "notes view"),
+        Status::Pass,
+        "{checks:#?}"
+    );
+
+    // A hook that renders nothing is reported.
+    set_cmd("cat >/dev/null # inquire-notes".into());
+    let checks = verify_no_claude(dir.path());
+    assert_ne!(
+        status_of(&checks, "notes view"),
+        Status::Pass,
+        "{checks:#?}"
+    );
+
+    // Skipped without /inquire.
+    let dir = tempdir().unwrap();
+    let mut p = claude_default("vn2");
+    p.claude.workflow.inquire = false;
+    p.scaffold(dir.path(), false).unwrap();
+    let checks = verify_no_claude(dir.path());
+    assert_eq!(status_of(&checks, "notes view"), Status::Skip);
 }

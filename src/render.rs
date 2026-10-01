@@ -533,6 +533,11 @@ impl Project {
             let body = templates::load("claude/hooks/https-only-fetch.sh")?;
             components.push(("hooks/https-only-fetch.sh".to_string(), body));
         }
+        // /inquire ledgers get an HTML view, rendered and shown by this hook.
+        if self.claude.workflow.inquire {
+            let body = templates::load("claude/hooks/inquire-notes.sh")?;
+            components.push(("hooks/inquire-notes.sh".to_string(), body));
+        }
         // Shared loop guard, sourced by every blocking hook so no gate can hold an
         // agent forever.
         if self.has_blocking_hooks() {
@@ -1138,6 +1143,13 @@ impl Project {
             push(
                 "PostToolUse",
                 json!({ "matcher": "Edit|Write", "hooks": [ command_hook(hook_cmd(&format!("OCGEN_FORMAT_CMD='{fmt}' {prefix}"), dir, "format.sh")) ] }),
+            );
+        }
+        if self.claude.workflow.inquire {
+            // Re-render an /inquire ledger's HTML view after each write and show it.
+            push(
+                "PostToolUse",
+                json!({ "matcher": "Write|Edit|MultiEdit", "hooks": [ command_hook(hook_cmd(prefix, dir, "inquire-notes.sh")) ] }),
             );
         }
         if self.claude.workflow.intent {

@@ -110,7 +110,9 @@ it sharpens each question before answering, cites `file:line` evidence tagged Ve
 and ends each answer with one hint — where your understanding is thinnest, by lens (structure,
 flow, contract, rationale, change impact, failure) — never a ready-made next question. Findings
 accumulate in a git-ignored ledger under `.claude/notes/`, so a later
-session can resume from its open questions. Hand off to `/deliver` once you know what to change.
+session can resume from its open questions. Each ledger has an HTML page beside it that ocgen
+renders and refreshes in the browser after every write (`ocgen notes open` shows it again) — edit
+the Markdown, never the page. Hand off to `/deliver` once you know what to change.
 {% endif %}
 {% if intent %}
 ## Intents and issues
