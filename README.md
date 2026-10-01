@@ -531,16 +531,34 @@ longer gap, because it gives a compact recap and catches code changes.
 
 Every ledger has an HTML page next to it, `.claude/notes/<topic>.html`, and the two always
 match: **ocgen renders the page from the Markdown** — the model only ever writes the `.md`. The
-page shows the ledger at a glance:
+page is a **report in tabs**:
 
-- the topic, last update and commit, with counts of questions, Verified, Inferred, stale and open;
-- **where you left off**: the last question and its hint;
-- your **mental model**, and a **lens coverage** bar — which lenses your questions have used
-  so far (a gap there is a good place to look next);
-- the **map**, with a Mermaid diagram of the main parts;
-- the **Q&A timeline**: one card per answer with its lens, a Verified / Inferred NN% / Stale
-  badge, `file:line` citations, discrepancies and the hint;
-- open questions and the glossary. It follows your system's light or dark theme.
+- **The header:** topic, summary, commit, date, ledger path and status (e.g. "Phase 3 in progress").
+- **Overview:** where you left off (last question + hint), your mental model, a **lens coverage**
+  bar (a gap is a good place to look next), the map with a Mermaid diagram, open questions and the
+  glossary.
+- **One tab per study phase** — a run of questions on one theme, such as "Phase 1 · CI dbt-build".
+  After each answer, the model lays its evidence out as cards there, choosing the form that fits.
+  The page opens on the latest phase.
+- **Q&A log:** one compact card per answer with its lens, a Verified / Inferred NN% / Stale badge,
+  `file:line` citations and the hint.
+
+The phase cards are written in plain Markdown plus a few fenced **visual blocks**, one row per line
+with cells separated by ` | `, so the `.md` stays readable on its own:
+
+| Block | A row | Draws |
+|---|---|---|
+| `stats` | `10 \| Steps, strictly serial` | big-number tiles |
+| `claims` | `Inferred 70% \| ADaM reads a study schema \| _sources.yml:4-11` | findings with Verified / Inferred NN% / Corrected badges |
+| `steps` | `5 #orange \| dbt seed \| 109 CSVs \| :68-73` | a numbered, colour-coded sequence |
+| `bars` | `pytest test files \| 240 \| hover text` | a horizontal bar chart |
+| `compare` | `Silver #orange \| genomic_snv`, then `**usubjid** \| …` | one record across stages, with arrows |
+| `stack` | `Redshift #orange \| built by dbt`, then `7 · Gold marts ! \| CTAS \| table` | layered stores side by side |
+| `cards` | `✓ Bronze: right #blue \| It checks…` | short verdicts side by side |
+
+Markdown tables, `> **Hint (Failure):** …` callouts, `Source: …` footnotes and `mermaid` flowcharts
+(`node:::blue` colours a node) complete the set. `### Title [half]` puts two cards side by side, and
+`legend: #blue Setup · #orange Build` adds a legend. Everything follows your light or dark theme.
 
 **It opens and refreshes by itself.** A `PostToolUse` hook (`inquire-notes`) runs after every
 write to a ledger: it re-renders the page and shows it. The first update opens the page in your

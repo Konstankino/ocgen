@@ -1450,7 +1450,7 @@ fn notes_render_writes_the_html() {
         .success()
         .stdout(contains("request-flow.html"));
     let page = std::fs::read_to_string(notes.join("request-flow.html")).unwrap();
-    assert!(page.contains("Request flow") && page.contains("badge verified"));
+    assert!(page.contains("Request flow") && page.contains("ev verified"));
 }
 
 #[test]

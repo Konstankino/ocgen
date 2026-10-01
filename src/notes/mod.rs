@@ -5,6 +5,7 @@
 //! an open tab is refreshed, and a new one is opened only when none shows it
 //! (see [`viewer`]).
 
+pub mod blocks;
 pub mod browser;
 pub mod html;
 pub mod ledger;
@@ -84,7 +85,8 @@ pub fn render_file(md: &Path) -> Result<PathBuf> {
     let out = dir.join(format!("{slug}.html"));
     for _ in 0..3 {
         let src = fs::read_to_string(md).with_context(|| format!("reading {}", md.display()))?;
-        let page = html::render(&ledger::parse(&src))?;
+        let source = format!(".claude/notes/{slug}.md");
+        let page = html::render_page(&ledger::parse(&src), Some(&source))?;
         write_if_changed(&out, page.as_bytes())?;
         if fs::read_to_string(md).ok().as_deref() == Some(src.as_str()) {
             break;

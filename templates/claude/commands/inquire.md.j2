@@ -90,7 +90,9 @@ The ledger has exactly this layout (ocgen draws its page from it — keep the he
 
 ````
 Topic: <human-readable topic>
+Summary: <one or two sentences: what this study covers, phase by phase>
 Updated: <date>   Commit: <output of git rev-parse --short HEAD>
+Status: <e.g. Phase 2 in progress>
 ## Resume point
 Last question: <the question as sharpened>
 Hint: (<Lens>) <the hint that followed it>
@@ -100,8 +102,13 @@ Hint: (<Lens>) <the hint that followed it>
 - <one screen of bullets: entry points, modules, data flow>
 ```mermaid
 flowchart LR
-  cli["src/cli.rs"] --> core["src/lib.rs"]
+  cli["src/cli.rs"]:::blue --> core["src/lib.rs"]:::orange
 ```
+## Phase <n> · <short name>
+<one-line intro, with its source file>
+### <card title>
+<one-line lead>
+<the report: Markdown and visual blocks — see "The report" below>
 ## Q&A log
 ### Q<n> · <Lens> · <Verified|Inferred NN%>
 Q: <the question as sharpened>
@@ -120,8 +127,34 @@ question used (one of the six in step 3) and its evidence — `Verified`, or `In
 confidence (`Inferred 70%`); a stale answer gets ` · Stale` appended to its heading, and each
 discrepancy you found gets one extra `Note:` line. Refresh the **Map** (diagram included), the
 **Glossary** of project terms, and **Open questions**. If the ledger is in an older layout, convert
-it on this update. It's a reference to resume from, not a transcript — the full answer is already in
-our conversation.
+it on this update.
+
+**The report.** Each `## Phase <n> · <name>` section is one tab of the page: a phase is a run of
+questions on one theme (start the next phase when my line of inquiry moves on, and update
+`Status:`). After every answer, the helper adds the answer to the current phase as one or more
+`### ` cards — the evidence laid out to be scanned, not the prose repeated. Pick the form that fits
+the finding; add `[half]` to a card title to put two cards side by side, and a `---` line ends a card
+so what follows (a hint, stat tiles) sits on the phase itself:
+
+| Content | Write |
+|---|---|
+| Key numbers | a `stats` block: `value \| caption` per tile |
+| Findings with evidence | a `claims` block: `Verified \| claim \| detail with file:line` — label `Verified`, `Inferred 70%`, `Corrected` (a claim you revised), or a `#color` tag |
+| A sequence (pipeline, call path, CI steps) | a `steps` block: `n \| title \| detail \| file:line`; `n #orange` colours a step |
+| Counts to compare | a `bars` block: `label \| number \| hover detail` |
+| Attributes, settings, versions | a Markdown table |
+| One record changing across stages | a `compare` block: `Title #blue \| subtitle`, then `key \| value` rows (`**key**` = changed here); `---` starts the next column |
+| Layers or stores side by side | a `stack` block: `Title #blue \| subtitle`, then `layer \| detail \| tag` rows (`layer !` highlights, `layer ~` = not stored); `---` next column |
+| Short verdicts side by side | a `cards` block: `✓ title #green \| body` |
+| Flows and dependencies | a `mermaid` flowchart; `node:::blue` colours a node |
+| The hint | a callout line: `> **Hint (<Lens>):** <hint>` |
+
+Each block is a fenced block named after its kind (` ```claims `), one row per line, cells separated
+by ` | `. `legend: #blue Setup · #orange Build` adds a colour legend; colours are blue, orange, green,
+red, purple, teal, yellow and gray. A short `Source: <file:line>` line under a card becomes its
+footnote. Put only what you verified or inferred in the answer into the report, with the same
+evidence tags, and label made-up illustrative values as such. The **Q&A log** stays the compact
+history to resume from; the phases are the report I read.
 
 ## 5. Checkpoint
 Every ~5 questions, or when I ask: summarize my mental model in ≤ 10 bullets (and have the

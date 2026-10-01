@@ -57,144 +57,267 @@ pub fn inline(s: &str) -> String {
 }
 
 /// Free-form Markdown lines → HTML blocks: paragraphs, lists, `####` headings,
-/// tables and fenced code (a `mermaid` fence becomes a diagram).
+/// tables, `>` callouts, fenced code, and the report's visual blocks (see
+/// [`super::blocks`]; a `mermaid` fence becomes a diagram).
 pub fn blocks(lines: &[String]) -> String {
-    let mut out = String::new();
-    let mut para: Vec<String> = Vec::new();
-    let mut list: Option<(&str, Vec<String>)> = None;
-    let mut table: Vec<Vec<String>> = Vec::new();
-    let mut fence: Option<(String, Vec<String>)> = None;
+    Blocks::default().run(lines)
+}
 
-    fn flush(
-        out: &mut String,
-        para: &mut Vec<String>,
-        list: &mut Option<(&str, Vec<String>)>,
-        table: &mut Vec<Vec<String>>,
-    ) {
-        if !para.is_empty() {
-            out.push_str(&format!("<p>{}</p>\n", inline(&para.join(" "))));
-            para.clear();
-        }
-        if let Some((tag, items)) = list.take() {
-            out.push_str(&format!("<{tag}>"));
-            for i in items {
-                out.push_str(&format!("<li>{}</li>", inline(&i)));
-            }
-            out.push_str(&format!("</{tag}>\n"));
-        }
-        if !table.is_empty() {
-            out.push_str("<table>");
-            for (r, row) in table.iter().enumerate() {
-                let cell = if r == 0 { "th" } else { "td" };
-                out.push_str("<tr>");
-                for c in row {
-                    out.push_str(&format!("<{cell}>{}</{cell}>", inline(c)));
-                }
-                out.push_str("</tr>");
-            }
-            out.push_str("</table>\n");
-            table.clear();
+/// Paragraphs that read as a source line or a footnote.
+const FOOTNOTE_PREFIXES: [&str; 6] = [
+    "Source:",
+    "Sources:",
+    "Note:",
+    "Evidence:",
+    "Example:",
+    "Why:",
+];
+
+#[derive(Default)]
+struct Blocks {
+    out: String,
+    para: Vec<String>,
+    list: Option<(&'static str, Vec<String>)>,
+    table: Vec<Vec<String>>,
+    quote: Vec<String>,
+    /// Mark the first paragraph as the lead (a card's or a phase's intro).
+    lead: bool,
+    emitted: bool,
+}
+
+impl Blocks {
+    fn lead() -> Self {
+        Self {
+            lead: true,
+            ..Self::default()
         }
     }
 
+    fn push(&mut self, html: &str) {
+        self.out.push_str(html);
+        self.emitted = true;
+    }
+
+    fn flush(&mut self) {
+        if !self.para.is_empty() {
+            let text = self.para.join(" ");
+            let class = if FOOTNOTE_PREFIXES.iter().any(|p| text.starts_with(p)) {
+                r#" class="footnote""#
+            } else if self.lead && !self.emitted {
+                r#" class="lead""#
+            } else {
+                ""
+            };
+            self.para.clear();
+            self.push(&format!("<p{class}>{}</p>\n", inline(&text)));
+        }
+        if let Some((tag, items)) = self.list.take() {
+            let mut h = format!("<{tag}>");
+            for i in items {
+                h.push_str(&format!("<li>{}</li>", inline(&i)));
+            }
+            h.push_str(&format!("</{tag}>\n"));
+            self.push(&h);
+        }
+        if !self.table.is_empty() {
+            let mut h = String::from(r#"<div class="table-wrap"><table>"#);
+            for (r, row) in self.table.iter().enumerate() {
+                let cell = if r == 0 { "th" } else { "td" };
+                h.push_str("<tr>");
+                for c in row {
+                    h.push_str(&format!("<{cell}>{}</{cell}>", inline(c)));
+                }
+                h.push_str("</tr>");
+            }
+            h.push_str("</table></div>\n");
+            self.table.clear();
+            self.push(&h);
+        }
+        if !self.quote.is_empty() {
+            let text = self.quote.join(" ");
+            self.quote.clear();
+            self.push(&format!(
+                r#"<div class="callout"><p>{}</p></div>"#,
+                inline(&text)
+            ));
+            self.out.push('\n');
+        }
+    }
+
+    fn fence(&mut self, lang: &str, body: &[String]) {
+        let html = if lang == "mermaid" {
+            format!(
+                "<pre class=\"mermaid\">{}</pre>\n",
+                escape(&body.join("\n"))
+            )
+        } else if let Some(h) = super::blocks::render(lang, body) {
+            h
+        } else {
+            format!("<pre><code>{}</code></pre>\n", escape(&body.join("\n")))
+        };
+        self.push(&html);
+    }
+
+    fn run(mut self, lines: &[String]) -> String {
+        let mut fence: Option<(String, Vec<String>)> = None;
+        for line in lines {
+            let t = line.trim();
+            if let Some((lang, body)) = &mut fence {
+                if t.starts_with("```") {
+                    let (lang, body) = (lang.clone(), std::mem::take(body));
+                    fence = None;
+                    self.fence(&lang, &body);
+                } else {
+                    body.push(line.clone());
+                }
+                continue;
+            }
+            if let Some(lang) = t.strip_prefix("```") {
+                self.flush();
+                fence = Some((lang.trim().to_ascii_lowercase(), Vec::new()));
+                continue;
+            }
+            if t.is_empty() {
+                self.flush();
+                continue;
+            }
+            if let Some(q) = t.strip_prefix('>') {
+                if !self.para.is_empty() || self.list.is_some() || !self.table.is_empty() {
+                    self.flush();
+                }
+                self.quote.push(q.trim().to_string());
+                continue;
+            }
+            if !self.quote.is_empty() {
+                self.flush();
+            }
+            if t.starts_with('|') {
+                if !self.para.is_empty() || self.list.is_some() {
+                    self.flush();
+                }
+                let cells = super::blocks::cells(t.trim_matches('|'));
+                let rule = cells
+                    .iter()
+                    .all(|c| !c.is_empty() && c.chars().all(|ch| "-: ".contains(ch)));
+                if !rule {
+                    self.table.push(cells);
+                }
+                continue;
+            }
+            if let Some(h) = t.strip_prefix('#') {
+                self.flush();
+                self.push(&format!(
+                    "<h4>{}</h4>\n",
+                    inline(h.trim_start_matches('#').trim())
+                ));
+                continue;
+            }
+            let ordered = t.chars().take_while(char::is_ascii_digit).count();
+            let item = if ["- ", "* ", "+ "].iter().any(|p| t.starts_with(p)) {
+                Some(("ul", t[2..].trim()))
+            } else if ordered > 0 && t[ordered..].starts_with(". ") {
+                Some(("ol", t[ordered + 2..].trim()))
+            } else {
+                None
+            };
+            match item {
+                Some((tag, text)) => {
+                    if !self.para.is_empty()
+                        || !self.table.is_empty()
+                        || self.list.as_ref().is_some_and(|l| l.0 != tag)
+                    {
+                        self.flush();
+                    }
+                    self.list
+                        .get_or_insert((tag, Vec::new()))
+                        .1
+                        .push(text.to_string());
+                }
+                None if self.list.is_some() && line.starts_with([' ', '\t']) => {
+                    // A continuation of the previous list item.
+                    if let Some(last) = self.list.as_mut().and_then(|l| l.1.last_mut()) {
+                        last.push(' ');
+                        last.push_str(t);
+                    }
+                }
+                None => {
+                    if self.list.is_some() || !self.table.is_empty() {
+                        self.flush();
+                    }
+                    self.para.push(t.to_string());
+                }
+            }
+        }
+        if let Some((_, body)) = fence {
+            // An unclosed fence: show what there is.
+            self.flush();
+            let html = format!("<pre><code>{}</code></pre>\n", escape(&body.join("\n")));
+            self.push(&html);
+        }
+        self.flush();
+        self.out
+    }
+}
+
+/// A phase (one tab of the report): an intro, then `### Title` cards. A title
+/// ending in `[half]` makes a half-width card; neighbouring halves share a row.
+pub fn phase(lines: &[String]) -> String {
+    // (title, half, lines); the intro has no title.
+    let mut parts: Vec<(Option<String>, bool, Vec<String>)> = vec![(None, false, Vec::new())];
+    let mut in_fence = false;
     for line in lines {
         let t = line.trim();
-        if let Some((lang, body)) = &mut fence {
-            if t.starts_with("```") {
-                if lang == "mermaid" {
-                    out.push_str(&format!(
-                        "<pre class=\"mermaid\">{}</pre>\n",
-                        escape(&body.join("\n"))
-                    ));
-                } else {
-                    out.push_str(&format!(
-                        "<pre><code>{}</code></pre>\n",
-                        escape(&body.join("\n"))
-                    ));
-                }
-                fence = None;
-            } else {
-                body.push(line.clone());
+        if t.starts_with("```") {
+            in_fence = !in_fence;
+        }
+        if !in_fence {
+            // `---` ends the current card: what follows sits on the phase itself.
+            if t.len() >= 3 && t.chars().all(|c| c == '-') {
+                parts.push((None, false, Vec::new()));
+                continue;
             }
-            continue;
-        }
-        if let Some(lang) = t.strip_prefix("```") {
-            flush(&mut out, &mut para, &mut list, &mut table);
-            fence = Some((lang.trim().to_string(), Vec::new()));
-            continue;
-        }
-        if t.is_empty() {
-            flush(&mut out, &mut para, &mut list, &mut table);
-            continue;
-        }
-        if t.starts_with('|') {
-            if !para.is_empty() || list.is_some() {
-                flush(&mut out, &mut para, &mut list, &mut table);
+            if let Some(h) = t.strip_prefix("### ") {
+                let h = h.trim();
+                let (title, half) = match h.strip_suffix("[half]") {
+                    Some(rest) => (rest.trim().to_string(), true),
+                    None => (h.to_string(), false),
+                };
+                parts.push((Some(title), half, Vec::new()));
+                continue;
             }
-            let cells: Vec<String> = t
-                .trim_matches('|')
-                .split('|')
-                .map(|c| c.trim().to_string())
-                .collect();
-            let rule = cells
-                .iter()
-                .all(|c| !c.is_empty() && c.chars().all(|ch| "-: ".contains(ch)));
-            if !rule {
-                table.push(cells);
+        }
+        parts.last_mut().unwrap().2.push(line.clone());
+    }
+    let mut out = String::new();
+    let mut row_open = false;
+    for (title, half, body) in parts {
+        let Some(title) = title else {
+            if row_open {
+                out.push_str("</div>\n");
+                row_open = false;
             }
+            out.push_str(&Blocks::lead().run(&body));
             continue;
-        }
-        if let Some(h) = t.strip_prefix('#') {
-            flush(&mut out, &mut para, &mut list, &mut table);
-            out.push_str(&format!(
-                "<h4>{}</h4>\n",
-                inline(h.trim_start_matches('#').trim())
-            ));
-            continue;
-        }
-        let ordered = t.chars().take_while(char::is_ascii_digit).count();
-        let item = if ["- ", "* ", "+ "].iter().any(|p| t.starts_with(p)) {
-            Some(("ul", t[2..].trim()))
-        } else if ordered > 0 && t[ordered..].starts_with(". ") {
-            Some(("ol", t[ordered + 2..].trim()))
-        } else {
-            None
         };
-        match item {
-            Some((tag, text)) => {
-                if !para.is_empty()
-                    || !table.is_empty()
-                    || list.as_ref().is_some_and(|l| l.0 != tag)
-                {
-                    flush(&mut out, &mut para, &mut list, &mut table);
-                }
-                list.get_or_insert((tag, Vec::new()))
-                    .1
-                    .push(text.to_string());
-            }
-            None if list.is_some() && line.starts_with([' ', '\t']) => {
-                // A continuation of the previous list item.
-                if let Some(last) = list.as_mut().and_then(|l| l.1.last_mut()) {
-                    last.push(' ');
-                    last.push_str(t);
-                }
-            }
-            None => {
-                if list.is_some() || !table.is_empty() {
-                    flush(&mut out, &mut para, &mut list, &mut table);
-                }
-                para.push(t.to_string());
-            }
+        if half && !row_open {
+            out.push_str(r#"<div class="row">"#);
+            row_open = true;
+        } else if !half && row_open {
+            out.push_str("</div>\n");
+            row_open = false;
         }
-    }
-    if let Some((_, body)) = fence {
-        // An unclosed fence: show what there is.
         out.push_str(&format!(
-            "<pre><code>{}</code></pre>\n",
-            escape(&body.join("\n"))
+            r#"<section class="card{}"><h3>{}</h3>"#,
+            if half { " half" } else { "" },
+            inline(&title)
         ));
+        out.push('\n');
+        out.push_str(&Blocks::lead().run(&body));
+        out.push_str("</section>\n");
     }
-    flush(&mut out, &mut para, &mut list, &mut table);
+    if row_open {
+        out.push_str("</div>\n");
+    }
     out
 }
 
@@ -247,6 +370,11 @@ fn entry_value(e: &Entry) -> Value {
 
 /// The page for `ledger`.
 pub fn render(ledger: &Ledger) -> Result<String> {
+    render_page(ledger, None)
+}
+
+/// The page for `ledger`; `source` is the ledger's path, shown in the header.
+pub fn render_page(ledger: &Ledger, source: Option<&str>) -> Result<String> {
     let src = templates::load(TEMPLATE)?;
     let mut env = Environment::new();
     env.set_auto_escape_callback(|_| AutoEscape::Html);
@@ -282,16 +410,25 @@ pub fn render(ledger: &Ledger) -> Result<String> {
             Value::from(m)
         })
         .collect();
-    let extra: Vec<Value> = l
-        .extra
+    let mut htmls: Vec<String> = Vec::new();
+    let phases: Vec<Value> = l
+        .phases
         .iter()
-        .map(|s| {
+        .enumerate()
+        .map(|(i, s)| {
+            let html = phase(&s.lines);
+            htmls.push(html.clone());
             let mut m: BTreeMap<&str, Value> = BTreeMap::new();
+            m.insert("id", Value::from(format!("phase-{}", i + 1)));
             m.insert("title", safe(inline(&s.title)));
-            m.insert("html", safe(blocks(&s.lines)));
+            m.insert("html", safe(html));
             Value::from(m)
         })
         .collect();
+    let default_tab = match l.phases.len() {
+        0 => "overview".to_string(),
+        n => format!("phase-{n}"),
+    };
     let glossary: Vec<Value> = l
         .glossary
         .iter()
@@ -305,16 +442,16 @@ pub fn render(ledger: &Ledger) -> Result<String> {
 
     let map_html = blocks(&l.map_text);
     let qa_html = blocks(&l.qa_text);
-    let has_mermaid = !l.map_mermaid.is_empty()
-        || [&map_html, &qa_html]
-            .iter()
-            .any(|h| h.contains("class=\"mermaid\""))
-        || extra.iter().any(|s| {
-            s.get_attr("html")
-                .is_ok_and(|h| h.to_string().contains("class=\"mermaid\""))
-        });
+    htmls.push(map_html.clone());
+    htmls.push(qa_html.clone());
+    let has_mermaid =
+        !l.map_mermaid.is_empty() || htmls.iter().any(|h| h.contains("class=\"mermaid\""));
     let ctx = minijinja::context! {
-        topic => l.topic.clone(),
+        topic => l.topic.replace('`', ""),
+        topic_html => safe(inline(&l.topic)),
+        summary => safe(inline(&l.summary)),
+        status => l.status.clone(),
+        source => safe(escape(source.unwrap_or(""))),
         updated => l.updated.clone(),
         commit => l.commit.clone(),
         resume_question => safe(inline(&l.resume.question)),
@@ -328,7 +465,8 @@ pub fn render(ledger: &Ledger) -> Result<String> {
         has_mermaid => has_mermaid,
         open_questions => l.open_questions.iter().map(|q| safe(inline(q))).collect::<Vec<_>>(),
         glossary => glossary,
-        extra => extra,
+        phases => phases,
+        default_tab => default_tab,
         lenses => lenses,
         count_questions => l.entries.len(),
         count_verified => verified,

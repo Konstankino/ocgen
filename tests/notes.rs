@@ -161,10 +161,10 @@ fn html_has_every_visual_section() {
         "<pre class=\"mermaid\">",
         "mermaid@11",
         "integrity=\"sha384-",
-        "badge verified",
-        "badge inferred",
+        "ev verified",
+        "ev inferred",
         "70%",
-        "badge stale",
+        "ev stale",
         "class=\"lens-bar\"",
         "Does doctor re-render plugin hooks?",
         "<table",
@@ -265,4 +265,201 @@ fn open_policy() {
         "linux",
         false
     ));
+}
+
+// ------------------------------------------------------- the visual report --
+
+const REPORT: &str = r#"Topic: From CI dbt-build to Redshift
+Summary: A phased deep dive. Phase 1: the CI job, which never touches Redshift.
+Updated: 2026-09-30   Commit: 6ebfa72c
+Status: Phase 2 in progress
+## Resume point
+Last question: What does CI run?
+Hint: (Failure) nothing shows what a Spectrum scan sees mid-write.
+## Mental model
+- CI never touches Redshift
+## Phase 1 · CI dbt-build
+Where it stands and how it works, end to end. Source: `.github/workflows/ci.yml:23-128`.
+
+```stats
+10 | Steps, strictly serial, no `continue-on-error`
+Whole DAG | Built each run despite the "modified models" name
+```
+
+### Step flow [half]
+Each row is a step, top to bottom.
+
+```steps
+legend: #blue Setup · #orange dbt build · #green Downstream gate
+0 | Postgres 16 service | Backs only tests/test_app_store.py | :32-44
+5 #orange | dbt seed (use_mock_data) | 109 CSVs incl. 64 mocks | :68-73
+7 #green | Gold row-count regression | Counts vs the baseline — hard fail | :84-94
+```
+
+### What the job exercises [half]
+```bars
+pytest test files | 240 | tests/**/*.py
+dbt models | 119
+```
+Source: counts from the working tree at 6ebfa72c.
+
+> **Latest hint (Failure):** only the vault keeps TIP-owned history.
+
+## Phase 2 · Triggers into Redshift
+### Exceptions to the simple picture
+```claims
+Inferred 70% | ADaM reads a study-named schema | Source `incb161734_101` (`_sources.yml:4-11`)
+Verified | ClinView starts from Fabric SQL | Its Bronze reader queries a Fabric endpoint
+Corrected | Data rows reach Redshift only through dbt | Earlier I said Dagster had no connection
+Source #green | Source landing — the vendor's system of record | ICON pushes Archer tables
+```
+
+### Is Bronze "validation"?
+```cards
+✓ Bronze: right, with three more jobs | It checks that the expected **columns** arrived.
+✓ Silver: right, and more | It's normalization in the sense of standardizing values.
+```
+
+### One Archer row through three tiers
+```compare
+Bronze #blue | archer_core_myeloid_raw
+subject_id | "AU001001"
+---
+Silver #orange | genomic_snv
+**usubjid** | INCA033989-101-AU001-001
+---
+Gold #green | fct_genomic_snv · marts
+variant_key | gene + HGVS identity
+```
+
+### Where each layer physically lives
+```stack
+S3 + Glue catalog #blue | Written by Dagster · PyIceberg `type: glue`
+1 · Vendor file | e.g. a Caris SNV file | files
+3 · Silver | Glue DB `tip_dev_silver` | Iceberg
+---
+Redshift #orange | Built by dbt · connects as `dagster_svc`
+6 · Intermediate ~ | Ephemeral: inlined as CTEs | CTE
+7 · Gold marts ! | `CREATE TABLE AS` | table
+```
+
+| Tier | Owner | History? |
+|---|---|---|
+| Raw | vendor | in the source buckets |
+| Vault | TIP | yes, versioned + KMS |
+
+```mermaid
+flowchart LR
+  src["Source landing"]:::green --> bronze["Bronze"]:::blue
+```
+## Q&A log
+### Q1 · Flow · Verified
+Q: What does CI run?
+A: Ten serial steps on DuckDB.
+## Open questions
+- What does a Spectrum scan see mid-write?
+"#;
+
+#[test]
+fn phases_become_tabs_after_the_overview() {
+    let l = parse(REPORT);
+    assert_eq!(
+        l.summary,
+        "A phased deep dive. Phase 1: the CI job, which never touches Redshift."
+    );
+    assert_eq!(l.status, "Phase 2 in progress");
+    let names: Vec<&str> = l.phases.iter().map(|p| p.title.as_str()).collect();
+    assert_eq!(
+        names,
+        ["Phase 1 · CI dbt-build", "Phase 2 · Triggers into Redshift"]
+    );
+    let page = html::render_page(&l, Some(".claude/notes/ci-dbt-build.md")).unwrap();
+    // Tabs: overview, each phase, the log — the latest phase opens by default.
+    for needle in [
+        r#"data-tab="overview""#,
+        r#"data-tab="phase-1""#,
+        r#"data-tab="phase-2""#,
+        r#"data-tab="log""#,
+        r#"data-default="phase-2""#,
+        ">Phase 1 · CI dbt-build</button>",
+        "Ledger: .claude/notes/ci-dbt-build.md",
+        "Phase 2 in progress",
+        "6ebfa72c",
+        "A phased deep dive.",
+    ] {
+        assert!(page.contains(needle), "missing {needle}");
+    }
+}
+
+#[test]
+fn every_visual_block_renders() {
+    let page = html::render_page(&parse(REPORT), None).unwrap();
+    for needle in [
+        // stats
+        r#"<div class="stats">"#,
+        r#"<div class="stat-value">Whole DAG</div>"#,
+        "<code>continue-on-error</code>",
+        // cards, half width, lead and footnote
+        r#"<section class="card half">"#,
+        "<h3>Step flow</h3>",
+        r#"<p class="lead">Each row is a step, top to bottom.</p>"#,
+        r#"<p class="footnote">Source: counts from the working tree at 6ebfa72c.</p>"#,
+        // steps with colours, refs and a legend
+        r#"<ol class="steps">"#,
+        r#"<span class="step-n c-orange">5</span>"#,
+        r#"<span class="step-ref">:84-94</span>"#,
+        r#"<span class="swatch c-green"></span>Downstream gate"#,
+        // bars with hover detail
+        r#"<div class="bars">"#,
+        r#"title="tests/**/*.py""#,
+        r#"style="width: 100%""#,
+        // callout
+        r#"<div class="callout"><p><strong>Latest hint (Failure):</strong>"#,
+        // claims
+        r#"<span class="badge ev-inferred">Inferred 70%</span>"#,
+        r#"<span class="badge ev-verified">Verified</span>"#,
+        r#"<span class="badge ev-corrected">Corrected</span>"#,
+        r#"<span class="badge c-green">Source</span>"#,
+        // verdict cards
+        r#"<div class="mini-cards">"#,
+        // compare columns
+        r#"<div class="compare">"#,
+        r#"<div class="col c-orange">"#,
+        r#"<dt>usubjid</dt><dd class="changed">INCA033989-101-AU001-001</dd>"#,
+        // stack
+        r#"<div class="stack">"#,
+        r#"<div class="layer dashed">"#,
+        r#"<div class="layer highlight">"#,
+        r#"<span class="tag">table</span>"#,
+        // tables and diagrams
+        "<th>History?</th>",
+        r#"<pre class="mermaid">"#,
+    ] {
+        assert!(page.contains(needle), "missing {needle}");
+    }
+    assert!(!page.contains("```"), "no raw fences left");
+}
+
+#[test]
+fn report_blocks_escape_their_content() {
+    let md = "Topic: x\n## Phase 1\n```stats\n<b>1</b> | <script>x</script>\n```\n\
+```claims\n<i>Verified</i> | <img src=x> | ok\n```\n```bars\n<u>a</u> | 3 | \"><script>\n```\n\
+```compare\n<s>T</s> #blue | sub\n<k> | <v>\n```\n```stack\n<p>S #red | sub\n<a> ! | <b> | <c>\n```\n";
+    let page = html::render_page(&parse(md), None).unwrap();
+    for raw in [
+        "<b>1",
+        "<script>x",
+        "<i>Verified",
+        "<img src=x",
+        "<u>a",
+        "\"><script>",
+        "<s>T",
+        "<k>",
+        "<v>",
+        "<p>S",
+        "<a>",
+        "<c>",
+    ] {
+        assert!(!page.contains(raw), "{raw} leaked");
+    }
 }

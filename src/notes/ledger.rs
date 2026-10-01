@@ -49,7 +49,8 @@ pub struct Entry {
     pub extra: Vec<String>,
 }
 
-/// A section the parser has no special view for: its title and raw lines.
+/// A report section: a `## ` heading the ledger layout doesn't reserve. Each
+/// one is a tab of the page (a study phase), drawn from its Markdown and blocks.
 #[derive(Debug, Clone, Default)]
 pub struct Section {
     pub title: String,
@@ -59,6 +60,10 @@ pub struct Section {
 #[derive(Debug, Clone, Default)]
 pub struct Ledger {
     pub topic: String,
+    /// One or two sentences under the title.
+    pub summary: String,
+    /// A short state shown as a pill, e.g. `Phase 3 in progress`.
+    pub status: String,
     pub updated: String,
     pub commit: String,
     pub resume: Resume,
@@ -71,7 +76,8 @@ pub struct Ledger {
     pub qa_text: Vec<String>,
     pub open_questions: Vec<String>,
     pub glossary: Vec<(String, String)>,
-    pub extra: Vec<Section>,
+    /// The report's phases, in file order.
+    pub phases: Vec<Section>,
 }
 
 impl Ledger {
@@ -130,7 +136,7 @@ fn split_hint(hint: &str) -> (String, String) {
     (String::new(), h.to_string())
 }
 
-fn evidence_of(s: &str) -> Option<Evidence> {
+pub(crate) fn evidence_of(s: &str) -> Option<Evidence> {
     let lower = s.to_ascii_lowercase();
     if lower.contains("unverified") {
         return Some(Evidence::Inferred(None));
@@ -286,6 +292,10 @@ pub fn parse(md: &str) -> Ledger {
     for line in &header {
         if let Some(v) = keyed(line, &["topic"]) {
             l.topic = v.into();
+        } else if let Some(v) = keyed(line, &["summary"]) {
+            l.summary = v.into();
+        } else if let Some(v) = keyed(line, &["status"]) {
+            l.status = v.into();
         } else if let Some(v) = keyed(line, &["updated"]) {
             let date = commit_re.replace(v, "");
             l.updated = date.trim().to_string();
@@ -367,7 +377,7 @@ pub fn parse(md: &str) -> Ledger {
         } else if title.starts_with("glossary") {
             l.glossary = glossary(&s.lines);
         } else {
-            l.extra.push(s);
+            l.phases.push(s);
         }
     }
     l

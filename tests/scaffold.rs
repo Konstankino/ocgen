@@ -2170,6 +2170,24 @@ fn inquire_command_and_router() {
     assert!(cmd.contains("never write or edit the `.html`"));
     assert!(cmd.contains("ocgen notes open <topic-slug>"));
     assert!(cmd.contains("allowed-tools: Bash(ocgen notes open:*)"));
+    // The page is a phased report: one tab per phase, built from visual blocks.
+    for needle in [
+        "## Phase <n> · <short name>",
+        "Summary:",
+        "Status:",
+        "`stats` block",
+        "`claims` block",
+        "`Corrected`",
+        "`steps` block",
+        "`bars` block",
+        "`compare` block",
+        "`stack` block",
+        "`cards` block",
+        "[half]",
+        "> **Hint (<Lens>):**",
+    ] {
+        assert!(cmd.contains(needle), "report format lacks {needle}");
+    }
     assert!(
         !cmd.contains("{{") && !cmd.contains("{%"),
         "unrendered Jinja"

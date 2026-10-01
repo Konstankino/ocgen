@@ -906,7 +906,7 @@ fn inquire_notes_renders_the_view_and_the_script_is_a_no_op() {
     let o = ocgen::hooks::run("inquire-notes", &payload(rs.path()), &env);
     assert_eq!((o.code, o.stdout.as_str()), (0, ""), "{o:?}");
     let page = fs::read_to_string(rs.path().join(".claude/notes/flow.html")).unwrap();
-    assert!(page.contains("Request flow") && page.contains("badge verified"));
+    assert!(page.contains("Request flow") && page.contains("ev verified"));
 
     let (code, out, _) = sh(
         sh_dir.path(),
