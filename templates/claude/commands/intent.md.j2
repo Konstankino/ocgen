@@ -1,6 +1,8 @@
 ---
 description: Turn an issue or idea into an approved intent — improve the prompt, investigate, plan, write a numbered intent file, and draft the GitHub issue for me to file
 argument-hint: "[the problem or idea | {{ prefix }}-NNNN to resume | #issue or issue URL to link — empty to list]"
+allowed-tools: {{ allowed_tools }}
+effort: xhigh
 ---
 Work out the intent for: $ARGUMENTS
 
@@ -28,16 +30,61 @@ task, success criteria, constraints, and the context it needs; remove ambiguity 
 inferred. Show the improved prompt and let me confirm or adjust it. Everything after this step works
 from the improved prompt.
 
-## 2. Investigate
-Explore with the improved prompt — read-only, in parallel where independent (explorer subagents where
-useful): the relevant code, tests, history (`git log`), existing intents in `{{ dir }}/`, and docs.
-Report findings as **Verified** (with `file:line` evidence) or **Inferred** (`Confidence: NN%`).
-Ask me only what the code can't answer, one question at a time, 2–4 options with the recommended
-one first.
+## 2. Investigate — exhaustively
+Be aggressive and complete: the plan is only as good as this analysis. Everything here is
+read-only; the git, gh and docs reads listed in this skill's `allowed-tools` run without prompts.
+Number every finding **F1, F2, …** and tag it **Verified** (with `file:line`, a commit, or a link)
+or **Inferred** (with `Confidence: NN%` and what would verify it).
+
+**Pass 1 — Map (breadth).** Find the entry points, modules and data flow around the subject. Derive
+the search terms — symbols, types, error messages, config keys, CLI flags, env vars, file names —
+and show me the list; every later pass searches for all of them.
+
+**Pass 2 — Deep dive, in parallel.** Launch several built-in `Explore` subagents in one message
+(thoroughness "very thorough"), one per area, each returning numbered findings with evidence:
+- **Code:** every code path involved and every call site / reference of each symbol you might touch
+  (`Grep` and `git grep` for all the search terms — not just the first hit).
+- **Tests:** which tests and fixtures cover it, what they assert, and what is not covered.
+- **Config and build:** flags, env, settings, build scripts, CI workflows that change behaviour.
+- **History:** `git log -S<term>` / `git log -G<regex>` for the key symbols, `git blame` on the key
+  lines, and `git show` of the commits that shaped them — why it is this way.
+- **Prior work:** existing intents in `{{ dir }}/`; open **and closed** GitHub issues and PRs
+  (`gh search issues`, `gh search prs`, `gh issue view`, `gh pr view`) — duplicates, earlier
+  attempts, rejected approaches. If `gh` is not authenticated or can't reach GitHub, say so and
+  continue without it.
+- **Docs:** the repository's own docs first, then official documentation for the libraries and APIs
+  involved — fetched only from the trusted domains ({{ trusted_domains }}), and only `https://` URLs:
+  never `http://` (if a page is only served over plain HTTP, skip it and tell me). Never fetch other
+  sites without asking me.
+
+**Coverage checklist** — tick every item, or mark it N/A with a reason:
+Entry points · All call sites · Data and state · Error and edge paths · Concurrency ·
+Platforms (Windows/macOS/Linux) · Security and permissions · Performance · Tests · Config ·
+Docs · History · Related issues and PRs · Existing intents.
+
+**Pass 3 — Close the gaps.** List what is still unexplored or unanswered and investigate it. Repeat
+until a pass finds nothing new (at most 3 extra passes). Only then ask me what the code can't
+answer — one question at a time, 2–4 options with the recommended one first.
+
+**Pass 4 — Challenge.** Give a fresh `Explore` subagent the findings' claims (not your conclusion)
+and ask it to find evidence that would contradict them. Reconcile, and record what changed.
+
+**Analysis report** — show it before any plan:
+- **Current behaviour** (Verified findings)
+- **Root cause / gap**
+- **Impact** — files, callers, tests, users
+- **Constraints**
+- **Prior decisions and related work** — intents, issues, PRs
+- **Risks**
+- **Open questions**
+- **Coverage checklist** (as above)
+- **What would make this wrong** — the evidence that would overturn the conclusion
+- **Overall `Confidence: NN%`**
 
 ## 3. Plan and get my approval
 Present: the problem, the options considered with a recommendation, scope and out-of-scope, risks
-each with a mitigation, and acceptance criteria. **Invite push-back** and iterate until I approve.
+each with a mitigation, and acceptance criteria. Every statement cites the findings it rests on
+(F#); anything that doesn't is labelled **Assumption**. **Invite push-back** and iterate until I approve.
 Do not write anything yet. Once I approve, ask whether to write an intent file (optional) — if not,
 go to step 5.
 
@@ -51,8 +98,8 @@ go to step 5.
    - The number is 1 + the highest found (`{{ example }}` when there are none), zero-padded to
      {{ digits }} digits. If the fetch fails (offline, no remote), say so and ask me to confirm the number.
 2. Name it `{{ dir }}/{{ prefix }}-<number>-<kebab-case-slug>.md`. Fill the structure in
-   `{{ intent_template }}` (if it is missing, use: title, Status, Date, Issue, Context, Decision,
-   Options considered, Consequences, Risks) from the approved plan, with `Status: Proposed`.
+   `{{ intent_template }}` (if it is missing, use: title, Status, Date, Issue, Context, Evidence,
+   Decision, Options considered, Consequences, Risks) from the analysis and the approved plan, with `Status: Proposed`.
 3. Right before writing, re-check the local directory for the number; if it is taken, take the next.
    Show me the path.
 

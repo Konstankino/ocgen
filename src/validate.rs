@@ -213,6 +213,57 @@ pub fn git_branch(s: &str) -> Result<(), String> {
     }
 }
 
+/// A host name such as `docs.rs`: lowercase labels of letters, digits and `-`,
+/// at least one dot; no scheme, path or port. A leading `*.` trusts every
+/// subdomain (`*.amazon.com` — Claude Code matches any depth, but not
+/// `amazon.com` itself); the rest must still be a domain with a dot, so a whole
+/// TLD (`*.com`) is refused, and `*` is allowed nowhere else.
+pub fn domain(s: &str) -> Result<(), String> {
+    let (wild, s) = match s.strip_prefix("*.") {
+        Some(rest) => (true, rest),
+        None => (false, s),
+    };
+    let label_ok = |l: &str| {
+        !l.is_empty()
+            && l.len() <= 63
+            && !l.starts_with('-')
+            && !l.ends_with('-')
+            && l.chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+    };
+    if s.len() <= 253 && s.contains('.') && s.split('.').all(label_ok) {
+        Ok(())
+    } else {
+        Err(format!(
+            "'{}{s}' isn't a domain — use a host name like docs.rs, or *.amazon.com for all its subdomains (no https://, path or port)",
+            if wild { "*." } else { "" }
+        ))
+    }
+}
+
+/// A documentation site to trust, as typed: a host (`docs.rs`, `*.amazon.com`) or
+/// an `https://` URL of one (`https://docs.rs/`). Returns the lowercased host.
+/// Plain `http://` (or any other scheme) is refused — trusted docs are HTTPS only.
+pub fn trusted_domain(s: &str) -> Result<String, String> {
+    let t = s.trim().to_lowercase();
+    if t.starts_with("http://") {
+        return Err(format!(
+            "'{}': http:// isn't allowed — trusted docs are fetched over https:// only",
+            s.trim()
+        ));
+    }
+    let host = t.strip_prefix("https://").unwrap_or(&t);
+    if host.contains("://") || host.starts_with("//") {
+        return Err(format!(
+            "'{}': only https:// is allowed for trusted docs",
+            s.trim()
+        ));
+    }
+    let host = host.strip_suffix('/').unwrap_or(host);
+    domain(host)?;
+    Ok(host.to_string())
+}
+
 /// A Claude Code permission rule: `Tool` or `Tool(specifier)`, e.g. `Read`,
 /// `Bash(gh run view:*)`, `WebFetch(domain:example.com)`, `mcp__github__get_issue`.
 pub fn permission_rule(s: &str) -> Result<(), String> {

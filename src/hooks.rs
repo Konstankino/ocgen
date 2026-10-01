@@ -19,10 +19,10 @@ use serde_json::Value;
 /// hook command uses the binary only when `ocgen hook --check` prints exactly the
 /// protocol the project was generated with; any other ocgen (older or newer)
 /// falls back to the project's own scripts, which always match the project.
-pub const PROTOCOL: &str = "ocgen-hooks 3";
+pub const PROTOCOL: &str = "ocgen-hooks 4";
 
 /// Every hook `ocgen hook <name>` accepts (matching the script names minus `.sh`).
-pub const NAMES: [&str; 8] = [
+pub const NAMES: [&str; 9] = [
     "subagent-confidence-gate",
     "team-task-completed",
     "team-task-created",
@@ -31,6 +31,7 @@ pub const NAMES: [&str; 8] = [
     "notify",
     "format",
     "config-audit",
+    "https-only-fetch",
 ];
 
 /// What a hook tells Claude Code: exit code plus stdout/stderr.
@@ -66,6 +67,7 @@ pub fn run(name: &str, payload: &str, env: &HashMap<String, String>) -> Outcome 
         "notify" => h.notify(),
         "format" => h.format(),
         "config-audit" => h.config_audit(),
+        "https-only-fetch" => h.https_only_fetch(),
         other => Outcome {
             code: 1,
             stdout: String::new(),
@@ -598,6 +600,23 @@ impl<'a> Hook<'a> {
                 stderr: format!("format hook: '{cmd}' failed (ignored)\n"),
             }
         }
+    }
+
+    /// PreToolUse (WebFetch): documentation is fetched over https:// only.
+    fn https_only_fetch(&self) -> Outcome {
+        let url = self
+            .json
+            .pointer("/tool_input/url")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim_start();
+        if url.to_ascii_lowercase().starts_with("http://") {
+            let rest = url.split_once("://").map_or(url, |(_, r)| r);
+            return Outcome::block(format!(
+                "Blocked: plain http:// is not allowed for WebFetch in this project — fetch https://{rest} instead, or skip the page if it has no HTTPS version.\n"
+            ));
+        }
+        Outcome::allow()
     }
 
     fn config_audit(&self) -> Outcome {

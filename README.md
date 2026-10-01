@@ -233,6 +233,7 @@ delete as stale (`-`) is listed with a short diff.
   `CLAUDE_CODE_GIT_BASH_PATH`);
 - the approval gate blocks `git push` and allows `git status`, using the real generated
   command;
+- with `/intent`, the WebFetch hook blocks `http://` URLs and allows `https://` ones;
 - the statusline renders;
 - a compatible `ocgen` is on your `PATH`; a stale binary is flagged;
 - `.claude/` is tracked by git;
@@ -532,10 +533,27 @@ GitHub issue (wizard: "Include the /intent command…"; on by default). You star
 
 1. **Improve the prompt** — your request is rewritten with an explicit role, task, success criteria
    and constraints; you confirm it, and everything after works from it.
-2. **Investigate** — read-only and in parallel, with findings tagged Verified (`file:line`) or
-   Inferred (`Confidence: NN%`).
+2. **Investigate — exhaustively.** It runs at `effort: xhigh` and works in passes:
+   - **Map:** entry points, data flow and a list of search terms (symbols, errors, config keys,
+     flags).
+   - **Deep dive:** several built-in `Explore` subagents at once — every call site, tests and gaps,
+     config/build/CI, history (`git log -S`, `git blame`, `git show`), prior work (existing intents,
+     open and closed GitHub issues and PRs) and docs.
+   - **Close the gaps** until a pass finds nothing new, then a **challenge** pass that hunts for
+     evidence against the findings.
+
+   It shows an analysis report — current behaviour, root cause, impact, constraints, related work,
+   risks, open questions, a coverage checklist (entry points to platforms, security and
+   performance) and what would make it wrong — with numbered findings (F1, F2…), each Verified
+   (`file:line`) or Inferred (`Confidence: NN%`).
+   The read-only git and `gh` commands it needs, and `WebFetch` for a list of **trusted official
+   docs sites**, are pre-approved while `/intent` runs (the skill's `allowed-tools`); everything
+   else still asks. Docs are fetched over `https://` only — never `http://`: a `PreToolUse` hook
+   (`.claude/hooks/https-only-fetch.sh`, matcher `WebFetch`) blocks any `WebFetch` to an
+   `http://` URL and points Claude at the `https://` one, and `ocgen verify` checks that it does.
 3. **Plan and approve** — options with a recommendation, scope, risks with mitigations, acceptance
-   criteria; it iterates on your push-back until you approve.
+   criteria. Every statement cites its findings (F#) or is labelled an Assumption; it iterates on
+   your push-back until you approve.
 4. **Intent file** (optional) — e.g. `docs/adr/ADR-0007-cache-invalidation.md`. The number is one
    more than the highest found in the local directory **and** on the remote main branch
    (`git fetch` + `git ls-tree`), matching both `ADR-0007-…` and `0007-…` names, so it never
@@ -555,6 +573,9 @@ GitHub issue (wizard: "Include the /intent command…"; on by default). You star
 ocgen edit intent --show                                 # settings and template paths
 ocgen edit intent --prefix RFC --digits 3 --dir docs/rfc # RFC-001-<slug>.md in docs/rfc/
 ocgen edit intent --max-words 150 --branch develop       # shorter issues; numbers checked on origin/develop
+ocgen edit intent --trust-domain docs.example.org        # docs /intent may read without asking (--untrust-domain to drop)
+ocgen edit intent --trust-domain "*.amazon.com"          # every subdomain (not amazon.com itself); *.com is refused
+ocgen edit intent --trust-domain https://docs.example.net  # https:// URLs are fine (stored as the host); http:// is refused
 ocgen edit intent --issue-template                       # edit the issue structure in $EDITOR
 ocgen edit intent --reset-intent-template                # restore ocgen's default
 ```
@@ -598,7 +619,7 @@ and inside the ocgen binary (`ocgen hook <name>`). The generated hook command us
 binary when a compatible ocgen is installed, and the script otherwise:
 
 ```sh
-if [ "$(ocgen hook --check 2>/dev/null)" = "ocgen-hooks 3" ]; then ocgen hook team-approval-gate; else sh ".../team-approval-gate.sh"; fi
+if [ "$(ocgen hook --check 2>/dev/null)" = "ocgen-hooks 4" ]; then ocgen hook team-approval-gate; else sh ".../team-approval-gate.sh"; fi
 ```
 
 - **The binary gives you** real JSON parsing instead of `grep`, and hooks that work on
@@ -783,7 +804,7 @@ for a plugin; `--team` is off by default. (The `--base-url` flag is OpenCode-onl
 | Command | What it does |
 |---|---|
 | `ocgen add skill [dir]` | Author a new skill → `.claude/skills/<name>/SKILL.md` (name, description, allowed-tools, body). |
-| `ocgen edit intent -p <dir> [--prefix --digits --dir --max-words --branch --enable/--disable --issue-template --intent-template --reset-…-template --show]` | Configure `/intent`: intent-file prefix, number width and directory, the issue word limit, the branch checked for taken numbers, and the project's issue / intent-file templates. No flags = interactive. |
+| `ocgen edit intent -p <dir> [--prefix --digits --dir --max-words --branch --trust-domain/--untrust-domain --enable/--disable --issue-template --intent-template --reset-…-template --show]` | Configure `/intent`: intent-file prefix, number width and directory, the issue word limit, the branch checked for taken numbers, the documentation sites it may read without asking, and the project's issue / intent-file templates. No flags = interactive. |
 | `ocgen edit permissions -p <dir> --list` | Every permission rule at a glance — ocgen's and yours, list by list in the order Claude Code checks them; flags your rules that have no effect. Writes nothing. |
 | `ocgen edit permissions -p <dir> [--allow/--ask/--deny/--remove <RULE>]…` | Add or remove your own permission rules. They are saved in the state file and appended to ocgen's generated `allow`/`ask`/`deny` lists in `settings.json`, so regeneration keeps them. Generated rules (including the approval-gate guards) can't be removed. Warns when a generated `deny`/`ask` rule overrides yours. No flags = interactive. |
 | `ocgen edit skill [name] -p <dir>` | Edit an existing skill; renaming cleans up the old skill directory. Omit `[name]` to pick from a list. |
@@ -794,7 +815,7 @@ for a plugin; `--team` is off by default. (The `--base-url` flag is OpenCode-onl
 |---|---|
 | `ocgen landscape [dir]` (alias `horizon`) | Read-only overview: agents (alias/tools/colour), skills, workflow/output/team setup, delegation topology, and a **Checks** section. |
 | `ocgen doctor [dir] [--dry-run] [--yes]` | Repair the project and rewrite files (invalid models, colours, empty roles, bad enum values, older state files). Shows a per-file plan with diffs, flags hand edits, asks first, and backs up to `.ocgen-backup/`. |
-| `ocgen verify [dir] [--no-claude]` | Check the project works: up to date, settings valid, hooks run (in bash; Git Bash present on Windows), the approval gate blocks, the statusline renders, ocgen on PATH is current, Claude Code validation passes. Exits 1 on failure. |
+| `ocgen verify [dir] [--no-claude]` | Check the project works: up to date, settings valid, hooks run (in bash; Git Bash present on Windows), the approval gate blocks, http:// WebFetch is blocked, the statusline renders, ocgen on PATH is current, Claude Code validation passes. Exits 1 on failure. |
 | `ocgen approve [dir] [--minutes N] [--status] [--revoke]` | A human approves high-impact actions for a limited time. Refuses to run under Claude Code or without a terminal. |
 | `ocgen verify [dir] --run-check` | Also run the project's check command. |
 | `ocgen managed-settings` | Print a recommended organisation policy (`managed-settings.json`): no bypass mode, secrets unreadable, high-impact commands always ask, strict sandbox. |

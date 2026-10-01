@@ -419,6 +419,8 @@ impl Project {
                         example => i.first_id(),
                         max_words => i.max_words,
                         branch => i.branch.trim(),
+                        allowed_tools => i.allowed_tools(),
+                        trusted_domains => i.trusted_domains.join(", "),
                         issue_template => crate::claude::INTENT_ISSUE_TEMPLATE,
                         intent_template => crate::claude::INTENT_FILE_TEMPLATE,
                     },
@@ -525,6 +527,11 @@ impl Project {
                 let body = templates::load(&format!("claude/hooks/{script}"))?;
                 components.push((format!("hooks/{script}"), body));
             }
+        }
+        // /intent fetches docs over HTTPS only; this PreToolUse hook enforces it.
+        if self.claude.workflow.intent {
+            let body = templates::load("claude/hooks/https-only-fetch.sh")?;
+            components.push(("hooks/https-only-fetch.sh".to_string(), body));
         }
         // Shared loop guard, sourced by every blocking hook so no gate can hold an
         // agent forever.
@@ -1124,6 +1131,13 @@ impl Project {
             push(
                 "PostToolUse",
                 json!({ "matcher": "Edit|Write", "hooks": [ command_hook(hook_cmd(&format!("OCGEN_FORMAT_CMD='{fmt}' {prefix}"), dir, "format.sh")) ] }),
+            );
+        }
+        if self.claude.workflow.intent {
+            // Deterministic HTTPS-only line for WebFetch (the docs /intent reads).
+            push(
+                "PreToolUse",
+                json!({ "matcher": "WebFetch", "hooks": [ command_hook(hook_cmd(prefix, dir, "https-only-fetch.sh")) ] }),
             );
         }
         if x.config_audit {

@@ -11,6 +11,9 @@ Issue: <filled in once the GitHub issue exists>
 ## Context
 The problem and the forces at play, with evidence from the investigation.
 
+## Evidence
+Key findings from the analysis (F1, F2, …), each with `file:line` or a link.
+
 ## Decision
 What we will do, stated plainly.
 

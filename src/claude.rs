@@ -139,7 +139,57 @@ pub struct IntentSettings {
     pub max_words: u16,
     /// Remote branch checked for numbers already taken; empty = the remote's default.
     pub branch: String,
+    /// Documentation sites /intent may fetch without asking (official docs only).
+    pub trusted_domains: Vec<String>,
 }
+
+/// Read-only tools /intent may use without asking while it runs (skill
+/// `allowed-tools`), on top of `WebFetch` for the trusted domains. Nothing here
+/// writes, and `gh issue create` stays denied.
+pub const INTENT_READ_TOOLS: [&str; 19] = [
+    "Read",
+    "Grep",
+    "Glob",
+    "Bash(git log:*)",
+    "Bash(git show:*)",
+    "Bash(git blame:*)",
+    "Bash(git grep:*)",
+    "Bash(git diff:*)",
+    "Bash(git rev-parse:*)",
+    "Bash(git fetch:*)",
+    "Bash(git ls-tree:*)",
+    "Bash(git ls-remote:*)",
+    "Bash(gh issue list:*)",
+    "Bash(gh issue view:*)",
+    "Bash(gh pr list:*)",
+    "Bash(gh pr view:*)",
+    "Bash(gh pr diff:*)",
+    "Bash(gh search issues:*)",
+    "Bash(gh search prs:*)",
+];
+
+/// Official documentation sites /intent trusts by default.
+pub const DEFAULT_TRUSTED_DOMAINS: [&str; 19] = [
+    "docs.github.com",
+    "git-scm.com",
+    "docs.rs",
+    "doc.rust-lang.org",
+    "docs.python.org",
+    "nodejs.org",
+    "developer.mozilla.org",
+    "go.dev",
+    "pkg.go.dev",
+    "kubernetes.io",
+    "developer.hashicorp.com",
+    "registry.terraform.io",
+    "docs.aws.amazon.com",
+    "cloud.google.com",
+    "learn.microsoft.com",
+    "datatracker.ietf.org",
+    "www.rfc-editor.org",
+    "code.claude.com",
+    "docs.anthropic.com",
+];
 
 impl Default for IntentSettings {
     fn default() -> Self {
@@ -149,11 +199,27 @@ impl Default for IntentSettings {
             dir: "docs/adr".into(),
             max_words: 250,
             branch: String::new(),
+            trusted_domains: DEFAULT_TRUSTED_DOMAINS.map(String::from).to_vec(),
         }
     }
 }
 
 impl IntentSettings {
+    /// The skill's `allowed-tools`: the read-only tools plus `WebFetch` scoped to
+    /// each trusted domain.
+    pub fn allowed_tools(&self) -> String {
+        INTENT_READ_TOOLS
+            .iter()
+            .map(|t| t.to_string())
+            .chain(
+                self.trusted_domains
+                    .iter()
+                    .map(|d| format!("WebFetch(domain:{d})")),
+            )
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
     /// The first file name, e.g. `ADR-0001` (no slug).
     pub fn first_id(&self) -> String {
         format!(
@@ -181,6 +247,9 @@ impl IntentSettings {
             if let Err(e) = r {
                 anyhow::bail!("intent {field}: {e}");
             }
+        }
+        for d in &self.trusted_domains {
+            v::domain(d).map_err(|e| anyhow::anyhow!("intent trusted domain: {e}"))?;
         }
         Ok(())
     }

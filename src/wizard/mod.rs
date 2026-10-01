@@ -908,7 +908,7 @@ pub fn run_edit_intent(path: String, changes: IntentCli) -> Result<()> {
 
     if changes.is_empty() {
         if !crate::prompt::can_ask() {
-            bail!("no terminal to ask in — pass the changes as flags: --prefix, --digits, --dir, --max-words, --branch, --enable/--disable, --issue-template, --intent-template, --reset-issue-template, --reset-intent-template (see --help)");
+            bail!("no terminal to ask in — pass the changes as flags: --prefix, --digits, --dir, --max-words, --branch, --trust-domain/--untrust-domain, --enable/--disable, --issue-template, --intent-template, --reset-issue-template, --reset-intent-template (see --help)");
         }
         ui::banner("edit /intent");
         let (on, s) = configure_intent(
@@ -934,6 +934,18 @@ pub fn run_edit_intent(path: String, changes: IntentCli) -> Result<()> {
         }
         if let Some(v) = &changes.branch {
             s.branch = v.trim().to_string();
+        }
+        for d in &changes.trust_domain {
+            let d =
+                validate::trusted_domain(d).map_err(|e| anyhow!("intent trusted domain: {e}"))?;
+            if !s.trusted_domains.contains(&d) {
+                s.trusted_domains.push(d);
+            }
+        }
+        for d in &changes.untrust_domain {
+            // Lenient: whatever form it was typed in, drop the matching host.
+            let d = validate::trusted_domain(d).unwrap_or_else(|_| d.trim().to_lowercase());
+            s.trusted_domains.retain(|x| *x != d);
         }
         if changes.enable {
             project.claude.workflow.intent = true;
@@ -1053,6 +1065,14 @@ fn print_intent(project: &Project, root: &Path) {
             "the remote's default branch (origin/HEAD)".to_string()
         } else {
             format!("origin/{}", s.branch)
+        },
+    );
+    ui::kv(
+        "trusted docs",
+        &if s.trusted_domains.is_empty() {
+            ui::muted("none — every web fetch asks")
+        } else {
+            s.trusted_domains.join(", ")
         },
     );
     for (label, rel) in [

@@ -294,6 +294,8 @@ Examples:
   ocgen edit intent --prefix RFC --digits 3 --dir docs/rfc # RFC-001-<slug>.md in docs/rfc/
   ocgen edit intent --max-words 150                        # shorter issue descriptions
   ocgen edit intent --branch develop                       # check numbers against origin/develop
+  ocgen edit intent --trust-domain docs.example.org        # let /intent read these docs without asking
+  ocgen edit intent --trust-domain \"*.amazon.com\"          # every subdomain (not amazon.com itself)
   ocgen edit intent --issue-template                       # edit the issue structure in $EDITOR
   ocgen edit intent --reset-intent-template                # back to ocgen's default
   ocgen edit intent --disable                              # remove /intent from the project";
@@ -316,6 +318,14 @@ pub struct IntentCli {
     /// Remote branch to check for numbers already taken ("" = the remote's default).
     #[arg(long, value_name = "BRANCH")]
     pub branch: Option<String>,
+    /// Trust a documentation site: /intent may fetch it without asking (repeatable).
+    /// A leading `*.` trusts every subdomain, e.g. "*.amazon.com". An https:// URL
+    /// is accepted (its host is stored); http:// is refused — docs are HTTPS only.
+    #[arg(long, value_name = "DOMAIN")]
+    pub trust_domain: Vec<String>,
+    /// Stop trusting a documentation site (repeatable).
+    #[arg(long, value_name = "DOMAIN")]
+    pub untrust_domain: Vec<String>,
     /// Add /intent to the project.
     #[arg(long, conflicts_with = "disable")]
     pub enable: bool,
@@ -336,7 +346,8 @@ pub struct IntentCli {
     pub reset_intent_template: bool,
     /// Show the settings and template paths, and write nothing.
     #[arg(long, conflicts_with_all = [
-        "prefix", "digits", "dir", "max_words", "branch", "enable", "disable",
+        "prefix", "digits", "dir", "max_words", "branch", "trust_domain", "untrust_domain",
+        "enable", "disable",
         "issue_template", "intent_template", "reset_issue_template", "reset_intent_template",
     ])]
     pub show: bool,
@@ -349,6 +360,8 @@ impl IntentCli {
             && self.dir.is_none()
             && self.max_words.is_none()
             && self.branch.is_none()
+            && self.trust_domain.is_empty()
+            && self.untrust_domain.is_empty()
             && !self.enable
             && !self.disable
             && !self.issue_template

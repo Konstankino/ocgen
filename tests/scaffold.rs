@@ -1384,6 +1384,7 @@ fn claude_team_enabled_without_hook_stubs() {
     a.description = "d".into();
     a.body = "b".into();
     p.agents = vec![a];
+    p.claude.workflow.intent = false; // its https-only WebFetch hook isn't a team hook
 
     let dir = tempdir().unwrap();
     p.scaffold(dir.path(), false).unwrap();
@@ -1477,6 +1478,7 @@ fn team_confidence_zero_disables_gate() {
         approval_gate: false,
     };
     p.agents = agent::claude_default_pipeline("English").unwrap();
+    p.claude.workflow.intent = false; // its https-only WebFetch hook isn't a team hook
     let dir = tempdir().unwrap();
     p.scaffold(dir.path(), false).unwrap();
 
@@ -4520,4 +4522,322 @@ fn hand_added_permissions_are_found_but_not_generated_or_yours() {
     assert!(p.hand_added_permissions(dir.path()).rules.is_empty());
     fs::remove_file(dir.path().join(".claude/settings.json")).unwrap();
     assert!(p.hand_added_permissions(dir.path()).rules.is_empty());
+}
+
+// ------------------------------------------------------- /intent: deep analysis -----
+
+/// The skill's frontmatter lines (between the `---` fences).
+fn frontmatter(md: &str) -> Vec<String> {
+    md.strip_prefix("---\n")
+        .and_then(|r| r.split_once("\n---\n"))
+        .map(|(f, _)| f.lines().map(String::from).collect())
+        .unwrap_or_default()
+}
+
+const INTENT_READS: [&str; 19] = [
+    "Read",
+    "Grep",
+    "Glob",
+    "Bash(git log:*)",
+    "Bash(git show:*)",
+    "Bash(git blame:*)",
+    "Bash(git grep:*)",
+    "Bash(git diff:*)",
+    "Bash(git rev-parse:*)",
+    "Bash(git fetch:*)",
+    "Bash(git ls-tree:*)",
+    "Bash(git ls-remote:*)",
+    "Bash(gh issue list:*)",
+    "Bash(gh issue view:*)",
+    "Bash(gh pr list:*)",
+    "Bash(gh pr view:*)",
+    "Bash(gh pr diff:*)",
+    "Bash(gh search issues:*)",
+    "Bash(gh search prs:*)",
+];
+
+#[test]
+fn intent_skill_pre_approves_read_only_tools_and_runs_at_xhigh() {
+    let dir = tempdir().unwrap();
+    claude_default("ia").scaffold(dir.path(), false).unwrap();
+    let md = read(dir.path(), ".claude/skills/intent/SKILL.md");
+    let front = frontmatter(&md);
+
+    // No key twice.
+    let mut keys: Vec<&str> = front
+        .iter()
+        .filter_map(|l| l.split_once(':'))
+        .map(|(k, _)| k)
+        .collect();
+    let n = keys.len();
+    keys.sort();
+    keys.dedup();
+    assert_eq!(keys.len(), n, "duplicate frontmatter keys: {front:?}");
+
+    assert!(front.iter().any(|l| l == "effort: xhigh"), "{front:?}");
+    let tools = front
+        .iter()
+        .find_map(|l| l.strip_prefix("allowed-tools: "))
+        .expect("allowed-tools");
+    let tools: Vec<&str> = tools.split(", ").collect();
+    for t in INTENT_READS {
+        assert!(tools.contains(&t), "missing {t}: {tools:?}");
+    }
+    assert!(tools.contains(&"WebFetch(domain:docs.rs)"));
+    assert!(tools.contains(&"WebFetch(domain:docs.github.com)"));
+    // Read-only: nothing that writes, creates issues or searches the open web.
+    for t in &tools {
+        assert!(
+            !t.starts_with("Write")
+                && !t.starts_with("Edit")
+                && !t.contains("gh issue create")
+                && *t != "WebSearch"
+                && *t != "WebFetch"
+                && *t != "Bash",
+            "not read-only: {t}"
+        );
+    }
+    // And the deny rule still stops issue creation.
+    assert!(settings_of(dir.path())["permissions"]["deny"]
+        .as_array()
+        .unwrap()
+        .contains(&"Bash(gh issue create*)".into()));
+}
+
+#[test]
+fn intent_skill_demands_an_exhaustive_evidence_based_analysis() {
+    let dir = tempdir().unwrap();
+    claude_default("ib").scaffold(dir.path(), false).unwrap();
+    let md = read(dir.path(), ".claude/skills/intent/SKILL.md");
+    assert!(!md.contains("{{") && !md.contains("{%"), "unrendered Jinja");
+
+    // Passes: map, parallel deep dive, gap closing, challenge.
+    for pass in ["Pass 1", "Pass 2", "Pass 3", "Pass 4"] {
+        assert!(md.contains(pass), "missing {pass}");
+    }
+    assert!(md.contains("search terms"));
+    assert!(md.contains("`Explore` subagents") && !md.contains("explorer subagents"));
+    assert!(md.contains("every call site"));
+    assert!(md.contains("git log -S") && md.contains("git blame"));
+    assert!(md.contains("gh search issues") && md.contains("closed"));
+    assert!(md.contains("finds nothing new"));
+    assert!(md.contains("contradict"));
+
+    // Coverage checklist: every item.
+    for item in [
+        "Entry points",
+        "All call sites",
+        "Data and state",
+        "Error and edge paths",
+        "Concurrency",
+        "Platforms",
+        "Security and permissions",
+        "Performance",
+        "Tests",
+        "Config",
+        "Docs",
+        "History",
+        "Related issues and PRs",
+        "Existing intents",
+    ] {
+        assert!(md.contains(item), "checklist missing {item}");
+    }
+    assert!(md.contains("N/A"));
+
+    // The analysis report, numbered findings, and a plan that traces back to them.
+    for section in [
+        "Current behaviour",
+        "Root cause",
+        "Impact",
+        "Constraints",
+        "Prior decisions",
+        "Risks",
+        "Open questions",
+        "What would make this wrong",
+    ] {
+        assert!(md.contains(section), "report missing {section}");
+    }
+    assert!(md.contains("F1") && md.contains("Assumption"));
+    assert!(md.contains("Verified") && md.contains("Inferred"));
+
+    // Web docs only from trusted domains; gh failures don't stop the analysis.
+    assert!(md.contains("trusted") && md.contains("docs.rs"));
+    assert!(md.contains("not authenticated"));
+}
+
+#[test]
+fn intent_trusted_domains_are_configurable_and_validated() {
+    use ocgen::validate::domain;
+    let dir = tempdir().unwrap();
+    let mut p = claude_default("ic");
+    p.claude.intent.trusted_domains = vec!["docs.example.org".into()];
+    p.scaffold(dir.path(), false).unwrap();
+    let md = read(dir.path(), ".claude/skills/intent/SKILL.md");
+    assert!(md.contains("WebFetch(domain:docs.example.org)"));
+    assert!(!md.contains("WebFetch(domain:docs.rs)"));
+
+    assert!(domain("docs.rs").is_ok() && domain("www.rfc-editor.org").is_ok());
+    // A leading `*.` trusts every subdomain of a registrable domain…
+    assert!(domain("*.amazon.com").is_ok() && domain("*.docs.example.org").is_ok());
+    for bad in [
+        "",
+        "https://docs.rs",
+        "docs.rs/std",
+        "docs.rs:443",
+        "a b",
+        "localhost",
+        // …but only as the whole first label, and never a whole TLD.
+        "*",
+        "*.com",
+        "*amazon.com",
+        "docs.*.com",
+        "*.*.amazon.com",
+        "amazon.*",
+    ] {
+        assert!(domain(bad).is_err(), "{bad}");
+    }
+    p.claude.intent.trusted_domains = vec!["https://x.org".into()];
+    assert!(p.claude.intent.validate().is_err());
+
+    // Old state without the field gets the defaults.
+    let s: ocgen::claude::IntentSettings = serde_json::from_str("{}").unwrap();
+    assert!(s.trusted_domains.contains(&"docs.github.com".to_string()));
+}
+
+#[test]
+fn intent_template_has_an_evidence_section() {
+    let dir = tempdir().unwrap();
+    claude_default("id").scaffold(dir.path(), false).unwrap();
+    assert!(read(dir.path(), ".claude/intent/intent-template.md").contains("## Evidence"));
+}
+
+#[test]
+fn trusted_domains_are_https_only() {
+    use ocgen::validate::trusted_domain;
+    // An https:// URL is accepted and stored as its host; http:// never is.
+    assert_eq!(trusted_domain("https://docs.rs").unwrap(), "docs.rs");
+    assert_eq!(trusted_domain("HTTPS://Docs.RS/").unwrap(), "docs.rs");
+    assert_eq!(trusted_domain(" *.amazon.com ").unwrap(), "*.amazon.com");
+    assert_eq!(
+        trusted_domain("https://*.amazon.com").unwrap(),
+        "*.amazon.com"
+    );
+    let err = trusted_domain("http://docs.rs").unwrap_err();
+    assert!(err.contains("https"), "{err}");
+    for bad in [
+        "HTTP://docs.rs",
+        "ftp://docs.rs",
+        "//docs.rs",
+        "https://docs.rs/std",
+        "https://",
+    ] {
+        assert!(trusted_domain(bad).is_err(), "{bad}");
+    }
+
+    // The skill fetches over HTTPS only.
+    let dir = tempdir().unwrap();
+    claude_default("https").scaffold(dir.path(), false).unwrap();
+    let md = read(dir.path(), ".claude/skills/intent/SKILL.md");
+    assert!(
+        md.contains("only `https://` URLs") && md.contains("never `http://`"),
+        "{md}"
+    );
+}
+
+#[test]
+fn intent_blocks_plain_http_webfetch_with_a_pretooluse_hook() {
+    let dir = tempdir().unwrap();
+    let mut p = claude_default("hf");
+    p.claude.team.enabled = true;
+    p.claude.team.approval_gate = true; // its PreToolUse group must stay too
+    p.claude.output = Output {
+        project: true,
+        plugin: true,
+    };
+    p.scaffold(dir.path(), false).unwrap();
+
+    let s = settings_of(dir.path());
+    let groups = hook_groups(&s, "PreToolUse");
+    let fetch = groups
+        .iter()
+        .find(|g| g["matcher"] == "WebFetch")
+        .expect("a PreToolUse group for WebFetch");
+    let cmd = fetch["hooks"][0]["command"].as_str().unwrap();
+    assert!(cmd.contains("https-only-fetch"), "{cmd}");
+    assert_eq!(fetch["hooks"][0]["shell"], "bash");
+    assert!(
+        groups.iter().any(|g| g["hooks"][0]["command"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("team-approval-gate")),
+        "approval gate kept"
+    );
+    assert!(dir
+        .path()
+        .join(".claude/hooks/https-only-fetch.sh")
+        .exists());
+    // The plugin carries it as well.
+    let plugin: serde_json::Value =
+        serde_json::from_str(&read(dir.path(), "plugin/hf/hooks/hooks.json")).unwrap();
+    assert!(plugin["hooks"]["PreToolUse"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|g| g["matcher"] == "WebFetch"));
+    assert!(dir
+        .path()
+        .join("plugin/hf/hooks/https-only-fetch.sh")
+        .exists());
+
+    // Off with /intent.
+    let dir = tempdir().unwrap();
+    let mut p = claude_default("hf2");
+    p.claude.workflow.intent = false;
+    p.scaffold(dir.path(), false).unwrap();
+    let s = settings_of(dir.path());
+    assert!(!hook_groups(&s, "PreToolUse")
+        .iter()
+        .any(|g| g["matcher"] == "WebFetch"));
+    assert!(!dir
+        .path()
+        .join(".claude/hooks/https-only-fetch.sh")
+        .exists());
+}
+
+#[test]
+fn verify_checks_that_plain_http_fetches_are_blocked() {
+    use ocgen::verify::Status;
+    let dir = tempdir().unwrap();
+    claude_default("vh").scaffold(dir.path(), false).unwrap();
+    let checks = verify_no_claude(dir.path());
+    assert_eq!(
+        status_of(&checks, "http:// WebFetch blocked"),
+        Status::Pass,
+        "{checks:#?}"
+    );
+
+    // A hook that lets http:// through fails verification.
+    fs::write(
+        dir.path().join(".claude/hooks/https-only-fetch.sh"),
+        "#!/bin/sh\nexit 0\n",
+    )
+    .unwrap();
+    let mut s = settings_of(dir.path());
+    for g in s["hooks"]["PreToolUse"].as_array_mut().unwrap() {
+        if g["matcher"] == "WebFetch" {
+            g["hooks"][0]["command"] =
+                "sh \"$CLAUDE_PROJECT_DIR/.claude/hooks/https-only-fetch.sh\"".into();
+        }
+    }
+    fs::write(
+        dir.path().join(".claude/settings.json"),
+        serde_json::to_string_pretty(&s).unwrap(),
+    )
+    .unwrap();
+    let checks = verify_no_claude(dir.path());
+    assert_eq!(
+        status_of(&checks, "http:// WebFetch blocked"),
+        Status::Fail,
+        "{checks:#?}"
+    );
 }

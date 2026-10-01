@@ -715,3 +715,56 @@ fn check_failure_shows_the_tail_of_its_output() {
         );
     }
 }
+
+// ------------------------------------------------------ https-only WebFetch --
+
+#[test]
+fn https_only_fetch_parity() {
+    let step = |payload: &'static str| Step {
+        hook: "https-only-fetch",
+        env: &[],
+        setup: none,
+        payload,
+    };
+    check(
+        "https",
+        &[
+            // Plain HTTP is blocked, whatever the case or JSON escaping.
+            step(
+                r#"{"tool_name":"WebFetch","tool_input":{"url":"http://docs.rs/serde","prompt":"x"}}"#,
+            ),
+            step(r#"{"tool_name":"WebFetch","tool_input":{"url":"HTTP://Docs.RS/","prompt":"x"}}"#),
+            step(
+                r#"{"tool_name":"WebFetch","tool_input":{"url":"http:\/\/docs.rs\/","prompt":"x"}}"#,
+            ),
+            step(
+                r#"{"tool_name":"WebFetch","tool_input":{"url":"  http://docs.rs","prompt":"x"}}"#,
+            ),
+            // HTTPS, or no URL at all, passes.
+            step(
+                r#"{"tool_name":"WebFetch","tool_input":{"url":"https://docs.rs/serde","prompt":"x"}}"#,
+            ),
+            step(r#"{"tool_name":"WebFetch","tool_input":{"prompt":"x"}}"#),
+            step("not json"),
+        ],
+    );
+    let env = HashMap::new();
+    let blocked = ocgen::hooks::run(
+        "https-only-fetch",
+        r#"{"tool_name":"WebFetch","tool_input":{"url":"http://docs.rs/serde"}}"#,
+        &env,
+    );
+    assert_eq!(blocked.code, 2, "exit 2 blocks the call");
+    assert!(
+        blocked.stderr.contains("https://docs.rs/serde"),
+        "suggests the https URL: {}",
+        blocked.stderr
+    );
+    let ok = ocgen::hooks::run(
+        "https-only-fetch",
+        r#"{"tool_name":"WebFetch","tool_input":{"url":"https://docs.rs/"}}"#,
+        &env,
+    );
+    assert_eq!(ok.code, 0);
+    assert!(ocgen::hooks::NAMES.contains(&"https-only-fetch"));
+}

@@ -1320,3 +1320,86 @@ fn release_workflow_stamps_the_tag_version_into_the_binary() {
     // …and each native build is checked to report it.
     assert!(wf.contains("--version"));
 }
+
+#[test]
+fn edit_intent_trusts_and_untrusts_domains() {
+    let dir = tempdir().unwrap();
+    scaffold_claude(dir.path());
+    ocgen()
+        .args(["edit", "intent", "-p"])
+        .arg(dir.path())
+        .args([
+            "--trust-domain",
+            "docs.example.org",
+            "--untrust-domain",
+            "go.dev",
+            "--trust-domain",
+            "*.amazon.com",
+        ])
+        .assert()
+        .success();
+    let skill = std::fs::read_to_string(dir.path().join(".claude/skills/intent/SKILL.md")).unwrap();
+    assert!(skill.contains("WebFetch(domain:docs.example.org)"));
+    assert!(skill.contains("WebFetch(domain:*.amazon.com)"));
+    assert!(!skill.contains("WebFetch(domain:go.dev)"));
+    ocgen()
+        .args(["edit", "intent", "--show", "-p"])
+        .arg(dir.path())
+        .assert()
+        .success()
+        .stdout(contains("docs.example.org"))
+        .stdout(contains("trusted docs"));
+
+    let state = dir.path().join(".claude/.ocgen-state.json");
+    // https:// is accepted (stored as the host); http:// is refused.
+    ocgen()
+        .args([
+            "edit",
+            "intent",
+            "--trust-domain",
+            "https://docs.example.net",
+            "-p",
+        ])
+        .arg(dir.path())
+        .assert()
+        .success();
+    let skill = std::fs::read_to_string(dir.path().join(".claude/skills/intent/SKILL.md")).unwrap();
+    assert!(skill.contains("WebFetch(domain:docs.example.net)"));
+    let before = std::fs::read_to_string(&state).unwrap();
+    ocgen()
+        .args([
+            "edit",
+            "intent",
+            "--trust-domain",
+            "http://docs.example.com",
+            "-p",
+        ])
+        .arg(dir.path())
+        .assert()
+        .failure()
+        .stderr(contains("https://"));
+    assert_eq!(
+        before,
+        std::fs::read_to_string(&state).unwrap(),
+        "nothing written"
+    );
+
+    for bad in ["https://evil.example/x", "*.com"] {
+        ocgen()
+            .args(["edit", "intent", "--trust-domain", bad, "-p"])
+            .arg(dir.path())
+            .assert()
+            .failure()
+            .stderr(contains("domain"));
+    }
+    assert_eq!(
+        before,
+        std::fs::read_to_string(&state).unwrap(),
+        "nothing written"
+    );
+    ocgen()
+        .args(["edit", "intent", "--help"])
+        .assert()
+        .success()
+        .stdout(contains("--trust-domain"));
+}

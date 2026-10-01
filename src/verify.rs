@@ -149,6 +149,7 @@ pub fn verify(project: &Project, root: &Path, opts: &Options) -> Vec<Check> {
         out.push(hook_commands(root, s));
         out.push(hook_shell(s, cfg!(windows), find_git_bash(s).as_deref()));
         out.push(approval_gate(root, s));
+        out.push(https_only_fetch(root, s));
         out.push(pre_push(project, root));
         out.push(statusline(root, s));
     }
@@ -533,6 +534,44 @@ fn hook_commands(root: &Path, settings: &Value) -> Check {
 /// The approval gate must block pushes — including phrasings with flags and via
 /// a deploy script — and allow ordinary work. Tested with an empty HOME so a
 /// current approval can't hide a broken gate.
+/// The WebFetch hook must block plain http:// and let https:// through.
+fn https_only_fetch(root: &Path, settings: &Value) -> Check {
+    let name = "http:// WebFetch blocked";
+    let Some((_, cmd)) = hook_entries(settings)
+        .into_iter()
+        .find(|(e, c)| e == "PreToolUse" && c.contains("https-only-fetch"))
+    else {
+        return check(name, Status::Skip, "/intent not enabled");
+    };
+    let env = hook_env(root, settings);
+    let run = |url: &str| {
+        let ev = serde_json::json!({
+            "session_id": "ocgen-verify", "tool_name": "WebFetch",
+            "tool_input": { "url": url, "prompt": "verify" }
+        })
+        .to_string();
+        run_sh(&cmd, &ev, &env, root, Duration::from_secs(20)).map(|x| x.0)
+    };
+    let leaks: Vec<&str> = ["http://example.com/", "HTTP://example.com/"]
+        .into_iter()
+        .filter(|u| run(u) != Some(2))
+        .collect();
+    let blocked_https = run("https://example.com/") != Some(0);
+    match (leaks.is_empty(), blocked_https) {
+        (true, false) => check(name, Status::Pass, "http:// is blocked, https:// allowed"),
+        (false, _) => check(
+            name,
+            Status::Fail,
+            format!("let {} through — run `ocgen doctor`", leaks.join(", ")),
+        ),
+        (true, true) => check(
+            name,
+            Status::Fail,
+            "blocks https:// too — run `ocgen doctor`",
+        ),
+    }
+}
+
 fn approval_gate(root: &Path, settings: &Value) -> Check {
     let name = "approval gate blocks git push";
     let Some((_, cmd)) = hook_entries(settings)
