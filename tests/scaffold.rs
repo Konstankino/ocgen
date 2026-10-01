@@ -4471,3 +4471,53 @@ fn intent_settings_are_validated() {
 fn user_skills_cannot_take_the_intent_name() {
     assert!(ocgen::validate::skill_name("intent").is_err());
 }
+
+// ------------------------------------------------- hand-added permission rules -----
+
+/// Add rules to a list in the project's settings.json, as a user would by hand.
+fn hand_add(dir: &Path, list: &str, rules: &[&str]) {
+    let path = dir.join(".claude/settings.json");
+    let mut s: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    let arr = s["permissions"][list].as_array_mut().unwrap();
+    for r in rules {
+        arr.push((*r).into());
+    }
+    fs::write(&path, serde_json::to_string_pretty(&s).unwrap()).unwrap();
+}
+
+#[test]
+fn hand_added_permissions_are_found_but_not_generated_or_yours() {
+    use ocgen::claude::RuleList;
+    let dir = tempdir().unwrap();
+    let mut p = claude_default("hand");
+    p.claude
+        .permissions
+        .add(RuleList::Allow, "WebSearch")
+        .unwrap();
+    p.scaffold(dir.path(), false).unwrap();
+    // Nothing added by hand yet: ocgen's and yours aren't reported.
+    let found = p.hand_added_permissions(dir.path());
+    assert!(
+        found.rules.is_empty() && found.invalid.is_empty(),
+        "{found:?}"
+    );
+
+    hand_add(
+        dir.path(),
+        "allow",
+        &["Bash(gh run view:*)", "Bash(head:*)", "Read", "WebSearch"],
+    );
+    hand_add(dir.path(), "deny", &["Read(./secrets/**)", "not a rule"]);
+    let found = p.hand_added_permissions(dir.path());
+    assert_eq!(found.rules.allow, ["Bash(gh run view:*)", "Bash(head:*)"]);
+    assert_eq!(found.rules.deny, ["Read(./secrets/**)"]);
+    assert!(found.rules.ask.is_empty());
+    assert_eq!(found.invalid, ["not a rule"]);
+
+    // No settings.json, or not JSON: nothing to adopt.
+    fs::write(dir.path().join(".claude/settings.json"), "{ nope").unwrap();
+    assert!(p.hand_added_permissions(dir.path()).rules.is_empty());
+    fs::remove_file(dir.path().join(".claude/settings.json")).unwrap();
+    assert!(p.hand_added_permissions(dir.path()).rules.is_empty());
+}

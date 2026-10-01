@@ -1223,3 +1223,75 @@ fn edit_intent_help_has_examples() {
         .success()
         .stdout(contains("intent"));
 }
+
+#[test]
+fn doctor_keeps_permission_rules_added_by_hand() {
+    let dir = tempdir().unwrap();
+    scaffold_claude(dir.path());
+    let path = dir.path().join(".claude/settings.json");
+    let mut s: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    for r in ["Bash(gh run view:*)", "Bash(head:*)"] {
+        s["permissions"]["allow"]
+            .as_array_mut()
+            .unwrap()
+            .push(r.into());
+    }
+    std::fs::write(&path, serde_json::to_string_pretty(&s).unwrap()).unwrap();
+    let before = std::fs::read_to_string(&path).unwrap();
+
+    // The dry run lists them and writes nothing.
+    ocgen()
+        .args(["doctor", "--dry-run"])
+        .arg(dir.path())
+        .assert()
+        .success()
+        .stdout(contains("added by hand"))
+        .stdout(contains("Bash(head:*)"))
+        .stdout(contains("dry run"));
+    assert_eq!(before, std::fs::read_to_string(&path).unwrap());
+
+    // --yes keeps them as your rules: in settings.json and in the state.
+    ocgen()
+        .args(["doctor", "--yes"])
+        .arg(dir.path())
+        .assert()
+        .success()
+        .stdout(contains("kept 2 rule(s)"));
+    let allow = |d: &Path| -> Vec<String> {
+        let s: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(d.join(".claude/settings.json")).unwrap(),
+        )
+        .unwrap();
+        s["permissions"]["allow"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect()
+    };
+    assert!(allow(dir.path()).contains(&"Bash(gh run view:*)".to_string()));
+    let state = std::fs::read_to_string(dir.path().join(".claude/.ocgen-state.json")).unwrap();
+    assert!(state.contains("Bash(head:*)"), "saved as your rule");
+
+    // A second doctor has nothing to change in settings.json.
+    ocgen()
+        .args(["doctor", "--dry-run"])
+        .arg(dir.path())
+        .assert()
+        .success()
+        .stdout(contains("added by hand").not())
+        .stdout(contains("every generated file is up to date"));
+    assert!(allow(dir.path()).contains(&"Bash(head:*)".to_string()));
+}
+
+#[test]
+fn doctor_help_has_examples() {
+    ocgen()
+        .args(["doctor", "--help"])
+        .assert()
+        .success()
+        .stdout(contains("Examples:"))
+        .stdout(contains("ocgen doctor --dry-run"))
+        .stdout(contains("hand-added permission rules"));
+}

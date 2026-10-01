@@ -387,3 +387,82 @@ fn edit_intent_walks_every_setting() {
     assert_eq!(p.claude.intent.max_words, 200);
     assert!(read(tmp.path(), ".claude/skills/intent/SKILL.md").contains("RFC-001"));
 }
+
+// ---------- doctor: hand-added rules and the per-file review ----------
+
+/// A Claude project on disk with two allow rules added by hand to settings.json
+/// and a hand-edited agent file. Returns (path, agent rel path, old settings).
+fn hand_edited_project(dir: &Path) -> (String, String, String) {
+    let path = claude_project(dir);
+    let p = reload(dir);
+    let agent = first_agent(&p);
+    fs::write(dir.join(&agent), "my agent\n").unwrap();
+    let settings = dir.join(SETTINGS);
+    let mut s: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&settings).unwrap()).unwrap();
+    for r in ["Bash(gh run view:*)", "Bash(head:*)"] {
+        s["permissions"]["allow"]
+            .as_array_mut()
+            .unwrap()
+            .push(r.into());
+    }
+    let old = serde_json::to_string_pretty(&s).unwrap();
+    fs::write(&settings, &old).unwrap();
+    (path, agent, old)
+}
+
+#[test]
+fn doctor_adopts_hand_added_rules_and_keeps_files_chosen_one_by_one() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (path, agent, _) = hand_edited_project(tmp.path());
+    script(&[
+        "y",            // keep the hand-added rules as mine
+        "file by file", // what now?
+        "Keep",         // the agent file
+        "Overwrite",    // settings.json (regenerated with the adopted rules)
+    ]);
+    super::run_doctor(path, false, false).unwrap();
+    assert_eq!(script_remaining(), 0);
+
+    // settings.json was regenerated only for the rules, which it now holds as mine.
+    let p = reload(tmp.path());
+    assert_eq!(
+        p.claude.permissions.allow,
+        ["Bash(gh run view:*)", "Bash(head:*)"]
+    );
+    assert!(read(tmp.path(), SETTINGS).contains("Bash(head:*)"));
+    assert_eq!(read(tmp.path(), &agent), "my agent\n", "kept");
+}
+
+#[test]
+fn doctor_apply_all_without_adopting_drops_the_rules_with_a_backup() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (path, agent, old) = hand_edited_project(tmp.path());
+    script(&["n", "Apply all"]);
+    super::run_doctor(path, false, false).unwrap();
+    assert_eq!(script_remaining(), 0);
+
+    assert!(!read(tmp.path(), SETTINGS).contains("Bash(head:*)"));
+    assert_ne!(read(tmp.path(), &agent), "my agent\n");
+    let backup = backup_dir(tmp.path());
+    assert_eq!(read(&backup, SETTINGS), old);
+    assert_eq!(read(&backup, &agent), "my agent\n");
+}
+
+#[test]
+fn doctor_cancel_writes_nothing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (path, agent, old) = hand_edited_project(tmp.path());
+    let state = read(tmp.path(), STATE);
+    script(&["y", "Cancel"]);
+    super::run_doctor(path, false, false).unwrap();
+    assert_eq!(script_remaining(), 0);
+    assert_eq!(read(tmp.path(), SETTINGS), old);
+    assert_eq!(read(tmp.path(), &agent), "my agent\n");
+    assert_eq!(
+        read(tmp.path(), STATE),
+        state,
+        "rules not adopted on cancel"
+    );
+    assert!(!tmp.path().join(".ocgen-backup").exists());
+}

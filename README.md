@@ -208,8 +208,14 @@ delete as stale (`-`) is listed with a short diff.
   tell your edits apart from its own updates. For a hand-edited `settings.json` it points you
   to `.claude/settings.local.json`, which ocgen never touches. For permission rules the whole
   project should share, use `ocgen edit permissions` instead.
-- **Confirmation:** in a terminal it asks before applying. `--yes` skips the question, and
-  non-interactive runs such as CI apply directly.
+- **Permission rules you added by hand are kept.** Rules in `settings.json` that ocgen didn't
+  generate are listed under "Permission rules added by hand", and doctor offers to keep them as
+  your rules (the same store as `ocgen edit permissions`), so this and every later regeneration
+  keeps them. `--yes` and non-interactive runs keep them without asking.
+- **You choose per file.** When files you changed would be overwritten, pick **Apply all**,
+  **Keep all changed files** (only add new ones), **Decide file by file** (Overwrite / Keep mine /
+  Show full diff) or **Cancel**. A kept file stays as it is; the next `doctor` or `verify` reports
+  it again. `--yes` applies everything, and non-interactive runs such as CI apply directly.
 - **Backups:** before overwriting or deleting anything it copies the previous versions to
   `.ocgen-backup/<UTC timestamp>/`, which git-ignores itself and keeps the newest 5. Copy a
   file back to restore it.

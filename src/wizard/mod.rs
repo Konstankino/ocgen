@@ -299,27 +299,38 @@ fn write_with_review(theme: &ColorfulTheme, project: &Project, target: &Path) ->
     let backup = Project::backup(target, &applied)?;
     let written = project.scaffold_keeping(target, &keep)?;
     report_written(&written);
+    report_backup(target, backup.as_deref());
+    report_kept(&keep);
+    Ok(())
+}
+
+/// Where the previous versions went, if anything was backed up.
+fn report_backup(target: &Path, backup: Option<&Path>) {
     if let Some(b) = backup {
         // Forward slashes on every platform (it's shown, and matched by tests).
-        let shown = ocgen::paths::for_shell(b.strip_prefix(target).unwrap_or(&b));
+        let shown = ocgen::paths::for_shell(b.strip_prefix(target).unwrap_or(b));
         println!(
             "  {} {shown}/  {}",
             style("backup:").bold(),
             ui::muted("(previous versions; copy a file back to restore it)")
         );
     }
-    if !keep.is_empty() {
-        println!();
-        ui::warning(&format!(
-            "kept {} existing file(s) as they were:",
-            keep.len()
-        ));
-        for rel in &keep {
-            println!("    {}", ui::muted(rel));
-        }
-        ui::tip("The generated files may rely on things the kept ones lack. `ocgen doctor --dry-run` shows how they differ; `ocgen doctor` replaces them (with a backup).");
+}
+
+/// The existing files the user chose to keep instead of regenerating.
+fn report_kept(keep: &BTreeSet<String>) {
+    if keep.is_empty() {
+        return;
     }
-    Ok(())
+    println!();
+    ui::warning(&format!(
+        "kept {} existing file(s) as they were:",
+        keep.len()
+    ));
+    for rel in keep {
+        println!("    {}", ui::muted(rel));
+    }
+    ui::tip("The generated files may rely on things the kept ones lack. `ocgen doctor --dry-run` shows how they differ; `ocgen doctor` replaces them (with a backup).");
 }
 
 /// Show the existing files that differ and ask what to do with them. Returns the
@@ -340,18 +351,41 @@ fn resolve_conflicts(
         );
     }
 
+    choose_keep(
+        theme,
+        conflicts,
+        "These files already exist and differ. What now?",
+        [
+            format!("Overwrite all ({})", conflicts.len()),
+            "Keep all existing — write only the new files".to_string(),
+        ],
+        2,
+    )
+}
+
+/// Ask what happens to files that would be overwritten: all of them, none, one
+/// by one, or cancel. `labels` names the first two choices. Returns the files to
+/// keep as they are (relative paths), or `None` to write nothing at all.
+fn choose_keep(
+    theme: &ColorfulTheme,
+    conflicts: &[&FileChange],
+    question: &str,
+    labels: [String; 2],
+    default: usize,
+) -> Result<Option<BTreeSet<String>>> {
+    let [overwrite_all, keep_all] = labels;
     let choices = [
-        format!("Overwrite all ({})", conflicts.len()),
-        "Keep all existing — write only the new files".to_string(),
+        overwrite_all,
+        keep_all,
         "Decide file by file".to_string(),
         "Cancel — write nothing".to_string(),
     ];
     let choice = ask_select(
         theme,
-        "These files already exist and differ. What now?",
+        question,
         "Anything overwritten is backed up to .ocgen-backup/ first.",
         &choices,
-        2,
+        default,
     )?;
     let all = || conflicts.iter().map(|c| c.rel.clone()).collect();
     match choice {
@@ -1670,6 +1704,13 @@ pub fn run_doctor(path: String, dry_run: bool, yes: bool) -> Result<()> {
         }
     }
 
+    // Permission rules added to settings.json by hand would be dropped by the
+    // rewrite: offer to keep them as the user's rules first, so the plan below
+    // already includes them.
+    if project.target == Target::ClaudeCode {
+        adopt_hand_added_permissions(&theme, &mut project, &target, dry_run, yes)?;
+    }
+
     // Show exactly what regenerating would do before touching anything.
     let plan = project.plan_changes(&target)?;
     let changed: Vec<_> = plan
@@ -1695,23 +1736,54 @@ pub fn run_doctor(path: String, dry_run: bool, yes: bool) -> Result<()> {
         println!("\n{}", style("dry run — nothing written").bold());
         return Ok(());
     }
-    if !changed.is_empty()
-        && !yes
-        && crate::prompt::can_ask()
-        && !ask_confirm(
+    let conflicts: Vec<&FileChange> = plan
+        .iter()
+        .filter(|c| c.kind == ChangeKind::Modified)
+        .collect();
+    let keep = if changed.is_empty() || yes || !crate::prompt::can_ask() {
+        BTreeSet::new()
+    } else if conflicts.is_empty() {
+        // Only new or stale files: nothing of yours is overwritten.
+        if !ask_confirm(
             &theme,
             "Apply these changes?",
-            "The previous versions are backed up first.",
+            "Stale files are backed up before they're removed.",
             true,
-        )?
-    {
-        println!("Nothing written.");
-        return Ok(());
-    }
+        )? {
+            println!("Nothing written.");
+            return Ok(());
+        }
+        BTreeSet::new()
+    } else {
+        match choose_keep(
+            &theme,
+            &conflicts,
+            "Apply these changes?",
+            [
+                format!(
+                    "Apply all ({}) — previous versions backed up",
+                    changed.len()
+                ),
+                "Keep all changed files — only add new ones".to_string(),
+            ],
+            0,
+        )? {
+            Some(keep) => keep,
+            None => {
+                println!("Nothing written.");
+                return Ok(());
+            }
+        }
+    };
 
-    let backup = Project::backup(&target, &plan)?;
-    // Rewrite everything (regenerates files and upgrades the state file schema).
-    project.scaffold(&target, true)?;
+    let applied: Vec<FileChange> = plan
+        .iter()
+        .filter(|c| !keep.contains(&c.rel))
+        .cloned()
+        .collect();
+    let backup = Project::backup(&target, &applied)?;
+    // Rewrite everything except what the user kept (also upgrades the state file).
+    project.scaffold_keeping(&target, &keep)?;
     match project.install_pre_push(&target)? {
         ocgen::render::PrePush::Installed(_) => {
             println!("  {}", ui::muted("git pre-push hook: installed (blocks unapproved pushes made under Claude Code)"))
@@ -1722,21 +1794,82 @@ pub fn run_doctor(path: String, dry_run: bool, yes: bool) -> Result<()> {
         ocgen::render::PrePush::NotApplicable => {}
     }
     println!();
-    ui::success(&format!("applied {} change(s)", changed.len()));
-    if let Some(b) = backup {
-        // Forward slashes on every platform (it's shown, and matched by tests).
-        let shown = ocgen::paths::for_shell(b.strip_prefix(&target).unwrap_or(&b));
-        println!(
-            "  {} {shown}/  {}",
-            style("backup:").bold(),
-            ui::muted("(previous versions; copy a file back to restore it)")
-        );
-    }
+    ui::success(&format!("applied {} change(s)", changed.len() - keep.len()));
+    report_backup(&target, backup.as_deref());
+    report_kept(&keep);
     // Not auto-fixable: the project's .gitignore belongs to the user.
     if project.target == Target::ClaudeCode
         && ocgen::gitcheck::claude_config_ignored(&target) == Some(true)
     {
         ui::warning(ocgen::gitcheck::IGNORED_CONFIG_WARNING);
+    }
+    Ok(())
+}
+
+/// Find permission rules added to settings.json by hand and offer to keep them as
+/// the user's own (as `ocgen edit permissions --allow …` would). A dry run or
+/// `--yes` keeps them without asking, as does a run without a terminal; a dry run
+/// only plans with them (nothing is saved).
+fn adopt_hand_added_permissions(
+    theme: &ColorfulTheme,
+    project: &mut Project,
+    target: &Path,
+    dry_run: bool,
+    yes: bool,
+) -> Result<()> {
+    let found = project.hand_added_permissions(target);
+    let entries = found.rules.entries();
+    if entries.is_empty() && found.invalid.is_empty() {
+        return Ok(());
+    }
+    ui::section(&format!(
+        "Permission rules added by hand ({})",
+        entries.len()
+    ));
+    for (list, rule) in &entries {
+        println!("  {}  {rule}", style(format!("{:<5}", list.key())).cyan());
+    }
+    for bad in &found.invalid {
+        ui::warning(&format!(
+            "{bad}: not a valid permission rule — it will be dropped"
+        ));
+    }
+    if entries.is_empty() {
+        return Ok(());
+    }
+    let keep = dry_run
+        || yes
+        || !crate::prompt::can_ask()
+        || ask_confirm(
+            theme,
+            "Keep them as your rules?",
+            "Saved like `ocgen edit permissions`, so every regeneration keeps them. No = they're dropped (the old settings.json is backed up).",
+            true,
+        )?;
+    if !keep {
+        return Ok(());
+    }
+    let mut kept = 0;
+    for (list, rule) in &entries {
+        match project.claude.permissions.add(*list, rule) {
+            Ok(_) => {
+                kept += 1;
+                warn_if_shadowed(project, *list, rule);
+            }
+            Err(e) => ui::warning(&e.to_string()),
+        }
+    }
+    if dry_run {
+        println!(
+            "  {}",
+            ui::muted(&format!(
+                "would keep {kept} rule(s) as yours — the plan below includes them"
+            ))
+        );
+    } else {
+        ui::success(&format!(
+            "kept {kept} rule(s) as yours (see `ocgen edit permissions --list`)"
+        ));
     }
     Ok(())
 }

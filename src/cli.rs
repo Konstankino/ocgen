@@ -66,13 +66,20 @@ pub enum Command {
         path: Option<String>,
     },
     /// Repair a project's config (and upgrade an old state file), then rewrite files.
+    ///
+    /// Shows every change with a diff before writing. Permission rules you added
+    /// to settings.json by hand are found and can be kept as your rules (like
+    /// `ocgen edit permissions`), so they survive this and later regenerations.
+    /// For files you changed, choose: apply all, keep all, decide file by file, or
+    /// cancel. Whatever is overwritten is backed up to .ocgen-backup/ first.
+    #[command(after_help = DOCTOR_EXAMPLES)]
     Doctor {
         /// Directory of the existing project (default: current dir).
         path: Option<String>,
         /// Show what would change (with diffs) and write nothing.
         #[arg(long)]
         dry_run: bool,
-        /// Apply without asking for confirmation.
+        /// Apply everything without asking (hand-added permission rules are kept as yours).
         #[arg(long, short)]
         yes: bool,
     },
@@ -351,6 +358,12 @@ impl IntentCli {
             && !self.show
     }
 }
+
+const DOCTOR_EXAMPLES: &str = "\
+Examples:
+  ocgen doctor --dry-run          # what would change, with diffs; writes nothing
+  ocgen doctor                    # review: keep hand-added permission rules, then apply all / per file
+  ocgen doctor -y ./my-project    # apply everything (hand-added permission rules are kept as yours)";
 
 const EDIT_EXAMPLES: &str = "\
 Examples:

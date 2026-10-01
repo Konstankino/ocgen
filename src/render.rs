@@ -66,6 +66,15 @@ fn user_owned(rel: &Path) -> bool {
     USER_OWNED.contains(&rel.as_str())
 }
 
+/// Permission rules found in `settings.json` that ocgen didn't write.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HandAdded {
+    /// Valid rules, by list, that could be adopted as the user's own.
+    pub rules: PermissionRules,
+    /// Entries that aren't valid permission rules (never adopted).
+    pub invalid: Vec<String>,
+}
+
 /// What `doctor` would do to one file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChangeKind {
@@ -968,6 +977,43 @@ impl Project {
             ask: owned(&crate::claude::HIGH_IMPACT_ASK),
             deny: owned(&deny),
         }
+    }
+
+    /// Permission rules in the project's `settings.json` that ocgen didn't generate
+    /// and that aren't already the user's own: rules added by hand, which a
+    /// regeneration would drop unless they're adopted as the user's rules.
+    pub fn hand_added_permissions(&self, target: &Path) -> HandAdded {
+        let mut found = HandAdded::default();
+        let Some(settings) = fs::read_to_string(target.join(".claude/settings.json"))
+            .ok()
+            .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+        else {
+            return found;
+        };
+        let generated = self.generated_permissions();
+        for list in RuleList::ALL {
+            let on_disk = settings
+                .pointer(&format!("/permissions/{}", list.key()))
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .map(str::trim);
+            for rule in on_disk {
+                if generated.list(list).iter().any(|r| r == rule)
+                    || self.claude.permissions.list(list).iter().any(|r| r == rule)
+                {
+                    continue;
+                }
+                if crate::validate::permission_rule(rule).is_err() {
+                    found.invalid.push(rule.to_string());
+                } else {
+                    // `add` dedups and keeps a rule in one list.
+                    let _ = found.rules.add(list, rule);
+                }
+            }
+        }
+        found
     }
 
     /// The generated list that overrides `rule` in list `list`, if any. Claude
