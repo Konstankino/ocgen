@@ -1506,3 +1506,31 @@ fn notes_open_matches_topic_line_or_latest_and_prints_the_url() {
         ocgen::notes::viewer::quit(&info);
     }
 }
+
+/// A machine where no POSIX shell can be started (Windows with a per-user Git
+/// install puts only `Git\cmd` on PATH): verify says so once, instead of
+/// reporting every hook script as a syntax error and every hook as hung.
+#[test]
+fn verify_without_a_shell_says_so_once() {
+    let dir = tempdir().unwrap();
+    scaffold_claude(dir.path());
+    let empty = tempdir().unwrap();
+    let out = ocgen()
+        .args(["verify", "--no-claude"])
+        .arg(dir.path())
+        .env("PATH", empty.path())
+        .assert()
+        .failure()
+        .get_output()
+        .stdout
+        .clone();
+    let out = String::from_utf8_lossy(&out);
+    assert!(
+        out.contains("verify shell") && out.contains("can't start"),
+        "{out}"
+    );
+    for misleading in ["syntax error", "did not finish", "not blocked", "let http"] {
+        assert!(!out.contains(misleading), "{misleading}: {out}");
+    }
+    assert!(out.contains("skipped"), "{out}");
+}

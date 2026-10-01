@@ -144,24 +144,94 @@ pub fn verify(project: &Project, root: &Path, opts: &Options) -> Vec<Check> {
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok());
     out.push(settings_check(root, settings.as_ref()));
+    let sh = shell(settings.as_ref().unwrap_or(&Value::Null));
+    let shell_ok = match shell_check(&sh) {
+        Ok(c) => {
+            out.push(c);
+            true
+        }
+        Err(c) => {
+            out.push(c);
+            false
+        }
+    };
     if let Some(s) = &settings {
-        out.push(hook_scripts(root, s));
-        out.push(hook_commands(root, s));
+        if shell_ok {
+            out.push(hook_scripts(&sh, root, s));
+            out.push(hook_commands(&sh, root, s));
+        }
         out.push(hook_shell(s, cfg!(windows), find_git_bash(s).as_deref()));
-        out.push(approval_gate(root, s));
-        out.push(https_only_fetch(root, s));
-        out.push(notes_view(root, s));
+        if shell_ok {
+            out.push(approval_gate(&sh, root, s));
+            out.push(https_only_fetch(&sh, root, s));
+            out.push(notes_view(&sh, root, s));
+        }
         out.push(pre_push(project, root));
-        out.push(statusline(root, s));
+        if shell_ok {
+            out.push(statusline(&sh, root, s));
+        }
     }
-    out.push(check_command(project, root, opts.run_check));
+    if shell_ok {
+        out.push(check_command(&sh, project, root, opts.run_check));
+    }
     out.push(mcp_json(root));
     out.push(ocgen_on_path());
     out.push(git_tracking(root));
-    if opts.run_claude {
-        out.push(claude_validate(project, root));
+    if opts.run_claude && shell_ok {
+        out.push(claude_validate(&sh, project, root));
     }
     out
+}
+
+/// The shell verify runs scripts and hook commands with — the one Claude Code
+/// uses. On Windows that is Git Bash: a per-user Git install puts only
+/// `Git\cmd` on PATH, so a bare `sh` is often missing outside Git Bash.
+/// Elsewhere, `sh` from PATH.
+fn shell(settings: &Value) -> PathBuf {
+    if cfg!(windows) {
+        if let Some(bash) = find_git_bash(settings) {
+            return bash;
+        }
+    }
+    PathBuf::from("sh")
+}
+
+/// Whether `sh` starts at all. Without it every script- and hook-running check
+/// would fail for the same reason, so they are skipped and this says why.
+fn shell_check(sh: &Path) -> Result<Check, Check> {
+    let name = "verify shell";
+    match Command::new(sh)
+        .args(["-c", "exit 0"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+    {
+        Ok(st) if st.success() => Ok(check(
+            name,
+            Status::Pass,
+            format!("scripts and hooks are checked with {}", sh.display()),
+        )),
+        res => {
+            let why = match res {
+                Ok(st) => format!("it exited {}", st.code().unwrap_or(-1)),
+                Err(e) => e.to_string(),
+            };
+            let fix = if cfg!(windows) {
+                "install Git for Windows, or set CLAUDE_CODE_GIT_BASH_PATH to its bash.exe"
+            } else {
+                "make sure `sh` is on PATH"
+            };
+            Err(check(
+                name,
+                Status::Fail,
+                format!(
+                    "can't start {} ({why}) — {fix}. The hook script, hook command, approval gate, WebFetch guard, notes view, statusline and check command checks were skipped",
+                    sh.display()
+                ),
+            ))
+        }
+    }
 }
 
 fn up_to_date(project: &Project, root: &Path) -> Check {
@@ -360,7 +430,7 @@ pub fn hook_shell(settings: &Value, windows: bool, bash: Option<&Path>) -> Check
     )
 }
 
-fn hook_scripts(root: &Path, settings: &Value) -> Check {
+fn hook_scripts(sh: &Path, root: &Path, settings: &Value) -> Check {
     let name = "hook scripts";
     let re = regex::Regex::new(r"/\.claude/hooks/([A-Za-z0-9_.-]+\.sh)").unwrap();
     let mut scripts: Vec<String> = hook_entries(settings)
@@ -391,7 +461,7 @@ fn hook_scripts(root: &Path, settings: &Value) -> Check {
         let p = root.join(".claude/hooks").join(s);
         if !p.is_file() {
             problems.push(format!("{s} is missing"));
-        } else if !Command::new("sh")
+        } else if !Command::new(sh)
             // Run from the hooks dir with a bare file name: no path for the
             // shell to mangle (Windows verbatim paths lose their backslashes).
             .current_dir(root.join(".claude/hooks"))
@@ -440,13 +510,14 @@ fn hook_env(root: &Path, settings: &Value) -> HashMap<String, String> {
 
 /// Run `sh -c cmd` with `stdin` and `env` from `cwd`, up to `limit`.
 fn run_sh(
+    sh: &Path,
     cmd: &str,
     stdin: &str,
     env: &HashMap<String, String>,
     cwd: &Path,
     limit: Duration,
 ) -> Option<(i32, String, String)> {
-    let mut child = Command::new("sh")
+    let mut child = Command::new(sh)
         .arg("-c")
         .arg(cmd)
         .current_dir(cwd)
@@ -479,7 +550,7 @@ fn run_sh(
 
 /// Run the side-effect-free hook commands with a harmless event and check they
 /// exit as expected (a missing script or interpreter shows up as 126/127).
-fn hook_commands(root: &Path, settings: &Value) -> Check {
+fn hook_commands(sh: &Path, root: &Path, settings: &Value) -> Check {
     let name = "hook commands run";
     let env = hook_env(root, settings);
     let not_git = std::env::temp_dir();
@@ -510,7 +581,7 @@ fn hook_commands(root: &Path, settings: &Value) -> Check {
             _ => continue,
         };
         ran += 1;
-        match run_sh(&cmd, &payload, &env, root, Duration::from_secs(20)) {
+        match run_sh(sh, &cmd, &payload, &env, root, Duration::from_secs(20)) {
             None => problems.push(format!("{event}: did not finish")),
             Some((code, _, err)) if code != expect => problems.push(format!(
                 "{event}: exit {code}, expected {expect} ({})",
@@ -537,7 +608,7 @@ fn hook_commands(root: &Path, settings: &Value) -> Check {
 /// current approval can't hide a broken gate.
 /// The WebFetch guard must allow only https:// fetches to trusted documentation
 /// sites: plain http://, untrusted hosts and look-alikes are blocked.
-fn https_only_fetch(root: &Path, settings: &Value) -> Check {
+fn https_only_fetch(sh: &Path, root: &Path, settings: &Value) -> Check {
     let name = "WebFetch guard";
     let Some((_, cmd)) = hook_entries(settings)
         .into_iter()
@@ -552,7 +623,7 @@ fn https_only_fetch(root: &Path, settings: &Value) -> Check {
             "tool_input": { "url": url, "prompt": "verify" }
         })
         .to_string();
-        run_sh(&cmd, &ev, &env, root, Duration::from_secs(20)).map(|x| x.0)
+        run_sh(sh, &cmd, &ev, &env, root, Duration::from_secs(20)).map(|x| x.0)
     };
     // A trusted host to probe with: the first entry (a `*.` entry → a subdomain).
     let trusted: Option<String> = env
@@ -603,7 +674,7 @@ fn https_only_fetch(root: &Path, settings: &Value) -> Check {
 
 /// The /inquire notes view: after a ledger is written, the hook renders its
 /// HTML page. Probed on a scratch ledger with the browser switched off.
-fn notes_view(root: &Path, settings: &Value) -> Check {
+fn notes_view(sh: &Path, root: &Path, settings: &Value) -> Check {
     let name = "/inquire notes view";
     let Some((_, cmd)) = hook_entries(settings)
         .into_iter()
@@ -636,7 +707,7 @@ fn notes_view(root: &Path, settings: &Value) -> Check {
         "tool_input": { "file_path": crate::paths::for_shell(&md) }
     })
     .to_string();
-    let ran = run_sh(&cmd, &ev, &env, root, Duration::from_secs(20));
+    let ran = run_sh(sh, &cmd, &ev, &env, root, Duration::from_secs(20));
     let rendered = std::fs::read_to_string(notes.join("verify.html"))
         .is_ok_and(|h| h.contains("ocgen verify ledger"));
     let _ = std::fs::remove_dir_all(&scratch);
@@ -671,7 +742,7 @@ fn notes_view(root: &Path, settings: &Value) -> Check {
     }
 }
 
-fn approval_gate(root: &Path, settings: &Value) -> Check {
+fn approval_gate(sh: &Path, root: &Path, settings: &Value) -> Check {
     let name = "approval gate blocks git push";
     let Some((_, cmd)) = hook_entries(settings)
         .into_iter()
@@ -688,7 +759,7 @@ fn approval_gate(root: &Path, settings: &Value) -> Check {
             "session_id": "ocgen-verify", "tool_name": "Bash", "tool_input": { "command": c }
         })
         .to_string();
-        run_sh(&cmd, &ev, &env, root, Duration::from_secs(20)).map(|x| x.0)
+        run_sh(sh, &cmd, &ev, &env, root, Duration::from_secs(20)).map(|x| x.0)
     };
     let must_block = [
         "git push origin main",
@@ -782,7 +853,7 @@ fn pre_push(project: &Project, root: &Path) -> Check {
     }
 }
 
-fn statusline(root: &Path, settings: &Value) -> Check {
+fn statusline(sh: &Path, root: &Path, settings: &Value) -> Check {
     let name = "statusline renders";
     let Some(cmd) = settings
         .pointer("/statusLine/command")
@@ -804,7 +875,7 @@ fn statusline(root: &Path, settings: &Value) -> Check {
         "CLAUDE_PROJECT_DIR".to_string(),
         crate::paths::for_shell(root),
     );
-    match run_sh(cmd, &payload, &env, root, Duration::from_secs(10)) {
+    match run_sh(sh, cmd, &payload, &env, root, Duration::from_secs(10)) {
         Some((0, out, _)) if !out.trim().is_empty() => {
             let plain = regex::Regex::new(r"\x1b\[[0-9;]*m")
                 .unwrap()
@@ -824,7 +895,7 @@ fn statusline(root: &Path, settings: &Value) -> Check {
 }
 
 /// The objective gate: is a check command configured, and (on request) does it pass?
-fn check_command(project: &Project, root: &Path, run: bool) -> Check {
+fn check_command(sh: &Path, project: &Project, root: &Path, run: bool) -> Check {
     let name = "check command";
     let cmd = project.claude.workflow.check_cmd.trim();
     if cmd.is_empty() {
@@ -841,7 +912,7 @@ fn check_command(project: &Project, root: &Path, run: bool) -> Check {
             format!("`{cmd}` gates finished work (not run here; add --run-check)"),
         );
     }
-    match run_sh(cmd, "", &HashMap::new(), root, Duration::from_secs(600)) {
+    match run_sh(sh, cmd, "", &HashMap::new(), root, Duration::from_secs(600)) {
         Some((0, _, _)) => check(name, Status::Pass, format!("`{cmd}` passes")),
         Some((code, out, err)) => check(
             name,
@@ -935,7 +1006,7 @@ fn git_tracking(root: &Path) -> Check {
     }
 }
 
-fn claude_validate(project: &Project, root: &Path) -> Check {
+fn claude_validate(sh: &Path, project: &Project, root: &Path) -> Check {
     let name = "Claude Code validation";
     let has_claude = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
         .any(|d| d.join("claude").is_file());
@@ -963,7 +1034,7 @@ fn claude_validate(project: &Project, root: &Path) -> Check {
             "claude plugin validate \"{}\" </dev/null",
             crate::paths::for_shell(t)
         );
-        match run_sh(&cmd, "", &HashMap::new(), root, Duration::from_secs(90)) {
+        match run_sh(sh, &cmd, "", &HashMap::new(), root, Duration::from_secs(90)) {
             Some((0, out, _)) if out.contains("Validation passed") => {}
             Some((_, out, err)) => failed.push(format!(
                 "{}: {}",

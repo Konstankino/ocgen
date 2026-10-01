@@ -226,6 +226,9 @@ delete as stale (`-`) is listed with a short diff.
 **`ocgen verify [dir]`** checks that a generated project *works*, not just that it exists:
 - files are up to date (the same plan as `doctor`), and there are no consistency issues;
 - `settings.json` is valid JSON with known keys;
+- it runs scripts and hook commands with the shell Claude Code uses: Git Bash on Windows (found
+  even when only `Git\cmd` is on PATH), `sh` elsewhere. If no shell starts at all, it says so once
+  and skips the checks that need one;
 - every hook script exists and parses, and the side-effect-free hook commands actually run;
 - every hook pins `"shell": "bash"`, and on Windows Git Bash is installed. The hook commands
   are POSIX sh; without Git Bash Claude Code runs them in PowerShell, where they fail to
