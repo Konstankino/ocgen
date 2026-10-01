@@ -4661,6 +4661,18 @@ fn intent_skill_demands_an_exhaustive_evidence_based_analysis() {
     assert!(md.contains("git log -S") && md.contains("git blame"));
     assert!(md.contains("gh search issues") && md.contains("closed"));
     assert!(md.contains("finds nothing new"));
+    // Gap closing fans out too: one Explore subagent per open gap, in one message.
+    let pass3 = md
+        .split("**Pass 3")
+        .nth(1)
+        .and_then(|r| r.split("**Pass 4").next())
+        .expect("a Pass 3 section");
+    assert!(
+        pass3.contains("in parallel")
+            && pass3.contains("one per gap")
+            && pass3.contains("in one message"),
+        "{pass3}"
+    );
     assert!(md.contains("contradict"));
 
     // Coverage checklist: every item.

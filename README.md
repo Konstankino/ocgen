@@ -608,8 +608,8 @@ GitHub issue (wizard: "Include the /intent command…"; on by default). You star
    - **Deep dive:** several built-in `Explore` subagents at once — every call site, tests and gaps,
      config/build/CI, history (`git log -S`, `git blame`, `git show`), prior work (existing intents,
      open and closed GitHub issues and PRs) and docs.
-   - **Close the gaps** until a pass finds nothing new, then a **challenge** pass that hunts for
-     evidence against the findings.
+   - **Close the gaps:** again in parallel, one `Explore` subagent per open gap, until a pass
+     finds nothing new; then a **challenge** pass that hunts for evidence against the findings.
 
    It shows an analysis report — current behaviour, root cause, impact, constraints, related work,
    risks, open questions, a coverage checklist (entry points to platforms, security and

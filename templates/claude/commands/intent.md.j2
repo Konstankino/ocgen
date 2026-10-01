@@ -68,9 +68,13 @@ Entry points · All call sites · Data and state · Error and edge paths · Conc
 Platforms (Windows/macOS/Linux) · Security and permissions · Performance · Tests · Config ·
 Docs · History · Related issues and PRs · Existing intents.
 
-**Pass 3 — Close the gaps.** List what is still unexplored or unanswered and investigate it. Repeat
-until a pass finds nothing new (at most 3 extra passes). Only then ask me what the code can't
-answer — one question at a time, 2–4 options with the recommended one first.
+**Pass 3 — Close the gaps, in parallel.** List what is still unexplored or unanswered — unticked
+checklist items, Inferred findings, open leads — and investigate them all at once: launch built-in
+`Explore` subagents in one message, one per gap (group small related gaps), each given the search
+terms and the findings it builds on, and each returning numbered findings with evidence. Only a gap
+that needs another's answer waits for the next round. Repeat until a pass finds nothing new (at most
+3 extra passes). Only then ask me what the code can't answer — one question at a time, 2–4 options
+with the recommended one first.
 
 **Pass 4 — Challenge.** Give a fresh `Explore` subagent the findings' claims (not your conclusion)
 and ask it to find evidence that would contradict them. Reconcile, and record what changed.
