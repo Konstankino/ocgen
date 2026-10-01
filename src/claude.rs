@@ -116,6 +116,74 @@ pub struct ClaudeConfig {
     /// The user's own permission rules, added to the generated ones in
     /// settings.json (`ocgen edit permissions`).
     pub permissions: PermissionRules,
+    /// How `/intent` numbers intent files and sizes the GitHub issue draft.
+    pub intent: IntentSettings,
+}
+
+/// Where the `/intent` templates live in a project. Written once with ocgen's
+/// default and then owned by the user (never overwritten).
+pub const INTENT_ISSUE_TEMPLATE: &str = ".claude/intent/issue-template.md";
+pub const INTENT_FILE_TEMPLATE: &str = ".claude/intent/intent-template.md";
+
+/// `/intent` settings (`ocgen edit intent`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct IntentSettings {
+    /// File-name prefix of an intent file, e.g. `ADR` → `ADR-0007-slug.md`.
+    pub prefix: String,
+    /// Width of the zero-padded number.
+    pub digits: u8,
+    /// Directory (relative to the project root) that holds the intent files.
+    pub dir: String,
+    /// Word limit for the GitHub issue description.
+    pub max_words: u16,
+    /// Remote branch checked for numbers already taken; empty = the remote's default.
+    pub branch: String,
+}
+
+impl Default for IntentSettings {
+    fn default() -> Self {
+        Self {
+            prefix: "ADR".into(),
+            digits: 4,
+            dir: "docs/adr".into(),
+            max_words: 250,
+            branch: String::new(),
+        }
+    }
+}
+
+impl IntentSettings {
+    /// The first file name, e.g. `ADR-0001` (no slug).
+    pub fn first_id(&self) -> String {
+        format!(
+            "{}-{:0width$}",
+            self.prefix,
+            1,
+            width = self.digits as usize
+        )
+    }
+
+    /// Check every field; the error names the field.
+    pub fn validate(&self) -> Result<()> {
+        use crate::validate as v;
+        let checks = [
+            ("prefix", v::intent_prefix(&self.prefix)),
+            ("digits", v::intent_digits(&self.digits.to_string())),
+            ("dir", v::intent_dir(&self.dir)),
+            (
+                "max words",
+                v::intent_max_words(&self.max_words.to_string()),
+            ),
+            ("branch", v::git_branch(&self.branch)),
+        ];
+        for (field, r) in checks {
+            if let Err(e) = r {
+                anyhow::bail!("intent {field}: {e}");
+            }
+        }
+        Ok(())
+    }
 }
 
 /// One of settings.json's permission lists. Claude Code checks deny first, then
@@ -369,7 +437,7 @@ impl Default for HooksExtra {
 
 /// The workflow skills ocgen generates (formerly `.claude/commands/`). A user
 /// skill with one of these names would collide with the generated one.
-pub const WORKFLOW_SKILLS: [&str; 9] = [
+pub const WORKFLOW_SKILLS: [&str; 10] = [
     "multi",
     "intake",
     "refine",
@@ -377,12 +445,14 @@ pub const WORKFLOW_SKILLS: [&str; 9] = [
     "fanout",
     "deliver",
     "inquire",
+    "intent",
     "team",
     "team-plan",
 ];
 
 /// Workflow skills with side effects: only the user starts them (`/name`).
-pub const USER_RUN_WORKFLOWS: [&str; 5] = ["multi", "fanout", "deliver", "team", "team-plan"];
+pub const USER_RUN_WORKFLOWS: [&str; 6] =
+    ["multi", "fanout", "deliver", "intent", "team", "team-plan"];
 
 /// One project MCP server (`.mcp.json` entry).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -590,6 +660,10 @@ pub struct Workflow {
     /// answer with file:line evidence, end with one hint (not a question), keep a git-ignored
     /// ledger under `.claude/notes/`) and route `/deliver` "understand" goals to it.
     pub inquire: bool,
+    /// Emit the `/intent` workflow: improve the prompt, investigate, agree a plan,
+    /// write a numbered intent file and draft the GitHub issue (which the user
+    /// files — `gh issue create` is denied). See [`IntentSettings`].
+    pub intent: bool,
     /// Minimum confidence (0–100) a subagent that wrote files must state before it
     /// may stop, enforced by a `SubagentStop` hook. `0` disables. This pairs with
     /// worktree isolation to give isolated writes + enforced per-worker confidence.
@@ -614,6 +688,7 @@ impl Default for Workflow {
             verify_todos: true,
             deliver: true,
             inquire: true,
+            intent: true,
             subagent_confidence: 96,
             loop_guard_max: 3,
             check_cmd: String::new(),

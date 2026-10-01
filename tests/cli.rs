@@ -551,6 +551,7 @@ fn claude_landscape_plugin_opus_and_no_workflow_no_subagents() {
         verify_todos: false,
         deliver: false,
         inquire: false,
+        intent: false,
         loop_guard_max: 0,
         check_cmd: String::new(),
         subagent_confidence: 0,
@@ -1085,4 +1086,140 @@ fn edit_permissions_list_shows_every_rule_at_a_glance() {
         .assert()
         .success()
         .stdout(contains("ocgen edit permissions --list"));
+}
+
+#[test]
+fn edit_intent_updates_settings_from_flags() {
+    let dir = tempdir().unwrap();
+    scaffold_claude(dir.path());
+    ocgen()
+        .args(["edit", "intent", "-p"])
+        .arg(dir.path())
+        .args(["--prefix", "RFC", "--digits", "3", "--dir", "docs/rfc"])
+        .args(["--max-words", "200", "--branch", "trunk"])
+        .assert()
+        .success();
+    let skill = std::fs::read_to_string(dir.path().join(".claude/skills/intent/SKILL.md")).unwrap();
+    assert!(skill.contains("docs/rfc/RFC-001") && skill.contains("200 words"));
+    assert!(skill.contains("trunk"));
+
+    // --show prints the settings and writes nothing.
+    ocgen()
+        .args(["edit", "intent", "--show", "-p"])
+        .arg(dir.path())
+        .assert()
+        .success()
+        .stdout(contains("RFC"))
+        .stdout(contains("docs/rfc"))
+        .stdout(contains("200"))
+        .stdout(contains("docs/rfc/RFC-001-<slug>.md"))
+        .stdout(contains(".claude/intent/issue-template.md"));
+
+    // Off and on again.
+    ocgen()
+        .args(["edit", "intent", "--disable", "-p"])
+        .arg(dir.path())
+        .assert()
+        .success();
+    assert!(!dir.path().join(".claude/skills/intent").exists());
+    ocgen()
+        .args(["edit", "intent", "--enable", "-p"])
+        .arg(dir.path())
+        .assert()
+        .success();
+    assert!(dir.path().join(".claude/skills/intent/SKILL.md").exists());
+}
+
+#[test]
+fn edit_intent_resets_a_template_to_the_default() {
+    let dir = tempdir().unwrap();
+    scaffold_claude(dir.path());
+    let issue = dir.path().join(".claude/intent/issue-template.md");
+    std::fs::write(&issue, "mine\n").unwrap();
+    ocgen()
+        .args(["edit", "intent", "--reset-issue-template", "-p"])
+        .arg(dir.path())
+        .assert()
+        .success();
+    assert!(std::fs::read_to_string(&issue)
+        .unwrap()
+        .contains("Acceptance criteria"));
+}
+
+#[cfg(unix)]
+#[test]
+fn edit_intent_opens_a_template_in_the_editor() {
+    let dir = tempdir().unwrap();
+    scaffold_claude(dir.path());
+    let home = tempdir().unwrap();
+    let editor = fake_editor(home.path(), "ed.sh", "echo '## Edited by test' >> \"$1\"");
+    ocgen()
+        .args(["edit", "intent", "--intent-template", "-p"])
+        .arg(dir.path())
+        .env("EDITOR", &editor)
+        .assert()
+        .success();
+    let t = std::fs::read_to_string(dir.path().join(".claude/intent/intent-template.md")).unwrap();
+    assert!(
+        t.contains("Status:") && t.contains("## Edited by test"),
+        "{t}"
+    );
+}
+
+#[test]
+fn edit_intent_rejects_bad_values_and_guards_target() {
+    let dir = tempdir().unwrap();
+    scaffold_claude(dir.path());
+    let state = dir.path().join(".claude/.ocgen-state.json");
+    let before = std::fs::read_to_string(&state).unwrap();
+    ocgen()
+        .args(["edit", "intent", "--prefix", "A-B", "--digits", "3", "-p"])
+        .arg(dir.path())
+        .assert()
+        .failure()
+        .stderr(contains("prefix"));
+    ocgen()
+        .args(["edit", "intent", "--dir", "../outside", "-p"])
+        .arg(dir.path())
+        .assert()
+        .failure()
+        .stderr(contains("dir"));
+    assert_eq!(
+        before,
+        std::fs::read_to_string(&state).unwrap(),
+        "nothing written"
+    );
+
+    // No flags and no terminal: say which flags to pass.
+    ocgen()
+        .args(["edit", "intent", "-p"])
+        .arg(dir.path())
+        .assert()
+        .failure()
+        .stderr(contains("--prefix"));
+
+    let oc = tempdir().unwrap();
+    scaffold_default(oc.path());
+    ocgen()
+        .args(["edit", "intent", "--show", "-p"])
+        .arg(oc.path())
+        .assert()
+        .failure()
+        .stderr(contains("Claude Code"));
+}
+
+#[test]
+fn edit_intent_help_has_examples() {
+    ocgen()
+        .args(["edit", "intent", "--help"])
+        .assert()
+        .success()
+        .stdout(contains("Examples:"))
+        .stdout(contains("ocgen edit intent --prefix"))
+        .stdout(contains("--max-words"));
+    ocgen()
+        .args(["edit", "--help"])
+        .assert()
+        .success()
+        .stdout(contains("intent"));
 }

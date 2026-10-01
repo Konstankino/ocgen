@@ -146,6 +146,73 @@ pub fn nonempty_nospace(s: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// An intent-file prefix such as `ADR` or `RFC`: a letter, then letters or digits.
+pub fn intent_prefix(s: &str) -> Result<(), String> {
+    let ok = s.len() <= 12
+        && s.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+        && s.chars().all(|c| c.is_ascii_alphanumeric());
+    if ok {
+        Ok(())
+    } else {
+        Err("use 1–12 letters or digits, starting with a letter (e.g. ADR)".into())
+    }
+}
+
+/// Width of an intent number: 1–6 digits.
+pub fn intent_digits(s: &str) -> Result<(), String> {
+    match s.trim().parse::<u8>() {
+        Ok(1..=6) => Ok(()),
+        _ => Err("must be a whole number from 1 to 6".into()),
+    }
+}
+
+/// A directory inside the project: relative, forward slashes, no `..`, no spaces.
+pub fn intent_dir(s: &str) -> Result<(), String> {
+    if s.is_empty() {
+        return Err("cannot be empty".into());
+    }
+    if s.starts_with('/') || s.contains('\\') || s.contains(':') {
+        return Err("use a relative path with forward slashes (e.g. docs/adr)".into());
+    }
+    if s.chars().any(char::is_whitespace) {
+        return Err("cannot contain spaces".into());
+    }
+    if s.split('/').any(|part| part == ".." || part.is_empty()) {
+        return Err("must stay inside the project (no '..' or empty parts)".into());
+    }
+    Ok(())
+}
+
+/// Word limit for an issue description: 50–1000.
+pub fn intent_max_words(s: &str) -> Result<(), String> {
+    match s.trim().parse::<u16>() {
+        Ok(50..=1000) => Ok(()),
+        _ => Err("must be a whole number from 50 to 1000".into()),
+    }
+}
+
+/// A git branch name, or empty (= the remote's default branch).
+pub fn git_branch(s: &str) -> Result<(), String> {
+    if s.is_empty() {
+        return Ok(());
+    }
+    let bad = s.starts_with('-')
+        || s.starts_with('/')
+        || s.ends_with('/')
+        || s.ends_with('.')
+        || s.ends_with(".lock")
+        || s.contains("..")
+        || s.contains("@{")
+        || s.contains("//")
+        || s.chars()
+            .any(|c| c.is_whitespace() || c.is_control() || "~^:?*[\\".contains(c));
+    if bad {
+        Err(format!("'{s}' isn't a valid branch name"))
+    } else {
+        Ok(())
+    }
+}
+
 /// A Claude Code permission rule: `Tool` or `Tool(specifier)`, e.g. `Read`,
 /// `Bash(gh run view:*)`, `WebFetch(domain:example.com)`, `mcp__github__get_issue`.
 pub fn permission_rule(s: &str) -> Result<(), String> {

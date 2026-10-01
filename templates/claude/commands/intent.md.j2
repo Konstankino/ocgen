@@ -1,0 +1,72 @@
+---
+description: Turn an issue or idea into an approved intent — improve the prompt, investigate, plan, write a numbered intent file, and draft the GitHub issue for me to file
+argument-hint: "[the problem or idea | {{ prefix }}-NNNN to resume | #issue or issue URL to link — empty to list]"
+---
+Work out the intent for: $ARGUMENTS
+
+Be my collaborator: improve the request, investigate it with evidence, and agree a plan with me
+before anything is written. The only files you write are the intent file (step 4) and, after I file
+the issue, its `Issue:` line (step 6). **Never create the GitHub issue** — I file it myself, and
+`gh issue create` is denied in this project's permissions.
+
+Settings for this project (change them with `ocgen edit intent`):
+- Intent files: `{{ dir }}/{{ prefix }}-<number>-<slug>.md`, the number zero-padded to {{ digits }} digits
+  (e.g. `{{ dir }}/{{ example }}-cache-invalidation.md`), structured by `{{ intent_template }}`.
+- Issue description: at most {{ max_words }} words, structured by `{{ issue_template }}`.
+
+## 0. Route the arguments
+- **Empty** (or `list`): list the intent files in `{{ dir }}/` that have no `Issue:` line yet — number,
+  title, status — newest first, and let me pick one to resume or start a new intent.
+- **`{{ prefix }}-NNNN`** (or a file in `{{ dir }}/`): resume that intent — summarise it in a few lines
+  and ask what we're doing next.
+- **`#123` or an issue URL**: I've filed the issue — go to step 6.
+- **Anything else**: a new intent — start at step 1.
+
+## 1. Improve the prompt
+Rewrite my request into a sharp prompt using the prompt-engineering technique: an explicit role, the
+task, success criteria, constraints, and the context it needs; remove ambiguity and say what you
+inferred. Show the improved prompt and let me confirm or adjust it. Everything after this step works
+from the improved prompt.
+
+## 2. Investigate
+Explore with the improved prompt — read-only, in parallel where independent (explorer subagents where
+useful): the relevant code, tests, history (`git log`), existing intents in `{{ dir }}/`, and docs.
+Report findings as **Verified** (with `file:line` evidence) or **Inferred** (`Confidence: NN%`).
+Ask me only what the code can't answer, one question at a time, 2–4 options with the recommended
+one first.
+
+## 3. Plan and get my approval
+Present: the problem, the options considered with a recommendation, scope and out-of-scope, risks
+each with a mitigation, and acceptance criteria. **Invite push-back** and iterate until I approve.
+Do not write anything yet. Once I approve, ask whether to write an intent file (optional) — if not,
+go to step 5.
+
+## 4. Intent file
+1. **Pick the number** so it is never reused:
+   - Local: the files in `{{ dir }}/` (any case) named `{{ prefix }}-NNNN…` or `NNNN-…`.
+   - Remote main branch: {% if branch %}`git fetch --quiet origin {{ branch }}`{% else %}the remote's default branch
+     (find it with `git ls-remote --symref origin HEAD`, which prints `ref: refs/heads/<branch>`;
+     else use `main`) — `git fetch --quiet origin <branch>`{% endif %}, then `git ls-tree --name-only FETCH_HEAD {{ dir }}/` and the
+     same name patterns.
+   - The number is 1 + the highest found (`{{ example }}` when there are none), zero-padded to
+     {{ digits }} digits. If the fetch fails (offline, no remote), say so and ask me to confirm the number.
+2. Name it `{{ dir }}/{{ prefix }}-<number>-<kebab-case-slug>.md`. Fill the structure in
+   `{{ intent_template }}` (if it is missing, use: title, Status, Date, Issue, Context, Decision,
+   Options considered, Consequences, Risks) from the approved plan, with `Status: Proposed`.
+3. Right before writing, re-check the local directory for the number; if it is taken, take the next.
+   Show me the path.
+
+## 5. Draft the GitHub issue
+- **Title:** imperative and actionable (what to do, not the topic), at most 72 characters.
+- **Description:** follow `{{ issue_template }}` (if it is missing, use: Summary, Problem, Proposal,
+  Acceptance criteria, Out of scope, Links); at most {{ max_words }} words — state the word count. Link
+  the intent file when there is one.
+- Print the title and the description in separate fenced blocks, then the command for me to run:
+  save the description to a file and
+  `gh issue create --title "<title>" --body-file <file>`.
+- **Never create the issue yourself** — no `gh issue create`, no API call. Wait for me to file it.
+
+## 6. Link the issue and keep collaborating
+When I give you the issue (`#123` or its URL): add `Issue: <url>` to the intent file and, once I
+confirm, set `Status: Accepted`. Then keep working on it with me — refine the plan as the issue
+discussion evolves, or hand off to `/deliver` with the intent file as the brief.

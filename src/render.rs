@@ -53,8 +53,18 @@ pub enum PrePush {
     NotApplicable,
 }
 
-/// The user-owned file ocgen creates once and never overwrites.
-const CLAUDE_MD: &str = "CLAUDE.md";
+/// User-owned files: ocgen creates them once (with its default) and never
+/// overwrites them, so they're exempt from conflicts, doctor's plan and fingerprints.
+pub const USER_OWNED: [&str; 3] = [
+    "CLAUDE.md",
+    crate::claude::INTENT_ISSUE_TEMPLATE,
+    crate::claude::INTENT_FILE_TEMPLATE,
+];
+
+fn user_owned(rel: &Path) -> bool {
+    let rel = rel.to_string_lossy().replace('\\', "/");
+    USER_OWNED.contains(&rel.as_str())
+}
 
 /// What `doctor` would do to one file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -378,9 +388,33 @@ impl Project {
                 "commands/deliver.md".to_string(),
                 env.render_str(
                     &templates::load("claude/commands/deliver.md.j2")?,
-                    context! { language => lang, inquire => self.claude.workflow.inquire },
+                    context! {
+                        language => lang,
+                        inquire => self.claude.workflow.inquire,
+                        intent => self.claude.workflow.intent,
+                    },
                 )
                 .context("rendering deliver command")?,
+            ));
+        }
+        if self.claude.workflow.intent {
+            let i = &self.claude.intent;
+            components.push((
+                "commands/intent.md".to_string(),
+                env.render_str(
+                    &templates::load("claude/commands/intent.md.j2")?,
+                    context! {
+                        prefix => i.prefix,
+                        digits => i.digits,
+                        dir => i.dir.trim_end_matches('/'),
+                        example => i.first_id(),
+                        max_words => i.max_words,
+                        branch => i.branch.trim(),
+                        issue_template => crate::claude::INTENT_ISSUE_TEMPLATE,
+                        intent_template => crate::claude::INTENT_FILE_TEMPLATE,
+                    },
+                )
+                .context("rendering intent command")?,
             ));
         }
         if self.claude.workflow.inquire {
@@ -540,6 +574,8 @@ impl Project {
             verify_todos => self.claude.workflow.verify_todos,
             deliver => self.claude.workflow.deliver,
             inquire => self.claude.workflow.inquire,
+            intent => self.claude.workflow.intent,
+            intent_dir => self.claude.intent.dir.trim_end_matches('/'),
             subagent_confidence => self.claude.workflow.subagent_confidence,
             loop_guard_max => self.claude.workflow.loop_guard_max,
             check_cmd => self.claude.workflow.check_cmd.trim(),
@@ -595,6 +631,21 @@ impl Project {
                 ));
             }
             out.push((PathBuf::from("CLAUDE.md"), claude_md));
+            if self.claude.workflow.intent {
+                // User-owned starters (written once, like CLAUDE.md).
+                for (rel, default) in [
+                    (
+                        crate::claude::INTENT_ISSUE_TEMPLATE,
+                        "claude/intent/issue.md",
+                    ),
+                    (
+                        crate::claude::INTENT_FILE_TEMPLATE,
+                        "claude/intent/intent.md",
+                    ),
+                ] {
+                    out.push((PathBuf::from(rel), templates::load(default)?));
+                }
+            }
             if let Some(mcp) = self.mcp_json()? {
                 out.push((PathBuf::from(".mcp.json"), mcp));
             }
@@ -884,6 +935,17 @@ impl Project {
 
     /// The permission rules ocgen generates itself, before the user's own.
     pub fn generated_permissions(&self) -> PermissionRules {
+        let mut rules = self.default_permissions();
+        if self.claude.workflow.intent {
+            // /intent drafts the issue; the user files it. Kept even without the
+            // permission defaults, since the workflow relies on it.
+            rules.deny.push("Bash(gh issue create*)".into());
+        }
+        rules
+    }
+
+    /// The permission defaults (the `permissions` power-up).
+    fn default_permissions(&self) -> PermissionRules {
         if !self.claude.powerups.permissions {
             return PermissionRules::default();
         }
@@ -1077,11 +1139,12 @@ impl Project {
     pub fn scaffold(&self, target: &Path, force: bool) -> Result<Vec<PathBuf>> {
         let files = self.render_all()?;
 
-        // CLAUDE.md is user-owned: ocgen creates it once and never overwrites it, so
-        // it is exempt from both the conflict check and the (forced) rewrite below.
+        // User-owned files (CLAUDE.md, the /intent templates) are created once and
+        // never overwritten, so they're exempt from the conflict check and the
+        // (forced) rewrite below.
         if !force {
             for (rel, _) in &files {
-                if rel.as_path() == Path::new(CLAUDE_MD) {
+                if user_owned(rel) {
                     continue;
                 }
                 let p = target.join(rel);
@@ -1109,12 +1172,11 @@ impl Project {
         files: &[(PathBuf, String)],
         keep: &BTreeSet<String>,
     ) -> Result<Vec<PathBuf>> {
-        let claude_md_path = Path::new(CLAUDE_MD);
         let mut written = Vec::new();
         for (rel, contents) in files {
             let path = target.join(rel);
-            if rel.as_path() == claude_md_path && path.exists() {
-                continue; // preserve the user's CLAUDE.md
+            if user_owned(rel) && path.exists() {
+                continue; // preserve the user's own file
             }
             if keep.contains(&rel.to_string_lossy().replace('\\', "/")) {
                 continue; // the user chose to keep their version
@@ -1138,7 +1200,7 @@ impl Project {
         let mut state = self.clone();
         state.generated = files
             .iter()
-            .filter(|(rel, _)| rel.as_path() != claude_md_path)
+            .filter(|(rel, _)| !user_owned(rel))
             .map(|(rel, c)| (rel.to_string_lossy().replace('\\', "/"), fingerprint(c)))
             .collect();
         let state_path = target.join(self.target.state_file());
@@ -1246,14 +1308,14 @@ impl Project {
     }
 
     /// What a forced re-scaffold (`doctor`) would do, file by file: add, modify,
-    /// remove (stale legacy files) or leave unchanged. The user-owned `CLAUDE.md`
-    /// is never part of the plan.
+    /// remove (stale legacy files) or leave unchanged. User-owned files (`CLAUDE.md`,
+    /// the `/intent` templates) that already exist are never part of the plan.
     pub fn plan_changes(&self, target: &Path) -> Result<Vec<FileChange>> {
         let mut plan = Vec::new();
         for (rel, new) in self.render_all()? {
             let rel_s = rel.to_string_lossy().replace('\\', "/");
             let path = target.join(&rel);
-            if rel_s == "CLAUDE.md" && path.exists() {
+            if user_owned(&rel) && path.exists() {
                 continue;
             }
             let (kind, old, hand_edited) = match fs::read_to_string(&path) {

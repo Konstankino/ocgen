@@ -482,6 +482,9 @@ fn run_claude(root: &Path, project: &Project) -> Result<()> {
     if project.claude.workflow.inquire {
         wf.push("/inquire");
     }
+    if project.claude.workflow.intent {
+        wf.push("/intent");
+    }
     ui::kv(
         "workflow",
         &if wf.is_empty() {

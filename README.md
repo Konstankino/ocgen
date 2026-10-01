@@ -248,7 +248,7 @@ agent's original role/archetype. So older projects keep working with `landscape`
 > tooling. Everything built on Claude Code's own mechanisms is **Claude-only**, and the OpenCode
 > target keeps its current feature set:
 > - governance gates, the loop guard and the approval gate (hooks);
-> - skills and the workflow skills (`/deliver`, `/inquire`, …);
+> - skills and the workflow skills (`/deliver`, `/inquire`, `/intent`, …);
 > - MCP, the statusline, subagent controls, and plugin output.
 >
 > OpenCode has no hook system, so the gates can't be ported.
@@ -279,6 +279,9 @@ repo used for a plugin's marketplace and release workflow; `--team` enables
 .claude/skills/refine/SKILL.md       # /refine — propose, take reasoned push-back, iterate
 .claude/skills/deliver/SKILL.md      # /deliver — route → sharpen → requirements → plan → research → gated execution (you run it)
 .claude/skills/inquire/SKILL.md      # /inquire — understand a codebase with evidence and next-question nudges
+.claude/skills/intent/SKILL.md       # /intent — prompt → investigate → approved plan → numbered intent file → issue draft (you run it)
+.claude/intent/issue-template.md     # /intent's GitHub issue structure — yours, written once
+.claude/intent/intent-template.md    # /intent's intent-file (ADR) structure — yours, written once
 .claude/skills/fanout/SKILL.md       # /fanout — worktree-isolated parallel writers (you run it)
 .claude/skills/improve-prompt/SKILL.md
 .claude/skills/<name>/SKILL.md       # your own skills (`ocgen add skill`)
@@ -296,7 +299,7 @@ in your `$EDITOR` so you can shape the project instructions before anything is w
 
 **Workflow commands are skills.** Claude Code merged commands into skills, so ocgen renders
 its workflows as `.claude/skills/<name>/SKILL.md`. You still type `/deliver`, `/inquire` and so on.
-- **You start the side-effecting ones:** `/multi`, `/fanout`, `/deliver`, `/team` and
+- **You start the side-effecting ones:** `/multi`, `/fanout`, `/deliver`, `/intent`, `/team` and
   `/team-plan` carry `disable-model-invocation: true`, so Claude can't start them on its own.
 - **Claude may use the rest when relevant:** `/inquire`, `/intake`, `/refine` and
   `/improve-prompt`.
@@ -514,6 +517,43 @@ longer gap, because it gives a compact recap and catches code changes.
 To add these commands to an existing project, re-render it with `ocgen doctor [dir]` (projects
 created by older versions get `/inquire` switched on automatically).
 
+#### From findings to a GitHub issue (`/intent`)
+
+**`/intent <the problem or idea>`** turns an investigation into an agreed change you can file as a
+GitHub issue (wizard: "Include the /intent command…"; on by default). You start it; Claude can't.
+
+1. **Improve the prompt** — your request is rewritten with an explicit role, task, success criteria
+   and constraints; you confirm it, and everything after works from it.
+2. **Investigate** — read-only and in parallel, with findings tagged Verified (`file:line`) or
+   Inferred (`Confidence: NN%`).
+3. **Plan and approve** — options with a recommendation, scope, risks with mitigations, acceptance
+   criteria; it iterates on your push-back until you approve.
+4. **Intent file** (optional) — e.g. `docs/adr/ADR-0007-cache-invalidation.md`. The number is one
+   more than the highest found in the local directory **and** on the remote main branch
+   (`git fetch` + `git ls-tree`), matching both `ADR-0007-…` and `0007-…` names, so it never
+   collides with an existing ADR.
+5. **Issue draft** — an actionable title (≤ 72 characters) and a description of at most 250 words
+   that follows the project's issue template, plus the `gh issue create` command **for you to run**.
+   Claude never files it: the skill says so, and `Bash(gh issue create*)` is in the generated
+   `deny` list.
+6. **Link and continue** — after you file it, `/intent #123` (or the URL) adds `Issue:` to the
+   intent file and keeps collaborating; `/deliver` can take the intent file as its brief.
+
+`/intent` with no arguments lists intents that have no issue yet; `/intent ADR-0007` resumes one.
+
+**Configure it with `ocgen edit intent`:**
+
+```bash
+ocgen edit intent --show                                 # settings and template paths
+ocgen edit intent --prefix RFC --digits 3 --dir docs/rfc # RFC-001-<slug>.md in docs/rfc/
+ocgen edit intent --max-words 150 --branch develop       # shorter issues; numbers checked on origin/develop
+ocgen edit intent --issue-template                       # edit the issue structure in $EDITOR
+ocgen edit intent --reset-intent-template                # restore ocgen's default
+```
+
+The two templates live in the project under `.claude/intent/` and belong to you: ocgen writes them
+once and never overwrites them (like `CLAUDE.md`), so commit them with the rest of `.claude/`.
+
 #### Agent Teams
 
 [Agent Teams](https://code.claude.com/docs/en/agent-teams) coordinate several parallel
@@ -714,7 +754,7 @@ defaults to `.`.
 
 | Command | What it does |
 |---|---|
-| `ocgen new [dir] --target claude` | Scaffold a new Claude project (agents, `/multi` `/intake` `/refine` `/deliver` `/inquire`, `CLAUDE.md`, `settings.json`). |
+| `ocgen new [dir] --target claude` | Scaffold a new Claude project (agents, `/multi` `/intake` `/refine` `/deliver` `/inquire` `/intent`, `CLAUDE.md`, `settings.json`). |
 | `ocgen new [dir] --target claude --output plugin` | Emit a distributable plugin instead of the project tree. |
 | `ocgen new [dir] --target claude --output both --repo <owner/repo>` | Emit both the project **and** a plugin (marketplace + release workflow). |
 | `ocgen new [dir] --target claude --team` | Also enable Agent Teams (env flag + `/team` + hooks + guidance). |
@@ -735,6 +775,7 @@ for a plugin; `--team` is off by default. (The `--base-url` flag is OpenCode-onl
 | Command | What it does |
 |---|---|
 | `ocgen add skill [dir]` | Author a new skill → `.claude/skills/<name>/SKILL.md` (name, description, allowed-tools, body). |
+| `ocgen edit intent -p <dir> [--prefix --digits --dir --max-words --branch --enable/--disable --issue-template --intent-template --reset-…-template --show]` | Configure `/intent`: intent-file prefix, number width and directory, the issue word limit, the branch checked for taken numbers, and the project's issue / intent-file templates. No flags = interactive. |
 | `ocgen edit permissions -p <dir> --list` | Every permission rule at a glance — ocgen's and yours, list by list in the order Claude Code checks them; flags your rules that have no effect. Writes nothing. |
 | `ocgen edit permissions -p <dir> [--allow/--ask/--deny/--remove <RULE>]…` | Add or remove your own permission rules. They are saved in the state file and appended to ocgen's generated `allow`/`ask`/`deny` lists in `settings.json`, so regeneration keeps them. Generated rules (including the approval-gate guards) can't be removed. Warns when a generated `deny`/`ask` rule overrides yours. No flags = interactive. |
 | `ocgen edit skill [name] -p <dir>` | Edit an existing skill; renaming cleans up the old skill directory. Omit `[name]` to pick from a list. |
@@ -792,7 +833,8 @@ opencode/commands/multi.md.j2     # a command that fans out to the subagents
 seeds.toml               # blank-agent seed text (body + external prompt)
 claude/agent.md.j2              # one generic Claude subagent
 claude/CLAUDE.md.j2             # project instructions + roster
-claude/commands/*.md.j2         # multi / intake / refine / deliver / inquire / team… (rendered as skills)
+claude/commands/*.md.j2         # multi / intake / refine / deliver / inquire / intent / team… (rendered as skills)
+claude/intent/*.md              # default /intent issue and intent-file templates (copied into new projects)
 claude/skill/SKILL.md.j2        # one generic skill
 claude/skill-presets.toml       # add-skill presets (command / knowledge / forked-research)
 claude/hooks/team-*.sh          # Agent Teams quality-gate hook stubs

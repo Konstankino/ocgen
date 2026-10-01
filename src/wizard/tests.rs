@@ -365,3 +365,25 @@ fn edit_permissions_walks_add_and_remove() {
     assert!(p.claude.permissions.deny.is_empty());
     assert!(read(tmp.path(), SETTINGS).contains("Bash(gh run view:*)"));
 }
+
+#[test]
+fn edit_intent_walks_every_setting() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = claude_project(tmp.path());
+    script(&[
+        "",         // keep /intent on
+        "RFC",      // prefix
+        "3",        // digits
+        "docs/rfc", // directory
+        "200",      // max words
+        "",         // branch: the remote default
+    ]);
+    super::run_edit_intent(path, Default::default()).unwrap();
+    assert_eq!(script_remaining(), 0);
+    let p = reload(tmp.path());
+    assert_eq!(p.claude.intent.prefix, "RFC");
+    assert_eq!(p.claude.intent.digits, 3);
+    assert_eq!(p.claude.intent.dir, "docs/rfc");
+    assert_eq!(p.claude.intent.max_words, 200);
+    assert!(read(tmp.path(), ".claude/skills/intent/SKILL.md").contains("RFC-001"));
+}

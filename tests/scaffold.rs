@@ -986,6 +986,7 @@ fn claude_powerups_and_workflow_can_be_disabled() {
         verify_todos: false,
         deliver: false,
         inquire: false,
+        intent: false,
         loop_guard_max: 0,
         check_cmd: String::new(),
         subagent_confidence: 0,
@@ -3493,6 +3494,7 @@ fn workflow_commands_are_generated_as_skills() {
         ("team", true),
         ("team-plan", true),
         ("inquire", false),
+        ("intent", true),
         ("intake", false),
         ("refine", false),
         ("improve-prompt", false),
@@ -4282,6 +4284,7 @@ fn extra_permissions_are_written_even_without_the_permission_defaults() {
     let dir = tempdir().unwrap();
     let mut p = claude_default("bare");
     p.claude.powerups.permissions = false;
+    p.claude.workflow.intent = false; // its own deny rule stays even without defaults
     p.scaffold(dir.path(), false).unwrap();
     assert!(settings_of(dir.path()).get("permissions").is_none());
 
@@ -4317,4 +4320,154 @@ fn allow_rules_shadowed_by_generated_deny_or_ask_are_reported() {
         None
     );
     assert_eq!(p.shadowing_rule(RuleList::Deny, "Bash(git push:*)"), None);
+}
+
+// ------------------------------------------------------------------- /intent -----
+
+#[test]
+fn intent_skill_renders_the_project_settings() {
+    let dir = tempdir().unwrap();
+    let mut p = claude_default("int");
+    p.claude.intent.prefix = "RFC".into();
+    p.claude.intent.digits = 3;
+    p.claude.intent.dir = "docs/rfc".into();
+    p.claude.intent.max_words = 180;
+    p.claude.intent.branch = "trunk".into();
+    p.scaffold(dir.path(), false).unwrap();
+
+    let md = read(dir.path(), ".claude/skills/intent/SKILL.md");
+    assert!(!md.contains("{{") && !md.contains("{%"), "unrendered Jinja");
+    assert!(md.contains("disable-model-invocation: true"), "user-run");
+    // The workflow: improve the prompt, investigate, plan to approval, intent
+    // file, issue draft, then link the issue I filed.
+    for step in [
+        "Improve the prompt",
+        "Investigate",
+        "approve",
+        "Intent file",
+        "issue",
+        "Verified",
+        "Inferred",
+    ] {
+        assert!(md.contains(step), "missing {step}");
+    }
+    // Numbering: the configured prefix, width and directory, checked against the
+    // remote branch so a number is never reused.
+    assert!(
+        md.contains("docs/rfc/RFC-") && md.contains("3 digits"),
+        "{md}"
+    );
+    assert!(md.contains("RFC-001"));
+    assert!(md.contains("git fetch") && md.contains("git ls-tree") && md.contains("trunk"));
+    // The issue: ≤ N words, from the project's template, never created by Claude.
+    assert!(md.contains("180 words"));
+    assert!(md.contains(".claude/intent/issue-template.md"));
+    assert!(md.contains(".claude/intent/intent-template.md"));
+    assert!(md.contains("gh issue create") && md.contains("Never create"));
+
+    assert!(read(dir.path(), ".claude/rules/ocgen-workflow.md").contains("/intent"));
+}
+
+#[test]
+fn intent_defaults_use_adr_numbering_and_the_remote_default_branch() {
+    let dir = tempdir().unwrap();
+    claude_default("intd").scaffold(dir.path(), false).unwrap();
+    let md = read(dir.path(), ".claude/skills/intent/SKILL.md");
+    assert!(md.contains("docs/adr/ADR-0001") && md.contains("4 digits"));
+    assert!(md.contains("250 words"));
+    assert!(
+        md.contains("git ls-remote --symref origin HEAD"),
+        "no branch configured → the remote's default branch"
+    );
+}
+
+#[test]
+fn intent_templates_are_written_once_and_user_owned() {
+    let dir = tempdir().unwrap();
+    let p = claude_default("intt");
+    p.scaffold(dir.path(), false).unwrap();
+    let issue = ".claude/intent/issue-template.md";
+    let intent = ".claude/intent/intent-template.md";
+    assert!(read(dir.path(), issue).contains("Acceptance criteria"));
+    assert!(read(dir.path(), intent).contains("Status:"));
+
+    // A user edit survives regeneration and isn't a change doctor wants to undo.
+    fs::write(dir.path().join(issue), "## My own structure\n").unwrap();
+    p.scaffold(dir.path(), true).unwrap();
+    assert_eq!(read(dir.path(), issue), "## My own structure\n");
+    let plan = p.plan_changes(dir.path()).unwrap();
+    assert!(
+        plan.iter().all(|c| c.rel != issue),
+        "user-owned files aren't in doctor's plan"
+    );
+    // Nor is it fingerprinted as generated.
+    let (_, state) = Project::discover(dir.path()).unwrap();
+    assert!(!state.generated.contains_key(issue));
+
+    // A deleted template comes back with the default.
+    fs::remove_file(dir.path().join(intent)).unwrap();
+    p.scaffold(dir.path(), true).unwrap();
+    assert!(read(dir.path(), intent).contains("Status:"));
+}
+
+#[test]
+fn intent_denies_gh_issue_create_and_can_be_disabled() {
+    let dir = tempdir().unwrap();
+    let mut p = claude_default("intg");
+    p.scaffold(dir.path(), false).unwrap();
+    let deny = |d: &Path| settings_of(d)["permissions"]["deny"].clone();
+    assert!(deny(dir.path())
+        .as_array()
+        .unwrap()
+        .contains(&"Bash(gh issue create*)".into()));
+
+    let dir = tempdir().unwrap();
+    p.claude.workflow.intent = false;
+    p.scaffold(dir.path(), false).unwrap();
+    assert!(!dir.path().join(".claude/skills/intent").exists());
+    assert!(!dir.path().join(".claude/intent").exists());
+    assert!(!deny(dir.path())
+        .as_array()
+        .unwrap()
+        .contains(&"Bash(gh issue create*)".into()));
+    assert!(!read(dir.path(), ".claude/rules/ocgen-workflow.md").contains("/intent"));
+}
+
+#[test]
+fn workflow_without_intent_field_backfills_true() {
+    let wf: Workflow = serde_json::from_str(r#"{"deliver": true}"#).unwrap();
+    assert!(wf.intent);
+    let s: ocgen::claude::IntentSettings = serde_json::from_str("{}").unwrap();
+    assert_eq!(
+        (s.prefix.as_str(), s.digits, s.dir.as_str(), s.max_words),
+        ("ADR", 4, "docs/adr", 250)
+    );
+}
+
+#[test]
+fn intent_settings_are_validated() {
+    use ocgen::validate::{git_branch, intent_digits, intent_dir, intent_max_words, intent_prefix};
+    assert!(intent_prefix("ADR").is_ok() && intent_prefix("RFC2").is_ok());
+    for bad in ["", "1ADR", "AD-R", "A B", "TOOLONGPREFIXX"] {
+        assert!(intent_prefix(bad).is_err(), "{bad}");
+    }
+    assert!(intent_digits("4").is_ok() && intent_digits("1").is_ok());
+    assert!(intent_digits("0").is_err() && intent_digits("7").is_err());
+    assert!(intent_dir("docs/adr").is_ok() && intent_dir("adr").is_ok());
+    for bad in ["", "/abs", "../up", "docs/../x", "C:\\adr", "a b"] {
+        assert!(intent_dir(bad).is_err(), "{bad}");
+    }
+    assert!(intent_max_words("250").is_ok());
+    assert!(intent_max_words("49").is_err() && intent_max_words("1001").is_err());
+    assert!(
+        git_branch("").is_ok() && git_branch("main").is_ok() && git_branch("release/1.x").is_ok()
+    );
+    for bad in ["a b", "x..y", "-x", "x~1", "x:y"] {
+        assert!(git_branch(bad).is_err(), "{bad}");
+    }
+}
+
+#[test]
+fn user_skills_cannot_take_the_intent_name() {
+    assert!(ocgen::validate::skill_name("intent").is_err());
 }

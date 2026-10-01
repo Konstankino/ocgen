@@ -258,6 +258,98 @@ pub enum EditWhat {
         #[command(flatten)]
         changes: PermissionsCli,
     },
+    /// Configure /intent: intent-file numbering, the issue word limit and the
+    /// project's issue / intent-file templates (Claude projects only).
+    ///
+    /// /intent improves your prompt, investigates, agrees a plan with you, writes
+    /// a numbered intent file (e.g. docs/adr/ADR-0007-slug.md, the number checked
+    /// against the remote main branch so it is never reused) and drafts an
+    /// actionable GitHub issue for you to file. Claude never files it:
+    /// `gh issue create` is denied.
+    ///
+    /// The two templates live in the project (.claude/intent/) and are yours:
+    /// ocgen writes them once and never overwrites them. With flags the changes
+    /// apply directly; without flags the command is interactive.
+    #[command(after_help = INTENT_EXAMPLES)]
+    Intent {
+        /// Directory of the existing project.
+        #[arg(short, long, default_value = ".")]
+        path: String,
+        #[command(flatten)]
+        changes: IntentCli,
+    },
+}
+
+const INTENT_EXAMPLES: &str = "\
+Examples:
+  ocgen edit intent --show                                 # current settings and templates
+  ocgen edit intent                                        # interactive
+  ocgen edit intent --prefix RFC --digits 3 --dir docs/rfc # RFC-001-<slug>.md in docs/rfc/
+  ocgen edit intent --max-words 150                        # shorter issue descriptions
+  ocgen edit intent --branch develop                       # check numbers against origin/develop
+  ocgen edit intent --issue-template                       # edit the issue structure in $EDITOR
+  ocgen edit intent --reset-intent-template                # back to ocgen's default
+  ocgen edit intent --disable                              # remove /intent from the project";
+
+/// `/intent` changes given on the command line (`ocgen edit intent`).
+#[derive(clap::Args, Default)]
+pub struct IntentCli {
+    /// Intent-file prefix, e.g. ADR or RFC.
+    #[arg(long, value_name = "PREFIX")]
+    pub prefix: Option<String>,
+    /// Width of the zero-padded number (1–6).
+    #[arg(long, value_name = "N")]
+    pub digits: Option<u8>,
+    /// Directory for intent files, relative to the project root.
+    #[arg(long, value_name = "DIR")]
+    pub dir: Option<String>,
+    /// Word limit for the GitHub issue description (50–1000).
+    #[arg(long, value_name = "N")]
+    pub max_words: Option<u16>,
+    /// Remote branch to check for numbers already taken ("" = the remote's default).
+    #[arg(long, value_name = "BRANCH")]
+    pub branch: Option<String>,
+    /// Add /intent to the project.
+    #[arg(long, conflicts_with = "disable")]
+    pub enable: bool,
+    /// Remove /intent from the project (your templates are kept).
+    #[arg(long)]
+    pub disable: bool,
+    /// Edit the project's issue template in $EDITOR.
+    #[arg(long)]
+    pub issue_template: bool,
+    /// Edit the project's intent-file template in $EDITOR.
+    #[arg(long)]
+    pub intent_template: bool,
+    /// Restore ocgen's default issue template.
+    #[arg(long)]
+    pub reset_issue_template: bool,
+    /// Restore ocgen's default intent-file template.
+    #[arg(long)]
+    pub reset_intent_template: bool,
+    /// Show the settings and template paths, and write nothing.
+    #[arg(long, conflicts_with_all = [
+        "prefix", "digits", "dir", "max_words", "branch", "enable", "disable",
+        "issue_template", "intent_template", "reset_issue_template", "reset_intent_template",
+    ])]
+    pub show: bool,
+}
+
+impl IntentCli {
+    pub fn is_empty(&self) -> bool {
+        self.prefix.is_none()
+            && self.digits.is_none()
+            && self.dir.is_none()
+            && self.max_words.is_none()
+            && self.branch.is_none()
+            && !self.enable
+            && !self.disable
+            && !self.issue_template
+            && !self.intent_template
+            && !self.reset_issue_template
+            && !self.reset_intent_template
+            && !self.show
+    }
 }
 
 const EDIT_EXAMPLES: &str = "\
@@ -266,6 +358,7 @@ Examples:
   ocgen edit skill -p ./my-project                # pick a skill from a list
   ocgen edit team                                 # turn Agent Teams and its gates on/off
   ocgen edit permissions --allow \"Bash(gh run view:*)\"   # stop a command from asking
+  ocgen edit intent --prefix RFC --dir docs/rfc            # how /intent numbers intent files
 
 Run `ocgen edit <COMMAND> --help` for a command's options.";
 

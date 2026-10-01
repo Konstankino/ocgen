@@ -112,3 +112,13 @@ flow, contract, rationale, change impact, failure) — never a ready-made next q
 accumulate in a git-ignored ledger under `.claude/notes/`, so a later
 session can resume from its open questions. Hand off to `/deliver` once you know what to change.
 {% endif %}
+{% if intent %}
+## Intents and issues
+
+To turn a problem or idea into an agreed change, run `/intent <the problem>`: it improves the
+prompt, investigates with evidence, and iterates on a plan until approved; then it can write a
+numbered intent file under `{{ intent_dir }}/` (the number checked against the remote main branch so
+it is never reused) and drafts an actionable GitHub issue title and description. **Never create
+GitHub issues** — the user files them (`gh issue create` is denied). Once filed, `/intent #<number>`
+links the issue to the intent file; `/deliver` can take the intent file as its brief.
+{% endif %}

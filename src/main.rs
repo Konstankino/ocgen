@@ -58,6 +58,7 @@ fn main() -> Result<()> {
             EditWhat::Skill { name, path } => wizard::run_edit_skill(path, name)?,
             EditWhat::Team { path } => wizard::run_edit_team(path)?,
             EditWhat::Permissions { path, changes } => wizard::run_edit_permissions(path, changes)?,
+            EditWhat::Intent { path, changes } => wizard::run_edit_intent(path, changes)?,
             EditWhat::Mcp { name, path } => wizard::run_edit_mcp(path, name)?,
         },
         Command::Show {

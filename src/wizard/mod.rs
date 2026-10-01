@@ -15,7 +15,7 @@ use ocgen::target::Target;
 use ocgen::templates;
 use ocgen::validate::{self, unique_ident};
 
-use crate::cli::{OutputArg, PermissionsCli, TargetArg, TeamCli};
+use crate::cli::{IntentCli, OutputArg, PermissionsCli, TargetArg, TeamCli};
 use crate::prompt::{
     ask, ask_color, ask_confirm, ask_multi, ask_optional_v, ask_select, ask_v, edit_multiline,
 };
@@ -512,6 +512,10 @@ fn build_claude_project(
         "Sharpens your questions, answers with file:line evidence, ends with one hint toward the next, keeps a git-ignored ledger in .claude/notes/.",
         true,
     )?;
+    let (intent, intent_settings) =
+        configure_intent(theme, true, &ocgen::claude::IntentSettings::default())?;
+    p.claude.workflow.intent = intent;
+    p.claude.intent = intent_settings;
     p.claude.workflow.subagent_confidence = ask_v(
         theme,
         "Enforce a minimum confidence on subagents that write files (0–100, 0 = off)",
@@ -789,6 +793,251 @@ fn edit_permissions_interactively(theme: &ColorfulTheme, project: &mut Project) 
             _ => return Ok(()),
         }
     }
+}
+
+/// Ask whether to include `/intent` and, if so, its settings (seeded with `current`).
+fn configure_intent(
+    theme: &ColorfulTheme,
+    enabled: bool,
+    current: &ocgen::claude::IntentSettings,
+) -> Result<(bool, ocgen::claude::IntentSettings)> {
+    let on = ask_confirm(
+        theme,
+        "Include the /intent command (plan → numbered intent file → GitHub issue draft)?",
+        "Improves your prompt, investigates, agrees a plan with you, writes an intent file (e.g. ADR-0007) and drafts an issue for you to file — Claude never files it.",
+        enabled,
+    )?;
+    if !on {
+        return Ok((false, current.clone()));
+    }
+    let mut s = current.clone();
+    s.prefix = ask_v(
+        theme,
+        "Intent file prefix",
+        "Starts every intent file name, e.g. ADR → ADR-0007-cache-invalidation.md.",
+        Some(&current.prefix),
+        validate::intent_prefix,
+    )?;
+    s.digits = ask_v(
+        theme,
+        "Number width (digits)",
+        "Zero-padding of the number: 4 → 0007.",
+        Some(&current.digits.to_string()),
+        validate::intent_digits,
+    )?
+    .trim()
+    .parse()
+    .unwrap_or(current.digits);
+    s.dir = ask_v(
+        theme,
+        "Directory for intent files",
+        "Relative to the project root. Numbers already used here or on the remote main branch are never reused.",
+        Some(&current.dir),
+        validate::intent_dir,
+    )?;
+    s.max_words = ask_v(
+        theme,
+        "Max words in the GitHub issue description (50–1000)",
+        "The issue body /intent drafts stays within this.",
+        Some(&current.max_words.to_string()),
+        validate::intent_max_words,
+    )?
+    .trim()
+    .parse()
+    .unwrap_or(current.max_words);
+    s.branch = ask_optional_v(
+        theme,
+        "Remote branch to check for taken numbers (optional)",
+        "Empty = the remote's default branch (origin/HEAD). Enter keeps, '-' clears.",
+        &current.branch,
+        validate::git_branch,
+    )?;
+    Ok((true, s))
+}
+
+/// `ocgen edit intent` — /intent's numbering, issue word limit and templates.
+/// Flags apply directly; otherwise interactive.
+pub fn run_edit_intent(path: String, changes: IntentCli) -> Result<()> {
+    use ocgen::claude::{INTENT_FILE_TEMPLATE, INTENT_ISSUE_TEMPLATE};
+    let (root, mut project) = Project::discover(Path::new(&path))?;
+    if project.target != Target::ClaudeCode {
+        bail!("/intent is a Claude Code workflow; this project targets OpenCode.");
+    }
+    if changes.show {
+        print_intent(&project, &root);
+        return Ok(());
+    }
+    let was = (
+        project.claude.workflow.intent,
+        project.claude.intent.clone(),
+    );
+
+    if changes.is_empty() {
+        if !crate::prompt::can_ask() {
+            bail!("no terminal to ask in — pass the changes as flags: --prefix, --digits, --dir, --max-words, --branch, --enable/--disable, --issue-template, --intent-template, --reset-issue-template, --reset-intent-template (see --help)");
+        }
+        ui::banner("edit /intent");
+        let (on, s) = configure_intent(
+            &ColorfulTheme::default(),
+            project.claude.workflow.intent,
+            &project.claude.intent,
+        )?;
+        project.claude.workflow.intent = on;
+        project.claude.intent = s;
+    } else {
+        let s = &mut project.claude.intent;
+        if let Some(v) = &changes.prefix {
+            s.prefix = v.trim().to_string();
+        }
+        if let Some(v) = changes.digits {
+            s.digits = v;
+        }
+        if let Some(v) = &changes.dir {
+            s.dir = v.trim().trim_end_matches('/').to_string();
+        }
+        if let Some(v) = changes.max_words {
+            s.max_words = v;
+        }
+        if let Some(v) = &changes.branch {
+            s.branch = v.trim().to_string();
+        }
+        if changes.enable {
+            project.claude.workflow.intent = true;
+        }
+        if changes.disable {
+            project.claude.workflow.intent = false;
+        }
+    }
+    // Check everything before writing anything.
+    project.claude.intent.validate()?;
+
+    if (
+        project.claude.workflow.intent,
+        project.claude.intent.clone(),
+    ) != was
+    {
+        let written = project.scaffold(&root, true)?;
+        if !project.claude.workflow.intent {
+            remove_intent_skill(&project, &root)?;
+        }
+        report_written(&written);
+    }
+    for (reset, edit, rel, default) in [
+        (
+            changes.reset_issue_template,
+            changes.issue_template,
+            INTENT_ISSUE_TEMPLATE,
+            "claude/intent/issue.md",
+        ),
+        (
+            changes.reset_intent_template,
+            changes.intent_template,
+            INTENT_FILE_TEMPLATE,
+            "claude/intent/intent.md",
+        ),
+    ] {
+        if !reset && !edit {
+            continue;
+        }
+        let path = root.join(rel);
+        let current = if reset {
+            templates::load(default)?
+        } else {
+            std::fs::read_to_string(&path).or_else(|_| templates::load(default))?
+        };
+        let new = if edit {
+            match Editor::new().edit(&current)? {
+                Some(text) => text,
+                None => {
+                    println!("{rel}: editor closed without saving — unchanged.");
+                    continue;
+                }
+            }
+        } else {
+            current
+        };
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        std::fs::write(&path, new).with_context(|| format!("writing {rel}"))?;
+        ui::success(&format!("{} {rel}", if reset { "reset" } else { "saved" }));
+    }
+    print_intent(&project, &root);
+    Ok(())
+}
+
+/// Remove the generated /intent skill after it is turned off (only ocgen's own
+/// copy; the user's templates and intent files stay).
+fn remove_intent_skill(project: &Project, root: &Path) -> Result<()> {
+    let mut dirs = vec![root.join(".claude/skills/intent")];
+    if project.claude.output.plugin {
+        if let Some(name) = std::fs::read_dir(root.join("plugin"))
+            .ok()
+            .into_iter()
+            .flatten()
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .find(|p| p.join("skills/intent/SKILL.md").exists())
+        {
+            dirs.push(name.join("skills/intent"));
+        }
+    }
+    for dir in dirs {
+        let skill = dir.join("SKILL.md");
+        if std::fs::read_to_string(&skill).is_ok_and(|s| s.starts_with("---\nname: intent\n")) {
+            std::fs::remove_file(&skill)?;
+            if std::fs::read_dir(&dir).is_ok_and(|mut d| d.next().is_none()) {
+                let _ = std::fs::remove_dir(&dir);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn print_intent(project: &Project, root: &Path) {
+    use ocgen::claude::{INTENT_FILE_TEMPLATE, INTENT_ISSUE_TEMPLATE};
+    let s = &project.claude.intent;
+    ui::section("/intent");
+    ui::kv(
+        "status",
+        if project.claude.workflow.intent {
+            "on"
+        } else {
+            "off"
+        },
+    );
+    ui::kv(
+        "intent files",
+        &format!("{}/{}-<slug>.md", s.dir, s.first_id()),
+    );
+    ui::kv("prefix", &s.prefix);
+    ui::kv("digits", &s.digits.to_string());
+    ui::kv("issue words", &format!("at most {}", s.max_words));
+    ui::kv(
+        "numbers checked on",
+        &if s.branch.is_empty() {
+            "the remote's default branch (origin/HEAD)".to_string()
+        } else {
+            format!("origin/{}", s.branch)
+        },
+    );
+    for (label, rel) in [
+        ("issue template", INTENT_ISSUE_TEMPLATE),
+        ("intent template", INTENT_FILE_TEMPLATE),
+    ] {
+        let state = if root.join(rel).exists() {
+            ui::muted("(yours)")
+        } else {
+            ui::muted("(missing — `ocgen doctor` recreates the default)")
+        };
+        ui::kv(label, &format!("{rel}  {state}"));
+    }
+    println!(
+        "  {}",
+        ui::muted(
+            "Edit the templates with `ocgen edit intent --issue-template` / `--intent-template`."
+        )
+    );
 }
 
 /// Tell the user when a generated deny/ask rule makes theirs pointless.
