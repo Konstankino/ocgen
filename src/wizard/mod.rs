@@ -681,6 +681,10 @@ pub fn run_edit_permissions(path: String, changes: PermissionsCli) -> Result<()>
     if project.target != Target::ClaudeCode {
         bail!("permission rules are a Claude Code setting; OpenCode permissions are per agent — use `ocgen edit agent`.");
     }
+    if changes.list {
+        print_all_permissions(&project);
+        return Ok(());
+    }
     if project.claude.output.plugin && !project.claude.output.project {
         bail!("this project emits only a plugin, and a plugin can't set permissions — enable the project output first.");
     }
@@ -737,6 +741,7 @@ fn edit_permissions_interactively(theme: &ColorfulTheme, project: &mut Project) 
     let actions = [
         "Add a rule".to_string(),
         "Remove a rule".to_string(),
+        "List all rules".to_string(),
         "Done".to_string(),
     ];
     let lists = [
@@ -780,6 +785,7 @@ fn edit_permissions_interactively(theme: &ColorfulTheme, project: &mut Project) 
                 let idx = ask_select(theme, "Remove which rule?", "", &items, 0)?;
                 project.claude.permissions.remove(&entries[idx].1);
             }
+            2 => print_all_permissions(project),
             _ => return Ok(()),
         }
     }
@@ -795,6 +801,57 @@ fn warn_if_shadowed(project: &Project, list: ocgen::claude::RuleList, rule: &str
             by.key()
         ));
     }
+}
+
+/// Every rule settings.json gets, list by list in the order Claude Code checks
+/// them, each marked as ocgen's or yours (and yours flagged when it has no effect).
+fn print_all_permissions(project: &Project) {
+    use ocgen::claude::RuleList;
+    let generated = project.generated_permissions();
+    let yours = &project.claude.permissions;
+    ui::section("Permission rules (.claude/settings.json)");
+    println!(
+        "  {}",
+        ui::muted("Claude Code checks deny, then ask, then allow; the first match wins.")
+    );
+    let width = generated
+        .entries()
+        .iter()
+        .chain(yours.entries().iter())
+        .map(|(_, r)| r.chars().count())
+        .max()
+        .unwrap_or(0)
+        .min(48);
+    for list in [RuleList::Deny, RuleList::Ask, RuleList::Allow] {
+        let own: Vec<&String> = yours
+            .list(list)
+            .iter()
+            .filter(|r| !generated.list(list).contains(r))
+            .collect();
+        let total = generated.list(list).len() + own.len();
+        println!();
+        println!("  {}", style(format!("{} ({total})", list.key())).bold());
+        if total == 0 {
+            println!("    {}", ui::muted("none"));
+        }
+        for rule in generated.list(list) {
+            println!("    {rule:<width$}  {}", ui::muted("ocgen"));
+        }
+        for rule in own {
+            let note = match project.shadowing_rule(list, rule) {
+                Some(by) => style(format!("yours — no effect: ocgen's {} rule wins", by.key()))
+                    .yellow()
+                    .to_string(),
+                None => style("yours").cyan().to_string(),
+            };
+            println!("    {rule:<width$}  {note}");
+        }
+    }
+    println!();
+    println!(
+        "  {}",
+        ui::muted("Change yours with `ocgen edit permissions --allow/--ask/--deny/--remove <RULE>`; ocgen's always stay.")
+    );
 }
 
 fn print_extra_permissions(project: &Project) {

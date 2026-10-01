@@ -1036,3 +1036,53 @@ fn edit_permissions_help_explains_rules_and_shows_examples() {
         .stdout(contains("ocgen edit permissions --remove"))
         .stdout(contains("--allow <RULE>"));
 }
+
+#[test]
+fn edit_permissions_list_shows_every_rule_at_a_glance() {
+    let dir = tempdir().unwrap();
+    scaffold_claude(dir.path());
+    ocgen()
+        .args(["edit", "permissions", "-p"])
+        .arg(dir.path())
+        .args([
+            "--allow",
+            "Bash(gh run view:*)",
+            "--allow",
+            "Bash(git push:*)",
+        ])
+        .assert()
+        .success();
+    let before = std::fs::read_to_string(dir.path().join(".claude/settings.json")).unwrap();
+
+    ocgen()
+        .args(["edit", "permissions", "--list", "-p"])
+        .arg(dir.path())
+        .assert()
+        .success()
+        // Every list, generated rules and yours, each with where it comes from.
+        .stdout(contains("allow (10)"))
+        .stdout(contains("ask (17)"))
+        .stdout(contains("deny ("))
+        .stdout(contains("Bash(ocgen approve*)"))
+        .stdout(contains("Bash(gh run view:*)"))
+        .stdout(contains("ocgen"))
+        .stdout(contains("yours"))
+        // An allow that a generated ask rule overrides is flagged.
+        .stdout(contains("no effect"));
+    let after = std::fs::read_to_string(dir.path().join(".claude/settings.json")).unwrap();
+    assert_eq!(before, after, "--list writes nothing");
+
+    // Listing is read-only: it can't be combined with changes.
+    ocgen()
+        .args(["edit", "permissions", "--list", "--allow", "Read", "-p"])
+        .arg(dir.path())
+        .assert()
+        .failure()
+        .stderr(contains("--list"));
+    // And it's in the examples.
+    ocgen()
+        .args(["edit", "permissions", "--help"])
+        .assert()
+        .success()
+        .stdout(contains("ocgen edit permissions --list"));
+}

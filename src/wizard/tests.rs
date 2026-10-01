@@ -354,6 +354,7 @@ fn edit_permissions_walks_add_and_remove() {
         "Read(./secrets/**)",
         "Remove",             // what now?
         "Read(./secrets/**)", // which rule
+        "List",               // every rule at a glance
         "Done",
     ]);
     super::run_edit_permissions(path, Default::default()).unwrap();

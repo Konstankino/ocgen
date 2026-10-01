@@ -275,6 +275,7 @@ Rules:
   WebFetch(domain:example.com), mcp__github__get_issue. Quote them in the shell.
 
 Examples:
+  ocgen edit permissions --list                            # every rule at a glance
   ocgen edit permissions                                   # interactive
   ocgen edit permissions --allow \"Bash(gh run view:*)\" --allow \"Bash(gh run list:*)\"
   ocgen edit permissions --ask \"Bash(docker push:*)\" --deny \"Read(./secrets/**)\"
@@ -296,6 +297,9 @@ pub struct PermissionsCli {
     /// One of your rules to remove, from whichever list holds it (repeatable).
     #[arg(long, value_name = "RULE")]
     pub remove: Vec<String>,
+    /// Show every rule at a glance — ocgen's and yours, list by list — and write nothing.
+    #[arg(long, conflicts_with_all = ["allow", "ask", "deny", "remove"])]
+    pub list: bool,
 }
 
 impl PermissionsCli {

@@ -135,6 +135,7 @@ ocgen add skill ./my-project        # author a Claude Code skill (Claude project
 ocgen add mcp ./my-project          # add an MCP server to .mcp.json (Claude projects)
 ocgen edit mcp [name] -p ./dir      # change or remove an MCP server
 ocgen edit permissions -p ./dir --allow "Bash(gh run view:*)"   # your own settings.json permission rules (Claude projects)
+ocgen edit permissions -p ./dir --list                          # every permission rule at a glance
 ocgen edit agent [name] -p ./dir    # tweak any field of an existing agent
 ocgen add provider ./my-project     # add another provider to an existing project
 ocgen edit provider [key] -p ./dir  # edit a provider and its models
@@ -734,6 +735,7 @@ for a plugin; `--team` is off by default. (The `--base-url` flag is OpenCode-onl
 | Command | What it does |
 |---|---|
 | `ocgen add skill [dir]` | Author a new skill → `.claude/skills/<name>/SKILL.md` (name, description, allowed-tools, body). |
+| `ocgen edit permissions -p <dir> --list` | Every permission rule at a glance — ocgen's and yours, list by list in the order Claude Code checks them; flags your rules that have no effect. Writes nothing. |
 | `ocgen edit permissions -p <dir> [--allow/--ask/--deny/--remove <RULE>]…` | Add or remove your own permission rules. They are saved in the state file and appended to ocgen's generated `allow`/`ask`/`deny` lists in `settings.json`, so regeneration keeps them. Generated rules (including the approval-gate guards) can't be removed. Warns when a generated `deny`/`ask` rule overrides yours. No flags = interactive. |
 | `ocgen edit skill [name] -p <dir>` | Edit an existing skill; renaming cleans up the old skill directory. Omit `[name]` to pick from a list. |
 
