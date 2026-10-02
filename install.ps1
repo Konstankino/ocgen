@@ -62,7 +62,7 @@ try {
     } catch {
       $status = $_.Exception.Response.StatusCode
       if ($status -and [int]$status -eq 404) {
-        # Releases before v0.4.7 shipped without checksums.
+        # Releases before v0.5.0 shipped without checksums.
         $noSums = $true
       } else {
         throw "Cannot verify ${asset}: could not download the release's SHA256SUMS ($base/SHA256SUMS: $($_.Exception.Message)). Try again, or re-run with -SkipVerify (or OCGEN_INSTALL_SKIP_VERIFY=1) to install it without the check."

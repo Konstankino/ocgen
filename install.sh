@@ -84,7 +84,7 @@ Install one (coreutils or perl), or set OCGEN_INSTALL_SKIP_VERIFY=1 to install w
   sums="$(dirname "$1")/SHA256SUMS"
   code="$(curl -sSL "$3" -o "$sums" -w '%{http_code}')" || code=000
   if [ "$code" = 404 ]; then
-    # Releases before v0.4.7 shipped without checksums.
+    # Releases before v0.5.0 shipped without checksums.
     say "Warning: this release has no SHA256SUMS (it predates checksums) - installing $2 unchecked."
     return 0
   fi
