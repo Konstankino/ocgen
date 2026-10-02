@@ -23,7 +23,7 @@ case "$(uname -s 2>/dev/null)" in MINGW* | MSYS* | CYGWIN*) win=1 ;; esac
 
 # Same pattern as the Rust hook (hooks::NOOP_CD_RE): one plain or simply quoted
 # target, then && or ;, then the rest.
-re='\A[ \t\r\n]*cd[ \t]+(?:"(?<dq>[^"$`\r\n]*)"|'\''(?<sq>[^'\''\r\n]*)'\''|(?<bare>[^ \t\r\n"'\''$`\\;&|<>()*?\[\]~{}#]+))[ \t]*(?:&&|;)[ \t\r\n]*(?<rest>[^ \t\r\n;&|][\s\S]*)\z'
+re='\A[ \t\r\n]*cd[ \t]+(?:"(?<dq>[^"$`\r\n]*)"|'\''(?<sq>[^'\''\r\n]*)'\''|(?<bare>[^ \t\r\n"'\''$`\\;&|<>()*?\[\]~{}#][^ \t\r\n"'\''$`\\;&|<>()*?\[\]{}#]*))[ \t]*(?:&&|;)[ \t\r\n]*(?<rest>[^ \t\r\n;&|][\s\S]*)\z'
 target=$(printf '%s' "$payload" | jq -r --arg re "$re" \
     '.tool_input.command // "" | capture($re) | .dq // .sq // .bare' 2>/dev/null) || exit 0
 [ -n "$target" ] || exit 0

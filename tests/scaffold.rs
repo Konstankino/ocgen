@@ -2037,7 +2037,7 @@ fn subagent_confidence_gate_blocks_low_confidence_writers() {
     let ev = |msg: &str| {
         format!(
             r#"{{"hook_event_name":"SubagentStop","cwd":"{}","last_assistant_message":"{}"}}"#,
-            wt.display(),
+            ocgen::paths::for_shell(&wt),
             msg
         )
     };
@@ -2514,7 +2514,7 @@ fn loop_guard_releases_stuck_subagent_writer_and_escalates() {
     // No stated confidence → no progress signal; only the budget can trip.
     let ev = format!(
         r#"{{"session_id":"s1","agent_id":"a1","cwd":"{}","last_assistant_message":"still stuck"}}"#,
-        wt.display()
+        ocgen::paths::for_shell(&wt)
     );
     assert_eq!(run_hook(&hook, &env, &ev).0, 2);
     assert_eq!(run_hook(&hook, &env, &ev).0, 2);
@@ -2552,7 +2552,7 @@ fn loop_guard_trips_early_when_confidence_stalls() {
     let ev = |agent: &str, score: u8| {
         format!(
             r#"{{"session_id":"s1","agent_id":"{agent}","cwd":"{}","last_assistant_message":"Confidence: {score}%"}}"#,
-            wt.display()
+            ocgen::paths::for_shell(&wt)
         )
     };
     // Stalled: 60 then 60 → released at block 2.

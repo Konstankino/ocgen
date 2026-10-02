@@ -43,7 +43,7 @@ pub const NAMES: [&str; 11] = [
 /// A Bash command that starts with one `cd <target>` and goes on after `&&` or
 /// `;` (shared with `drop-noop-cd.sh`, which runs it through jq). The target is
 /// one plain word or a simple quoted string — nothing the shell would expand.
-pub const NOOP_CD_RE: &str = r#"\A[ \t\r\n]*cd[ \t]+(?:"(?<dq>[^"$`\r\n]*)"|'(?<sq>[^'\r\n]*)'|(?<bare>[^ \t\r\n"'$`\\;&|<>()*?\[\]~{}#]+))[ \t]*(?:&&|;)[ \t\r\n]*(?<rest>[^ \t\r\n;&|][\s\S]*)\z"#;
+pub const NOOP_CD_RE: &str = r#"\A[ \t\r\n]*cd[ \t]+(?:"(?<dq>[^"$`\r\n]*)"|'(?<sq>[^'\r\n]*)'|(?<bare>[^ \t\r\n"'$`\\;&|<>()*?\[\]~{}#][^ \t\r\n"'$`\\;&|<>()*?\[\]{}#]*))[ \t]*(?:&&|;)[ \t\r\n]*(?<rest>[^ \t\r\n;&|][\s\S]*)\z"#;
 
 /// What a hook tells Claude Code: exit code plus stdout/stderr.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -2266,6 +2266,25 @@ fn same_folder(target: &str, cwd: &str, windows: bool) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A `~` inside a path is literal (the shell expands only a leading one), and
+    /// Windows short names have one: `C:\\Users\\RUNNER~1\\…` on CI runners.
+    #[test]
+    fn noop_cd_takes_a_tilde_inside_a_path_but_not_a_leading_one() {
+        let env: HashMap<String, String> = HashMap::new();
+        let run = |cmd: &str, cwd: &str| {
+            let payload = serde_json::json!({
+                "tool_name": "Bash", "tool_input": { "command": cmd }, "cwd": cwd
+            })
+            .to_string();
+            run("drop-noop-cd", &payload, &env).stdout
+        };
+        let out = run("cd /p/RUNNER~1/proj && ls", "/p/RUNNER~1/proj");
+        assert!(out.contains(r#""command":"ls""#), "{out:?}");
+        for cmd in ["cd ~ && ls", "cd ~/proj && ls", "cd ~me/proj && ls"] {
+            assert_eq!(run(cmd, "/p/RUNNER~1/proj"), "", "{cmd}");
+        }
+    }
 
     #[test]
     fn stated_confidence_reads_only_a_line_that_states_it() {
