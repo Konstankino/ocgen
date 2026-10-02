@@ -534,6 +534,12 @@ fn build_claude_project(
         "CLAUDE.md guidance to build definition-of-done, per-task verification, self-review, and confidence into todos.",
         true,
     )?;
+    p.claude.workflow.prefer_explorer = ask_confirm(
+        theme,
+        "Send research to the shell-free explorer instead of the built-in Explore agent?",
+        "Denies Agent(Explore): its shell one-liners (cd …;, find -exec, loops, sed) ask every time under blockReadsOutsideWorkingDirectories.",
+        true,
+    )?;
     p.claude.workflow.deliver = ask_confirm(
         theme,
         "Include the /deliver pipeline command?",
@@ -2483,6 +2489,7 @@ fn configure_hooks_extra(theme: &ColorfulTheme, p: &mut Project) -> Result<()> {
     if !p.claude.powerups.hooks {
         p.claude.hooks_extra = ocgen::claude::HooksExtra {
             compact_context: false,
+            drop_noop_cd: false,
             ..Default::default()
         };
         return Ok(());
@@ -2491,9 +2498,10 @@ fn configure_hooks_extra(theme: &ColorfulTheme, p: &mut Project) -> Result<()> {
         "Re-inject context after compaction — re-points Claude at the rules and any /inquire notes",
         "Desktop notification when Claude needs you or a turn fails",
         "Log settings/skills changes made during a session (.claude/audit/, git-ignored)",
+        "Drop a no-op `cd <this folder> &&` so read-only commands after it don't ask (blockReadsOutsideWorkingDirectories)",
     ];
     let x = &p.claude.hooks_extra;
-    let defaults = [x.compact_context, x.notify, x.config_audit];
+    let defaults = [x.compact_context, x.notify, x.config_audit, x.drop_noop_cd];
     let chosen = ask_multi(
         theme,
         "Extra hooks",
@@ -2504,6 +2512,7 @@ fn configure_hooks_extra(theme: &ColorfulTheme, p: &mut Project) -> Result<()> {
     p.claude.hooks_extra.compact_context = chosen.contains(&0);
     p.claude.hooks_extra.notify = chosen.contains(&1);
     p.claude.hooks_extra.config_audit = chosen.contains(&2);
+    p.claude.hooks_extra.drop_noop_cd = chosen.contains(&3);
     p.claude.hooks_extra.format_cmd = ask(
         theme,
         "Formatter to run after Claude edits a file (optional)",

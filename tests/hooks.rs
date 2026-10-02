@@ -979,5 +979,177 @@ fn inquire_notes_renders_the_view_and_the_script_is_a_no_op() {
     assert_eq!(o.code, 0);
     assert!(o.stderr.starts_with("inquire-notes:"), "{o:?}");
     assert!(ocgen::hooks::NAMES.contains(&"inquire-notes"));
-    assert_eq!(ocgen::hooks::PROTOCOL, "ocgen-hooks 7");
+    assert_eq!(ocgen::hooks::PROTOCOL, "ocgen-hooks 8");
+}
+
+// ---------------------------------------------------------- drop-noop-cd --
+
+fn has_jq() -> bool {
+    Command::new("jq")
+        .arg("--version")
+        .output()
+        .is_ok_and(|o| o.status.success())
+}
+
+/// The rewritten command, or `None` when the hook left the call alone. A hook
+/// that rewrites must keep every other `tool_input` field and never decide.
+fn rewritten(o: &(i32, String, String), input: &serde_json::Value) -> Option<String> {
+    assert_eq!(o.0, 0, "never blocks: {o:?}");
+    if o.1.trim().is_empty() {
+        return None;
+    }
+    let v: serde_json::Value = serde_json::from_str(o.1.trim()).expect("JSON on stdout");
+    let h = &v["hookSpecificOutput"];
+    assert_eq!(h["hookEventName"], "PreToolUse", "{v}");
+    assert!(h.get("permissionDecision").is_none(), "never decides: {v}");
+    let mut up = h["updatedInput"].clone();
+    let cmd = up["command"].as_str().unwrap().to_string();
+    up["command"] = input["command"].clone();
+    assert_eq!(&up, input, "other fields kept: {v}");
+    Some(cmd)
+}
+
+#[test]
+fn drop_noop_cd_strips_only_a_cd_into_the_current_folder() {
+    let (a, b) = (project(), project());
+    let jq = has_jq();
+    // (command, cwd — None = the project dir, expected rewrite). `{dir}` is the
+    // project dir as the shell writes it; `{real}` its resolved path.
+    let cases: &[(&str, Option<&str>, Option<&str>)] = &[
+        // Stripped: the folder Claude is already in, however it's spelled.
+        ("cd {dir} && ls", None, Some("ls")),
+        ("cd {dir}; git status", None, Some("git status")),
+        (
+            "  cd \"{dir}\" && grep -n x ./a",
+            None,
+            Some("grep -n x ./a"),
+        ),
+        ("cd '{dir}'/ ; ls", None, None), // quote then slash: not one word we parse
+        ("cd {dir}/ ; ls", None, Some("ls")),
+        ("cd {dir}//&&ls", None, Some("ls")),
+        ("cd . && ls", None, Some("ls")),
+        ("cd ./ ; ls", None, Some("ls")),
+        ("cd {dir} && ls\n", None, Some("ls\n")),
+        (
+            "cd {dir} &&\n  git log -1\n  git status",
+            None,
+            Some("git log -1\n  git status"),
+        ),
+        ("cd {real} && ls", None, Some("ls")),
+        // Windows spellings of the same folder.
+        (
+            "cd C:/Users/x/proj && ls",
+            Some("C:\\Users\\x\\proj"),
+            Some("ls"),
+        ),
+        (
+            "cd /c/Users/x/proj; ls",
+            Some("C:\\Users\\x\\proj"),
+            Some("ls"),
+        ),
+        (
+            "cd c:/users/X/Proj/ && ls",
+            Some("C:\\Users\\x\\proj"),
+            Some("ls"),
+        ),
+        (
+            "cd \"C:\\Users\\x\\proj\" && ls",
+            Some("C:/Users/x/proj"),
+            Some("ls"),
+        ),
+        // Left alone: another folder, a relative one, options, no follow-up,
+        // a cd that isn't first, look-alikes, odd separators.
+        ("cd / && ls", None, None),
+        ("cd {dir}/sub && ls", None, None),
+        ("cd {dir}x && ls", None, None),
+        ("cd sub && ls", None, None),
+        ("cd -P {dir} && ls", None, None),
+        ("cd -- {dir} && ls", None, None),
+        ("cd {dir}", None, None),
+        ("cd {dir} && ", None, None),
+        ("cd {dir};; ls", None, None),
+        ("cd {dir} & ls", None, None),
+        ("cd {dir} || ls", None, None),
+        ("ls && cd {dir}", None, None),
+        ("cd $HOME && ls", None, None),
+        ("cd ~ && ls", None, None),
+        ("cd \"{dir}$x\" && ls", None, None),
+        (
+            "cd \"C:\\\\Users\\\\x\\\\proj\" && ls",
+            Some("C:/Users/x/proj"),
+            None,
+        ),
+        ("cd C:\\Users\\x\\proj && ls", Some("C:/Users/x/proj"), None),
+        ("cd D:/Users/x/proj && ls", Some("C:/Users/x/proj"), None),
+        (
+            "cd /c/Users/x/proj/sub && ls",
+            Some("C:\\Users\\x\\proj"),
+            None,
+        ),
+        ("echo cd {dir} && ls", None, None),
+    ];
+    for (cmd, cwd, want) in cases {
+        for (dir, rust) in [(a.path(), true), (b.path(), false)] {
+            let d = ocgen::paths::for_shell(dir);
+            let real = ocgen::paths::for_shell(&dir.canonicalize().unwrap());
+            let command = cmd.replace("{dir}", &d).replace("{real}", &real);
+            let input = serde_json::json!({
+                "command": command, "description": "d", "run_in_background": false
+            });
+            let payload = serde_json::json!({
+                "tool_name": "Bash", "tool_input": input,
+                "cwd": cwd.map(String::from).unwrap_or(d.clone()),
+            })
+            .to_string();
+            let env: HashMap<String, String> =
+                [("CLAUDE_PROJECT_DIR".to_string(), d.clone())].into();
+            let o = if rust {
+                let o = ocgen::hooks::run("drop-noop-cd", &payload, &env);
+                (o.code, o.stdout, o.stderr)
+            } else if jq && !(cfg!(windows) && cmd.contains("{real}")) {
+                sh(dir, "drop-noop-cd", &env, &payload)
+            } else {
+                continue; // without jq the script never rewrites (tested below)
+            };
+            assert_eq!(
+                rewritten(&o, &input).as_deref(),
+                want.map(|w| w.replace("{dir}", &d)).as_deref(),
+                "{} on {command:?} (cwd {cwd:?})",
+                if rust { "rust" } else { "sh" }
+            );
+        }
+    }
+    assert!(ocgen::hooks::NAMES.contains(&"drop-noop-cd"));
+}
+
+/// Without jq the script can't rebuild `tool_input`, so it leaves every call alone.
+#[test]
+fn drop_noop_cd_without_jq_never_rewrites() {
+    let dir = project();
+    let d = ocgen::paths::for_shell(dir.path());
+    let payload = serde_json::json!({
+        "tool_name": "Bash", "tool_input": { "command": format!("cd {d} && ls") }, "cwd": d
+    })
+    .to_string();
+    let env: HashMap<String, String> = [("OCGEN_NO_JQ".to_string(), "1".to_string())].into();
+    assert_eq!(
+        sh(dir.path(), "drop-noop-cd", &env, &payload),
+        (0, String::new(), String::new())
+    );
+    assert!(!ocgen::hooks::run("drop-noop-cd", &payload, &env)
+        .stdout
+        .is_empty());
+}
+
+/// The script and the Rust hook parse `cd` with the same regex.
+#[test]
+fn drop_noop_cd_script_uses_the_rust_regex() {
+    let script = fs::read_to_string("templates/claude/hooks/drop-noop-cd.sh").unwrap();
+    assert!(
+        script.contains(&format!(
+            "re='{}'",
+            ocgen::hooks::NOOP_CD_RE.replace('\'', "'\\''")
+        )),
+        "the regex in drop-noop-cd.sh drifted from hooks::NOOP_CD_RE"
+    );
 }

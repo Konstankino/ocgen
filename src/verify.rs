@@ -164,6 +164,7 @@ pub fn verify(project: &Project, root: &Path, opts: &Options) -> Vec<Check> {
         if shell_ok {
             out.push(approval_gate(&sh, root, s));
             out.push(https_only_fetch(&sh, root, s));
+            out.push(noop_cd(&sh, root, s));
             out.push(notes_view(&sh, root, s));
         }
         out.push(pre_push(project, root));
@@ -694,6 +695,64 @@ fn https_only_fetch(sh: &Path, root: &Path, settings: &Value) -> Check {
             Status::Pass,
             "only https:// to trusted documentation sites; http:// and other hosts are blocked",
         ),
+    }
+}
+
+/// The no-op `cd` hook must drop `cd <project> &&` (keeping the other input
+/// fields) and leave a `cd` into any other folder alone — never deciding.
+fn noop_cd(sh: &Path, root: &Path, settings: &Value) -> Check {
+    let name = "no-op cd";
+    let Some((_, cmd)) = hook_entries(settings)
+        .into_iter()
+        .find(|(e, c)| e == "PreToolUse" && c.contains("drop-noop-cd"))
+    else {
+        return check(name, Status::Skip, "hook not enabled");
+    };
+    let env = hook_env(root, settings);
+    let dir = crate::paths::for_shell(root);
+    let run = |command: String| {
+        let ev = serde_json::json!({
+            "session_id": "ocgen-verify", "tool_name": "Bash", "cwd": dir,
+            "tool_input": { "command": command, "description": "verify" }
+        })
+        .to_string();
+        run_sh(sh, &cmd, &ev, &env, root, Duration::from_secs(20))
+    };
+    let elsewhere = run(format!("cd {dir}/ocgen-verify-elsewhere && echo ok"));
+    if !matches!(&elsewhere, Some((0, out, _)) if out.trim().is_empty()) {
+        return check(
+            name,
+            Status::Fail,
+            format!("touched a cd into another folder ({elsewhere:?}) — run `ocgen doctor`"),
+        );
+    }
+    let Some((0, out, _)) = run(format!("cd {dir} && echo ok")) else {
+        return check(name, Status::Fail, "the hook failed — run `ocgen doctor`");
+    };
+    if out.trim().is_empty() {
+        return check(
+            name,
+            Status::Warn,
+            "left `cd <project> && …` alone — the sh fallback needs jq (or ocgen on PATH)",
+        );
+    }
+    let v: Value = serde_json::from_str(out.trim()).unwrap_or_default();
+    let h = &v["hookSpecificOutput"];
+    if h["updatedInput"]["command"] == "echo ok"
+        && h["updatedInput"]["description"] == "verify"
+        && h.get("permissionDecision").is_none()
+    {
+        check(
+            name,
+            Status::Pass,
+            "drops `cd <project> &&`; a cd elsewhere is left alone",
+        )
+    } else {
+        check(
+            name,
+            Status::Fail,
+            format!("unexpected output {} — run `ocgen doctor`", out.trim()),
+        )
     }
 }
 

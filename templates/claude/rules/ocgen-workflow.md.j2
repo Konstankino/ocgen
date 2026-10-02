@@ -50,6 +50,22 @@ previous result, do it in parallel: batch multiple tool calls in a single turn, 
 investigations spawn several exploration agents at once — e.g. one fetching a web page, one
 reading a PDF, one scanning the codebase. Exploration is read-only and side-effect-free, so
 running it in parallel is safe and finishes faster; serialize only on genuine dependencies.
+{%- if prefer_explorer %}
+
+Delegate codebase research to the `explorer` subagent: the built-in `Explore` agent is turned off
+in this project. Where instructions (plan mode's included) say Explore, use `explorer`. It has no
+shell, so run git and gh queries yourself.
+{%- endif %}
+
+## Shell commands
+
+Read files with **Read**, search with **Grep** and list with **Glob** — not `cat`, `sed`, `head`,
+`find` or `ls`: those tools are checked by path and never prompt. In Bash, run one plain command
+per call from the working directory: no `cd` (use relative paths or `git -C`), no `for`/`while`
+loops, `$(…)` or `$var`, no `find -exec` or `xargs`, no sed or awk programs, no PowerShell script
+blocks. Run independent commands as separate calls, in parallel. A command the permission parser
+can't analyse asks the user every time. When you delegate to a built-in agent (Explore, Plan,
+general-purpose), which doesn't read these rules, put this paragraph in its prompt.
 {% if fanout %}
 ## Parallel worktrees
 

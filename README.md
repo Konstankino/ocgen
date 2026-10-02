@@ -238,6 +238,7 @@ delete as stale (`-`) is listed with a short diff.
   command;
 - with `/intent`, the WebFetch guard allows only `https://` fetches to trusted docs sites and
   blocks `http://`, other hosts and look-alikes;
+- the no-op `cd` hook drops `cd <project> &&` and leaves a `cd` into another folder alone;
 - the statusline renders;
 - a compatible `ocgen` is on your `PATH`; a stale binary is flagged;
 - `.claude/` is tracked by git;
@@ -326,6 +327,9 @@ its workflows as `.claude/skills/<name>/SKILL.md`. You still type `/deliver`, `/
   (see [The visual ledger](#the-visual-ledger)).
 - **Re-inject context after compaction** (on by default): when a conversation is compacted,
   Claude is re-pointed at `.claude/rules/` and any `/inquire` notes in `.claude/notes/`.
+- **Drop a no-op `cd`** (on by default): `cd <the folder Claude is in> && …` becomes `…`
+  (see **Fewer read-block prompts** below). It never allows, asks or blocks; the
+  shorter command is permission-checked as usual. The sh fallback needs `jq`.
 - **Desktop notifications:** when Claude needs you, or a turn fails (`osascript` on macOS,
   `notify-send` on Linux, otherwise a terminal bell).
 - **Formatter after edits:** e.g. `cargo fmt` or `terraform fmt -recursive`. It runs after
@@ -392,6 +396,26 @@ and autocomplete it.
 - `background`.
 - preloaded `skills`.
 - the **MCP servers** it may use.
+
+**Fewer read-block prompts.** With `permissions.blockReadsOutsideWorkingDirectories` on, Claude
+Code asks about every shell command it can't prove only reads inside the project: a `cd …;`
+before relative paths, `find -exec`, `for` loops and `$(…)`, sed programs, PowerShell script
+blocks. "Don't ask again" can't save them, so they come back every time. Three defaults keep
+them rare:
+- **Research goes to `explorer`.** Claude Code's built-in `Explore` agent ignores CLAUDE.md and
+  writes exactly those one-liners, so `Agent(Explore)` is denied and the workflow rule sends
+  research to the generated `explorer`, which has Read, Grep and Glob but no shell. Answer *no*
+  to the wizard's explorer question to keep the built-in one (for example, to let research run
+  `git`/`gh`); nothing is denied when the project has no `explorer`.
+- **A "Shell commands" rule.** `.claude/rules/ocgen-workflow.md` tells the main session and
+  every agent to read with Read, Grep and Glob, to run one plain command per Bash call (no
+  `cd`, loops, `$(…)`, `find -exec`, sed programs or script blocks), and to pass that on when it
+  delegates to a built-in agent.
+- **A no-op `cd` is dropped.** Claude Code only ignores a `cd` spelled exactly like its working
+  directory; `cd C:/…` for `C:\…`, a trailing `/` or a symlinked path still asks. A
+  `PreToolUse` hook removes a leading `cd` into the current folder (by text, then by resolved
+  path) and hands back the rest, which Claude Code checks as usual. A `cd` anywhere else is
+  left alone.
 
 All are optional and set in `ocgen add/edit agent`. `landscape` and `doctor` check their values
 and warn about `permissionMode: bypassPermissions`.
@@ -697,7 +721,7 @@ and inside the ocgen binary (`ocgen hook <name>`). The generated hook command us
 binary when a compatible ocgen is installed, and the script otherwise:
 
 ```sh
-if [ "$(ocgen hook --check 2>/dev/null)" = "ocgen-hooks 6" ]; then ocgen hook team-approval-gate; else sh ".../team-approval-gate.sh"; fi
+if [ "$(ocgen hook --check 2>/dev/null)" = "ocgen-hooks 8" ]; then ocgen hook team-approval-gate; else sh ".../team-approval-gate.sh"; fi
 ```
 
 - **The binary gives you** real JSON parsing instead of `grep`, and hooks that work on
@@ -895,7 +919,7 @@ for a plugin; `--team` is off by default. (The `--base-url` flag is OpenCode-onl
 |---|---|
 | `ocgen landscape [dir]` (alias `horizon`) | Read-only overview: agents (alias/tools/colour), skills, workflow/output/team setup, delegation topology, and a **Checks** section. |
 | `ocgen doctor [dir] [--dry-run] [--yes]` | Repair the project and rewrite files (invalid models, colours, empty roles, bad enum values, older state files). Shows a per-file plan with diffs, flags hand edits, asks first, and backs up to `.ocgen-backup/`. |
-| `ocgen verify [dir] [--no-claude]` | Check the project works: up to date, settings valid, hooks run (in bash; Git Bash present on Windows), the approval gate blocks, http:// WebFetch is blocked, `/inquire` ledgers get their HTML view, the statusline renders, ocgen on PATH is current, Claude Code validation passes. Exits 1 on failure. |
+| `ocgen verify [dir] [--no-claude]` | Check the project works: up to date, settings valid, hooks run (in bash; Git Bash present on Windows), the approval gate blocks, http:// WebFetch is blocked, a no-op `cd` is dropped, `/inquire` ledgers get their HTML view, the statusline renders, ocgen on PATH is current, Claude Code validation passes. Exits 1 on failure. |
 | `ocgen approve [dir] [--minutes N] [--status] [--revoke]` | A human approves high-impact actions for a limited time. Refuses to run under Claude Code or without a terminal. |
 | `ocgen verify [dir] --run-check` | Also run the project's check command. |
 | `ocgen notes open [topic]` | Show an `/inquire` ledger's HTML page: refresh the tab that shows it, or open one ([details](#the-visual-ledger)). |

@@ -19,10 +19,10 @@ use serde_json::Value;
 /// hook command uses the binary only when `ocgen hook --check` prints exactly the
 /// protocol the project was generated with; any other ocgen (older or newer)
 /// falls back to the project's own scripts, which always match the project.
-pub const PROTOCOL: &str = "ocgen-hooks 7";
+pub const PROTOCOL: &str = "ocgen-hooks 8";
 
 /// Every hook `ocgen hook <name>` accepts (matching the script names minus `.sh`).
-pub const NAMES: [&str; 10] = [
+pub const NAMES: [&str; 11] = [
     "subagent-confidence-gate",
     "team-task-completed",
     "team-task-created",
@@ -33,7 +33,13 @@ pub const NAMES: [&str; 10] = [
     "config-audit",
     "https-only-fetch",
     "inquire-notes",
+    "drop-noop-cd",
 ];
+
+/// A Bash command that starts with one `cd <target>` and goes on after `&&` or
+/// `;` (shared with `drop-noop-cd.sh`, which runs it through jq). The target is
+/// one plain word or a simple quoted string — nothing the shell would expand.
+pub const NOOP_CD_RE: &str = r#"\A[ \t\r\n]*cd[ \t]+(?:"(?<dq>[^"$`\r\n]*)"|'(?<sq>[^'\r\n]*)'|(?<bare>[^ \t\r\n"'$`\\;&|<>()*?\[\]~{}#]+))[ \t]*(?:&&|;)[ \t\r\n]*(?<rest>[^ \t\r\n;&|][\s\S]*)\z"#;
 
 /// What a hook tells Claude Code: exit code plus stdout/stderr.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -70,6 +76,7 @@ pub fn run(name: &str, payload: &str, env: &HashMap<String, String>) -> Outcome 
         "config-audit" => h.config_audit(),
         "https-only-fetch" => h.https_only_fetch(),
         "inquire-notes" => h.inquire_notes(),
+        "drop-noop-cd" => h.drop_noop_cd(),
         other => Outcome {
             code: 1,
             stdout: String::new(),
@@ -669,6 +676,45 @@ impl<'a> Hook<'a> {
         }
     }
 
+    /// PreToolUse (Bash): drop a leading `cd` into the folder Claude is already
+    /// in. It changes nothing, but after a `cd` Claude Code can't tell where
+    /// relative paths point, so under `blockReadsOutsideWorkingDirectories` every
+    /// such command asks. Claude Code only skips a `cd` spelled exactly like its
+    /// working directory; this also matches a trailing `/`, `C:\` vs `C:/` vs
+    /// `/c/`, Windows case and the resolved path. The shorter command goes back as
+    /// `updatedInput` and is permission-checked as usual — never decided here.
+    fn drop_noop_cd(&self) -> Outcome {
+        let Some(input) = self.json.get("tool_input").filter(|v| v.is_object()) else {
+            return Outcome::allow();
+        };
+        let cmd = input.get("command").and_then(Value::as_str).unwrap_or("");
+        let re = regex::Regex::new(NOOP_CD_RE).expect("NOOP_CD_RE compiles");
+        let Some(m) = re.captures(cmd) else {
+            return Outcome::allow();
+        };
+        let target = ["dq", "sq", "bare"]
+            .iter()
+            .find_map(|g| m.name(g))
+            .map_or("", |t| t.as_str());
+        let cwd = match self.field("cwd") {
+            c if !c.is_empty() => c.to_string(),
+            _ => self.env("CLAUDE_PROJECT_DIR").to_string(),
+        };
+        if !same_folder(target, &cwd) {
+            return Outcome::allow();
+        }
+        let mut up = input.clone();
+        up["command"] = Value::String(m["rest"].to_string());
+        let out = serde_json::json!({
+            "hookSpecificOutput": { "hookEventName": "PreToolUse", "updatedInput": up }
+        });
+        Outcome {
+            code: 0,
+            stdout: format!("{out}\n"),
+            stderr: String::new(),
+        }
+    }
+
     /// PostToolUse (Write|Edit|MultiEdit): when an /inquire ledger was written,
     /// render its HTML view and show it (refresh an open tab, else open one).
     /// Never blocks — the ledger is already written; problems are one stderr line.
@@ -910,4 +956,57 @@ impl Guard {
 
 fn read_num(p: &Path) -> Option<u32> {
     fs::read_to_string(p).ok()?.trim().parse().ok()
+}
+
+/// A folder path for comparing: `/` separators, MSYS `/c/…` as `c:/…`, no
+/// trailing `/` (but `/` and `c:/` stay), Windows paths lowercased.
+fn norm_folder(p: &str) -> String {
+    let mut s = p.replace('\\', "/");
+    let b = s.as_bytes();
+    if b.len() >= 2 && b[0] == b'/' && b[1].is_ascii_alphabetic() && (b.len() == 2 || b[2] == b'/')
+    {
+        s = format!(
+            "{}:/{}",
+            b[1] as char,
+            &s[2.min(s.len())..].trim_start_matches('/')
+        );
+    }
+    while s.len() > 1 && s.ends_with('/') {
+        s.pop();
+    }
+    let b = s.as_bytes();
+    let windows = b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':';
+    if windows && s.len() == 2 {
+        s.push('/');
+    }
+    if windows {
+        s.make_ascii_lowercase();
+    }
+    s
+}
+
+/// Whether `cd target` from `cwd` stays put: `.`/`./`, or an absolute path that
+/// is the same folder by text or, failing that, once both are resolved.
+fn same_folder(target: &str, cwd: &str) -> bool {
+    if target == "." || target == "./" {
+        return true;
+    }
+    if target.contains("\\\\") || cwd.is_empty() {
+        return false;
+    }
+    let (t, c) = (norm_folder(target), norm_folder(cwd));
+    let b = t.as_bytes();
+    let absolute = t.starts_with('/') || (b.len() >= 3 && b[1] == b':' && b[2] == b'/');
+    if !absolute {
+        return false;
+    }
+    if t == c {
+        return true;
+    }
+    let real = |p: &str| {
+        std::fs::canonicalize(p)
+            .ok()
+            .map(|r| norm_folder(&crate::paths::for_shell(&r)))
+    };
+    matches!((real(target), real(cwd)), (Some(a), Some(b)) if a == b)
 }

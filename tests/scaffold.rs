@@ -972,6 +972,7 @@ fn claude_powerups_and_workflow_can_be_disabled() {
     p.target = Target::ClaudeCode;
     p.project_name = "bare".into();
     p.claude.hooks_extra.compact_context = false; // the wizard clears it with the power-ups
+    p.claude.hooks_extra.drop_noop_cd = false; // so does this one
     p.claude.powerups = Powerups {
         permissions: false,
         hooks: false,
@@ -984,6 +985,7 @@ fn claude_powerups_and_workflow_can_be_disabled() {
         improve_prompt: false,
         fanout: false,
         verify_todos: false,
+        prefer_explorer: false,
         deliver: false,
         inquire: false,
         intent: false,
@@ -1386,6 +1388,7 @@ fn claude_team_enabled_without_hook_stubs() {
     p.agents = vec![a];
     p.claude.workflow.intent = false; // its https-only WebFetch hook isn't a team hook
     p.claude.workflow.inquire = false; // nor is its notes-view hook
+    p.claude.hooks_extra.drop_noop_cd = false; // nor is the no-op cd hook
 
     let dir = tempdir().unwrap();
     p.scaffold(dir.path(), false).unwrap();
@@ -1480,6 +1483,7 @@ fn team_confidence_zero_disables_gate() {
     };
     p.agents = agent::claude_default_pipeline("English").unwrap();
     p.claude.workflow.intent = false; // its https-only WebFetch hook isn't a team hook
+    p.claude.hooks_extra.drop_noop_cd = false; // nor is the no-op cd hook
     let dir = tempdir().unwrap();
     p.scaffold(dir.path(), false).unwrap();
 
@@ -4327,6 +4331,7 @@ fn extra_permissions_are_written_even_without_the_permission_defaults() {
     let mut p = claude_default("bare");
     p.claude.powerups.permissions = false;
     p.claude.workflow.intent = false; // its own deny rule stays even without defaults
+    p.claude.workflow.prefer_explorer = false; // so does Agent(Explore)
     p.scaffold(dir.path(), false).unwrap();
     assert!(settings_of(dir.path()).get("permissions").is_none());
 
@@ -4813,6 +4818,133 @@ fn trusted_domains_are_https_only() {
 }
 
 #[test]
+fn the_noop_cd_hook_is_wired_after_the_gate_and_verified() {
+    use ocgen::verify::Status;
+    let dir = tempdir().unwrap();
+    let mut p = claude_default("cd");
+    p.claude.team.enabled = true;
+    p.claude.team.approval_gate = true;
+    p.scaffold(dir.path(), false).unwrap();
+    let s = settings_of(dir.path());
+    let pre = hook_groups(&s, "PreToolUse");
+    assert!(
+        pre[0]["hooks"][0]["command"]
+            .as_str()
+            .unwrap()
+            .contains("team-approval-gate"),
+        "the approval gate stays first: {pre:#?}"
+    );
+    let group = pre
+        .iter()
+        .find(|g| {
+            g["hooks"][0]["command"]
+                .as_str()
+                .unwrap()
+                .contains("drop-noop-cd")
+        })
+        .expect("a PreToolUse group for drop-noop-cd");
+    assert_eq!(group["matcher"], "Bash");
+    assert!(dir.path().join(".claude/hooks/drop-noop-cd.sh").exists());
+    let checks = verify_no_claude(dir.path());
+    let c = checks.iter().find(|c| c.name == "no-op cd").unwrap();
+    assert_eq!(c.status, Status::Pass, "{checks:#?}");
+
+    // A hook that strips every cd fails verification.
+    fs::write(
+        dir.path().join(".claude/hooks/drop-noop-cd.sh"),
+        "#!/bin/sh\njq -c '{hookSpecificOutput:{hookEventName:\"PreToolUse\",updatedInput:(.tool_input|.command=\"echo ok\")}}'\n",
+    )
+    .unwrap();
+    let mut s = settings_of(dir.path());
+    for g in s["hooks"]["PreToolUse"].as_array_mut().unwrap() {
+        if g["hooks"][0]["command"]
+            .as_str()
+            .unwrap()
+            .contains("drop-noop-cd")
+        {
+            g["hooks"][0]["command"] =
+                "sh \"$CLAUDE_PROJECT_DIR/.claude/hooks/drop-noop-cd.sh\"".into();
+        }
+    }
+    fs::write(
+        dir.path().join(".claude/settings.json"),
+        serde_json::to_string_pretty(&s).unwrap(),
+    )
+    .unwrap();
+    if std::process::Command::new("jq")
+        .arg("--version")
+        .output()
+        .is_ok()
+    {
+        let checks = verify_no_claude(dir.path());
+        let c = checks.iter().find(|c| c.name == "no-op cd").unwrap();
+        assert_eq!(c.status, Status::Fail, "{checks:#?}");
+    }
+
+    // Off: no group, no script.
+    let dir = tempdir().unwrap();
+    let mut p = claude_default("cd");
+    p.claude.hooks_extra.drop_noop_cd = false;
+    p.scaffold(dir.path(), false).unwrap();
+    let s = settings_of(dir.path());
+    assert!(!hook_groups(&s, "PreToolUse")
+        .iter()
+        .any(|g| g.to_string().contains("drop-noop-cd")));
+    assert!(!dir.path().join(".claude/hooks/drop-noop-cd.sh").exists());
+}
+
+#[test]
+fn research_goes_to_explorer_and_the_builtin_explore_is_denied() {
+    let denies_explore = |dir: &Path| {
+        settings_of(dir)["permissions"]["deny"]
+            .as_array()
+            .is_some_and(|d| d.iter().any(|r| r == "Agent(Explore)"))
+    };
+    // On by default: the shell-free explorer exists, so the built-in Explore is
+    // denied and the rule says where research goes.
+    let dir = tempdir().unwrap();
+    claude_default("ex").scaffold(dir.path(), false).unwrap();
+    assert!(denies_explore(dir.path()), "{}", settings_of(dir.path()));
+    let rule = read(dir.path(), ".claude/rules/ocgen-workflow.md");
+    assert!(
+        rule.contains("Delegate codebase research to the `explorer` subagent"),
+        "{rule}"
+    );
+    // Off: Explore is allowed again and the rule doesn't mention it.
+    let dir = tempdir().unwrap();
+    let mut p = claude_default("ex");
+    p.claude.workflow.prefer_explorer = false;
+    p.scaffold(dir.path(), false).unwrap();
+    assert!(!denies_explore(dir.path()));
+    assert!(!read(dir.path(), ".claude/rules/ocgen-workflow.md").contains("`explorer` subagent"));
+    // No explorer agent: nothing to route to, so Explore stays.
+    let dir = tempdir().unwrap();
+    let mut p = claude_default("ex");
+    p.agents.retain(|a| a.name != "explorer");
+    p.scaffold(dir.path(), false).unwrap();
+    assert!(!denies_explore(dir.path()));
+    assert!(!p.prefers_explorer());
+}
+
+#[test]
+fn the_workflow_rule_steers_away_from_shell_that_always_prompts() {
+    let dir = tempdir().unwrap();
+    claude_default("sh").scaffold(dir.path(), false).unwrap();
+    let rule = read(dir.path(), ".claude/rules/ocgen-workflow.md");
+    assert!(rule.contains("## Shell commands"), "{rule}");
+    for want in [
+        "**Read**",
+        "**Glob**",
+        "no `cd`",
+        "`find -exec`",
+        "PowerShell script",
+        "put this paragraph in its prompt",
+    ] {
+        assert!(rule.contains(want), "missing {want}: {rule}");
+    }
+}
+
+#[test]
 fn intent_blocks_plain_http_webfetch_with_a_pretooluse_hook() {
     let dir = tempdir().unwrap();
     let mut p = claude_default("hf");
@@ -5022,7 +5154,7 @@ fn inquire_registers_the_notes_hook() {
     assert_eq!(notes["matcher"], "Write|Edit|MultiEdit");
     let cmd = notes["hooks"][0]["command"].as_str().unwrap();
     assert!(
-        cmd.contains("ocgen hook inquire-notes") && cmd.contains("ocgen-hooks 7"),
+        cmd.contains("ocgen hook inquire-notes") && cmd.contains("ocgen-hooks 8"),
         "{cmd}"
     );
     assert_eq!(notes["hooks"][0]["shell"], "bash");

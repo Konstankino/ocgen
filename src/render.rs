@@ -522,6 +522,7 @@ impl Project {
             (x.notify, "notify.sh"),
             (!x.format_cmd.trim().is_empty(), "format.sh"),
             (x.config_audit, "config-audit.sh"),
+            (x.drop_noop_cd, "drop-noop-cd.sh"),
         ] {
             if on {
                 let body = templates::load(&format!("claude/hooks/{script}"))?;
@@ -593,6 +594,7 @@ impl Project {
             approval_gate => self.claude.team.approval_gate,
             fanout => self.claude.workflow.fanout,
             verify_todos => self.claude.workflow.verify_todos,
+            prefer_explorer => self.prefers_explorer(),
             deliver => self.claude.workflow.deliver,
             inquire => self.claude.workflow.inquire,
             intent => self.claude.workflow.intent,
@@ -969,7 +971,22 @@ impl Project {
             // permission defaults, since the workflow relies on it.
             rules.deny.push("Bash(gh issue create*)".into());
         }
+        if self.prefers_explorer() {
+            // Research goes to the shell-free `explorer`; the built-in Explore
+            // ignores CLAUDE.md and its shell one-liners prompt under the read block.
+            rules.deny.push("Agent(Explore)".into());
+        }
         rules
+    }
+
+    /// Whether research is routed to the generated `explorer` subagent (and the
+    /// built-in `Explore` agent is denied): the flag is on and the agent exists.
+    pub fn prefers_explorer(&self) -> bool {
+        self.claude.workflow.prefer_explorer
+            && self
+                .agents
+                .iter()
+                .any(|a| a.name == "explorer" && a.mode == "subagent")
     }
 
     /// The permission defaults (the `permissions` power-up).
@@ -1157,6 +1174,13 @@ impl Project {
             push(
                 "PreToolUse",
                 json!({ "matcher": "WebFetch", "hooks": [ command_hook(hook_cmd(prefix, dir, "https-only-fetch.sh")) ] }),
+            );
+        }
+        if x.drop_noop_cd {
+            // `cd <this folder> && …` → `…`, so the read block can check its paths.
+            push(
+                "PreToolUse",
+                json!({ "matcher": "Bash", "hooks": [ command_hook(hook_cmd(prefix, dir, "drop-noop-cd.sh")) ] }),
             );
         }
         if x.config_audit {

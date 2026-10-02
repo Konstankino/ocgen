@@ -491,6 +491,9 @@ pub struct HooksExtra {
     pub format_cmd: String,
     /// Log settings/skills changes made during a session.
     pub config_audit: bool,
+    /// Drop a leading `cd` into the folder Claude is already in, so a read-only
+    /// command after it isn't asked about under `blockReadsOutsideWorkingDirectories`.
+    pub drop_noop_cd: bool,
 }
 
 impl Default for HooksExtra {
@@ -500,6 +503,7 @@ impl Default for HooksExtra {
             notify: false,
             format_cmd: String::new(),
             config_audit: false,
+            drop_noop_cd: true,
         }
     }
 }
@@ -722,6 +726,13 @@ pub struct Workflow {
     /// list for complex prompts (definition-of-done, per-task verify, self-review,
     /// confidence self-rating).
     pub verify_todos: bool,
+    /// Route research to the generated, shell-free `explorer` subagent: deny
+    /// Claude Code's built-in `Explore` agent (`Agent(Explore)`) and say so in the
+    /// workflow rule. Explore ignores CLAUDE.md and reaches for shell one-liners
+    /// (`cd …;`, `find -exec`, loops, sed scripts) that prompt every time under
+    /// `blockReadsOutsideWorkingDirectories`. Only applies when the project has
+    /// an `explorer` subagent.
+    pub prefer_explorer: bool,
     /// Emit the `/deliver` end-to-end pipeline command + delivery/multi-session
     /// guidance.
     pub deliver: bool,
@@ -755,6 +766,7 @@ impl Default for Workflow {
             improve_prompt: true,
             fanout: true,
             verify_todos: true,
+            prefer_explorer: true,
             deliver: true,
             inquire: true,
             intent: true,
