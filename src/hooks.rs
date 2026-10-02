@@ -2215,7 +2215,7 @@ fn norm_folder(p: &str, windows: bool) -> String {
         s = format!(
             "{}:/{}",
             b[1] as char,
-            &s[2.min(s.len())..].trim_start_matches('/')
+            s[2.min(s.len())..].trim_start_matches('/')
         );
     }
     while s.len() > 1 && s.ends_with('/') {

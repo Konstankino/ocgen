@@ -1517,7 +1517,11 @@ fn loop_guard_subjects_match_in_any_locale() {
         .env("LC_ALL", "en_US.UTF-8")
         .output()
         .unwrap();
-    let subject = String::from_utf8_lossy(&sh.stdout).into_owned();
+    // As the hooks read it, through `$(…)`: GNU cut ends its output with a
+    // newline, BSD cut doesn't.
+    let subject = String::from_utf8_lossy(&sh.stdout)
+        .trim_end_matches('\n')
+        .to_string();
     assert!(
         log.contains(&format!("[risk-idle] {subject}:")),
         "sh subject {subject:?} vs {log}"
@@ -2388,15 +2392,16 @@ fn linux_runs_the_check_in_bubblewrap_the_same_way() {
         .into_iter()
         .chain(["/bin/sh", "-c", "echo ran > ran.txt"].map(String::from))
         .collect();
-        let mut runs = vec![(
-            "sh",
-            run_sh(dir.path(), "subagent-confidence-gate", &env, &payload),
-        )];
+        // One twin at a time: both write the same bwrap.log.
+        let mut twins = vec!["sh"];
         if cfg!(target_os = "linux") {
-            let o = run_rs("subagent-confidence-gate", &env, &payload);
-            runs.push(("rust", o));
+            twins.push("rust");
         }
-        for (who, o) in runs {
+        for who in twins {
+            let o = match who {
+                "sh" => run_sh(dir.path(), "subagent-confidence-gate", &env, &payload),
+                _ => run_rs("subagent-confidence-gate", &env, &payload),
+            };
             assert_eq!(o.0, 0, "{variant} {who}: {o:?}");
             let got: Vec<String> = fs::read_to_string(&log)
                 .unwrap()
