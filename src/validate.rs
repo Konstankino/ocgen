@@ -260,6 +260,50 @@ pub fn domain(s: &str) -> Result<(), String> {
     }
 }
 
+/// An /intent approver as typed — a GitHub user (`alice`, `@alice`) or team
+/// (`org/team`, `@org/team`) — returned with its `@`. GitHub notifies approvers
+/// through the @mentions in the issue, so only handles are accepted.
+pub fn approver(s: &str) -> Result<String, String> {
+    let t = s.trim();
+    let handle = t.strip_prefix('@').unwrap_or(t);
+    if handle.contains('@') {
+        return Err(format!(
+            "'{t}': approvers are GitHub handles (@login or @org/team) — GitHub notifies them through @mentions; ocgen never sends email"
+        ));
+    }
+    let ok = match handle.split_once('/') {
+        Some((org, team)) => github_login(org) && team_slug(team),
+        None => github_login(handle),
+    };
+    if ok {
+        Ok(format!("@{handle}"))
+    } else {
+        Err(format!(
+            "'{t}': use a GitHub user (@login: letters, digits and single hyphens, at most 39) or a team (@org/team)"
+        ))
+    }
+}
+
+/// A GitHub login (or organization): letters, digits and single hyphens, no
+/// hyphen at either end, at most 39 characters.
+fn github_login(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 39
+        && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        && !s.starts_with('-')
+        && !s.ends_with('-')
+        && !s.contains("--")
+}
+
+/// A team slug: letters, digits, `-` and `_`, no hyphen at either end.
+fn team_slug(s: &str) -> bool {
+    !s.is_empty()
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        && !s.starts_with('-')
+        && !s.ends_with('-')
+}
+
 /// A documentation site to trust, as typed: a host (`docs.rs`, `*.amazon.com`) or
 /// an `https://` URL of one (`https://docs.rs/`). Returns the lowercased host.
 /// Plain `http://` (or any other scheme) is refused — trusted docs are HTTPS only.
@@ -437,6 +481,42 @@ mod tests {
         assert!(claude_model(" sonnet ").is_ok()); // trimmed
         assert!(claude_model("").is_err());
         assert!(claude_model("gpt-4").is_err());
+    }
+
+    #[test]
+    fn approvers() {
+        for (ok, want) in [
+            ("alice", "@alice"),
+            ("@alice", "@alice"),
+            (" @Alice ", "@Alice"),
+            ("a", "@a"),
+            ("a-b-c9", "@a-b-c9"),
+            ("@org/architects", "@org/architects"),
+            ("My-Org/arch_team-2", "@My-Org/arch_team-2"),
+        ] {
+            assert_eq!(approver(ok).as_deref(), Ok(want), "{ok}");
+        }
+        assert!(approver(&"a".repeat(39)).is_ok());
+        for bad in [
+            "",
+            "@",
+            "-alice",  // leading hyphen
+            "alice-",  // trailing hyphen
+            "al--ice", // double hyphen
+            "al_ice",  // underscore (managed-user logins aren't accepted)
+            "al ice",  // space
+            "@org/",   // no team
+            "/team",   // no org
+            "org/a/b", // too many parts
+            "@org/-team",
+            "@-org/team",
+        ] {
+            assert!(approver(bad).is_err(), "{bad}");
+        }
+        assert!(approver(&"a".repeat(40)).is_err());
+        // GitHub notifies approvers through @mentions; an email is never one.
+        let e = approver("alice@example.com").unwrap_err();
+        assert!(e.contains("GitHub handles") && e.contains("email"), "{e}");
     }
 
     #[test]

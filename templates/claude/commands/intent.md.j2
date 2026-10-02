@@ -7,21 +7,27 @@ effort: xhigh
 Work out the intent for: $ARGUMENTS
 
 Be my collaborator: improve the request, investigate it with evidence, and agree a plan with me
-before anything is written. The only files you write are the intent file (step 4) and, after I file
-the issue, its `Issue:` line (step 6). **Never create the GitHub issue** — I file it myself, and
+before anything is written. The only files you write are the intent file (step 4) and, later, its
+`Issue:` line and sign-off records (step 6). **Never create the GitHub issue** — I file it myself, and
 `gh issue create` is denied in this project's permissions.
 
 Settings for this project (change them with `ocgen edit intent`):
 - Intent files: `{{ dir }}/{{ prefix }}-<number>-<slug>.md`, the number zero-padded to {{ digits }} digits
   (e.g. `{{ dir }}/{{ example }}-cache-invalidation.md`), structured by `{{ intent_template }}`.
 - Issue description: at most {{ max_words }} words, structured by `{{ issue_template }}`.
-
+{% if approvers -%}
+- Approvers: {{ approvers }} — they decide, and their sign-off is required before any work starts.
+  GitHub notifies them through the @mentions in the issue; never contact them any other way.
+{% else -%}
+- **No approvers configured.** Say "No approvers configured" in both drafts, ask me whether to
+  proceed without a sign-off, and suggest `ocgen edit intent --approver @handle`.
+{% endif %}
 ## 0. Route the arguments
 - **Empty** (or `list`): list the intent files in `{{ dir }}/` that have no `Issue:` line yet — number,
   title, status — newest first, and let me pick one to resume or start a new intent.
 - **`{{ prefix }}-NNNN`** (or a file in `{{ dir }}/`): resume that intent — summarise it in a few lines
   and ask what we're doing next.
-- **`#123` or an issue URL**: I've filed the issue — go to step 6.
+- **`#123` or an issue URL**, or an approver's sign-off (`@alice approved: <link>`): go to step 6.
 - **Anything else**: a new intent — start at step 1.
 
 ## 1. Improve the prompt
@@ -40,14 +46,17 @@ or **Inferred** (with `Confidence: NN%` and what would verify it).
 the search terms — symbols, types, error messages, config keys, CLI flags, env vars, file names —
 and show me the list; every later pass searches for all of them.
 
-**Pass 2 — Deep dive, in parallel.** Launch several built-in `Explore` subagents in one message
-(thoroughness "very thorough"), one per area, each returning numbered findings with evidence:
+**Pass 2 — Deep dive, in parallel.** Launch several {% if prefer_explorer %}`explorer` subagents in one message, one per
+area, each returning numbered findings with evidence. The `explorer` has no shell: run the git and gh
+reads below yourself (they're pre-approved) and give it their output.{% else %}built-in `Explore` subagents in one message
+(thoroughness "very thorough"), one per area, each returning numbered findings with evidence:{% endif %}
 - **Code:** every code path involved and every call site / reference of each symbol you might touch
   (`Grep` and `git grep` for all the search terms — not just the first hit).
 - **Tests:** which tests and fixtures cover it, what they assert, and what is not covered.
 - **Config and build:** flags, env, settings, build scripts, CI workflows that change behaviour.
 - **History:** `git log -S<term>` / `git log -G<regex>` for the key symbols, `git blame` on the key
-  lines, and `git show` of the commits that shaped them — why it is this way.
+  lines, and `git show` of the commits that shaped them — why it is this way (the constraint or
+  decision at the time, citing commits), never who: no author names, handles or emails in any output.
 - **Prior work:** existing intents in `{{ dir }}/`; open **and closed** GitHub issues and PRs
   (`gh search issues`, `gh search prs`, `gh issue view`, `gh pr view`) — duplicates, earlier
   attempts, rejected approaches. If `gh` is not authenticated or can't reach GitHub, say so and
@@ -69,14 +78,14 @@ Platforms (Windows/macOS/Linux) · Security and permissions · Performance · Te
 Docs · History · Related issues and PRs · Existing intents.
 
 **Pass 3 — Close the gaps, in parallel.** List what is still unexplored or unanswered — unticked
-checklist items, Inferred findings, open leads — and investigate them all at once: launch built-in
-`Explore` subagents in one message, one per gap (group small related gaps), each given the search
+checklist items, Inferred findings, open leads — and investigate them all at once: launch {% if prefer_explorer %}`explorer`{% else %}built-in
+`Explore`{% endif %} subagents in one message, one per gap (group small related gaps), each given the search
 terms and the findings it builds on, and each returning numbered findings with evidence. Only a gap
 that needs another's answer waits for the next round. Repeat until a pass finds nothing new (at most
 3 extra passes). Only then ask me what the code can't answer — one question at a time, 2–4 options
 with the recommended one first.
 
-**Pass 4 — Challenge.** Give a fresh `Explore` subagent the findings' claims (not your conclusion)
+**Pass 4 — Challenge.** Give a fresh {% if prefer_explorer %}`explorer`{% else %}`Explore`{% endif %} subagent the findings' claims (not your conclusion)
 and ask it to find evidence that would contradict them. Reconcile, and record what changed.
 
 **Analysis report** — show it before any plan:
@@ -95,10 +104,29 @@ and ask it to find evidence that would contradict them. Reconcile, and record wh
 Present: the problem, the options considered with a recommendation, scope and out-of-scope, risks
 each with a mitigation, and acceptance criteria. Every statement cites the findings it rests on
 (F#); anything that doesn't is labelled **Assumption**. **Invite push-back** and iterate until I approve.
+My approval makes the plan **approved for drafting**, not accepted: {% if approvers %}the approvers decide (step 6){% else %}with no approvers, my confirmation in step 6 decides{% endif %}.
 Do not write anything yet. Once I approve, ask whether to write an intent file (optional) — if not,
 go to step 5.
 
+## Writing standard (steps 4 and 5)
+The team that wrote the code reads these drafts: keep them blameless and calm, and completely honest —
+**soften the framing, never the facts**; no flaw is softened, hidden or dropped. Read the comment block
+at the top of both templates and follow it: it holds the severity definitions and the banned words.
+- **System, not people:** the subject is the code, design or behavior ("The gate matches command text
+  only"), never a person or team.
+- **Context before the flaw:** what the design was meant to achieve and what shaped it, then where it
+  falls short.
+- **Every flaw, in this order:** When [trigger], [behavior], which means [impact] (evidence: F#, `file:line`).
+  Then the proposed fix.
+- **Severity** (Critical, High, Medium, Low) and **Likelihood** come from the Verified findings, never
+  from adjectives.
+- **Balanced:** say what works correctly, without diluting any flaw. **Forward-looking:** each
+  problem statement leads to the proposal.
+- **Written for the approvers:** lead with a summary and a recommendation, and make the decision you
+  need from them explicit — approve, choose an option, or redirect. Present; don't pressure.
+
 ## 4. Intent file
+Draft it following the writing standard; write it only after the tone check (step 5).
 1. **Pick the number** so it is never reused:
    - Local: the files in `{{ dir }}/` (any case) named `{{ prefix }}-NNNN…` or `NNNN-…`.
    - Remote main branch: {% if branch %}`git fetch --quiet origin {{ branch }}`{% else %}the remote's default branch
@@ -108,22 +136,43 @@ go to step 5.
    - The number is 1 + the highest found (`{{ example }}` when there are none), zero-padded to
      {{ digits }} digits. If the fetch fails (offline, no remote), say so and ask me to confirm the number.
 2. Name it `{{ dir }}/{{ prefix }}-<number>-<kebab-case-slug>.md`. Fill the structure in
-   `{{ intent_template }}` (if it is missing, use: title, Status, Date, Issue, Context, Evidence,
-   Decision, Options considered, Consequences, Risks) from the analysis and the approved plan, with `Status: Proposed`.
+   `{{ intent_template }}` (if it is missing, use: title, Status, Severity, Approvers, Date, Issue,
+   Context, Evidence, Decision, Options considered, Consequences, Risks, Sign-off) from the analysis
+   and the approved plan, with `Status: Proposed`, `Approvers: {% if approvers %}{{ approvers }}{% else %}No approvers configured{% endif %}`, and every
+   approver pending in Sign-off.
 3. Right before writing, re-check the local directory for the number; if it is taken, take the next.
    Show me the path.
 
-## 5. Draft the GitHub issue
+## 5. Draft the GitHub issue, check the tone, show both
 - **Title:** imperative and actionable (what to do, not the topic), at most 72 characters.
-- **Description:** follow `{{ issue_template }}` (if it is missing, use: Summary, Problem, Proposal,
+- **Description:** follow the writing standard and `{{ issue_template }}` (if it is missing, use:
+  Summary, Current behaviour, Impact, Background, Proposal, Decision requested, Approvers / sign-off,
   Acceptance criteria, Out of scope, Links); at most {{ max_words }} words — state the word count. Link
   the intent file when there is one.
-- Print the title and the description in separate fenced blocks, then the command for me to run:
-  save the description to a file and
-  `gh issue create --title "<title>" --body-file <file>`.
+- **Approvers / sign-off:** {% if approvers %}one pending checklist line per approver, as @mentions ({{ approvers }}) —
+  GitHub notifies them when I file the issue{% else %}"No approvers configured"{% endif %}. That is the only notice: **Never email**,
+  message or otherwise contact anyone. Don't use `--assignee` for approvers — assignees do the work.
+- **Tone check**, before showing anything: give a fresh {% if reviewer %}`reviewer`{% elif prefer_explorer %}`explorer`{% else %}`Explore`{% endif %} subagent the drafts, the numbered
+  findings with their severities, the writing standard and both templates' comment blocks, and ask
+  it to report:
+  (a) **Blame and alarm** — banned words, people as subjects, names from git history, judgmental framing.
+  (b) **Softening and omission** (the more important) — every Verified finding of Medium or higher
+  appears with its trigger, behavior, impact and evidence; no severity is lower than the evidence supports;
+  no hedge contradicts a Verified finding.
+  (c) **Approvers** — every configured approver is listed in both drafts with a pending sign-off.
+  Fix everything it reports. Then write the intent file and show me its path, the title and the
+  description in separate fenced blocks, and the command for me to run — save the description to a
+  file and `gh issue create --title "<title>" --body-file <file>` — with one line on what the check changed.
 - **Never create the issue yourself** — no `gh issue create`, no API call. Wait for me to file it.
 
-## 6. Link the issue and keep collaborating
-When I give you the issue (`#123` or its URL): add `Issue: <url>` to the intent file and, once I
-confirm, set `Status: Accepted`. Then keep working on it with me — refine the plan as the issue
-discussion evolves, or hand off to `/deliver` with the intent file as the brief.
+## 6. Sign-off, link the issue, keep collaborating
+When I give you the issue (`#123` or its URL), add `Issue: <url>` to the intent file.
+**Never mark an approval** yourself and never infer one: record a sign-off in the intent file only
+when I report it with evidence (e.g. `@alice approved: <link>`), one Sign-off line per report:
+- **approved** — the date and the link;
+- **changes requested** — the date, the link and their feedback, quoted; then go back to step 3 with it;
+- **rejected** — the date and the link; set `Status: Rejected`.
+
+Set `Status: Accepted` only when every approver has approved and I confirm{% if not approvers %} (with no approvers,
+once I confirm I'm proceeding without a sign-off){% endif %}. Then keep working on it with me — refine the
+plan as the issue discussion evolves, or hand off to `/deliver` with the intent file as the brief.

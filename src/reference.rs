@@ -351,6 +351,28 @@ const CLAUDE_FIELDS: &[Field] = &[
                  Every trip is logged to .claude/loop-guard/escalations.md. 0 = unlimited.",
         example: "3  (LOOP_GUARD_MAX_BLOCKS in settings.json)",
     },
+    Field {
+        label: "intent approvers",
+        detail: "Who must sign off on an /intent before any work starts: GitHub users (@login) or \
+                 teams (@org/team) — no emails; GitHub notifies them through the @mentions in the \
+                 issue. Named in every intent file and issue draft, each pending until you report \
+                 their sign-off with a link; the intent is Accepted only when every approver has \
+                 approved, and /deliver won't start before that unless you explicitly confirm the \
+                 bypass. Your own approval of a plan only approves it for drafting. None = the \
+                 drafts say \"No approvers configured\" and /intent asks whether to proceed.",
+        example: "--approver @alice --approver @org/architects",
+    },
+    Field {
+        label: "CODEOWNERS",
+        detail: "The project's existing CODEOWNERS (.github/CODEOWNERS, CODEOWNERS or \
+                 docs/CODEOWNERS — ocgen never creates one), linked at .claude/CODEOWNERS. ocgen \
+                 keeps a marked block there that makes the approvers code owners of the intent \
+                 directory (scope intents), every file (all), or nothing (off); your own lines are \
+                 never touched, and a later rule of yours that takes precedence is reported. \
+                 GitHub enforces it only when branch protection requires a review from code \
+                 owners — ocgen can't turn that on.",
+        example: "--codeowners .github/CODEOWNERS --codeowners-scope intents",
+    },
 ];
 
 pub fn run() {

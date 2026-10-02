@@ -17,8 +17,11 @@ Classify the goal before anything else, state the classification, and let me ove
 {% endif %}
 ## 1. Sharpen the goal
 {% if intent %}If the goal names an intent file from `/intent` (or an issue that links one), read it first and
-treat its approved plan as the brief: confirm with me what changed since, and skip what it already
-settles in phases 1–3.
+check its sign-off: `Status: Accepted`, with every approver approved in its Sign-off section{% if approvers %}
+(this project's approvers: {{ approvers }}){% endif %}. If not, don't start — list who is still pending and
+stop. If I insist, say plainly that starting now bypasses the approvers' sign-off, and start only after
+I confirm explicitly. Then treat its approved plan as the brief: confirm with me what changed since,
+and skip what it already settles in phases 1–3.
 {% endif %}Rewrite the goal into a crisp brief using the prompt-engineering technique: explicit role, task,
 and success criteria; remove ambiguity.
 

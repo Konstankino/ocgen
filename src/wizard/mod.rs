@@ -619,7 +619,7 @@ fn build_claude_project(
         true,
     )?;
     let (intent, intent_settings) =
-        configure_intent(theme, true, &ocgen::claude::IntentSettings::default())?;
+        configure_intent(theme, true, &ocgen::claude::IntentSettings::default(), None)?;
     p.claude.workflow.intent = intent;
     p.claude.intent = intent_settings;
     p.claude.workflow.subagent_confidence = ask_v(
@@ -991,10 +991,13 @@ fn edit_permissions_interactively(theme: &ColorfulTheme, project: &mut Project) 
 }
 
 /// Ask whether to include `/intent` and, if so, its settings (seeded with `current`).
+/// `root` is the existing project's folder (`None` for a new one): where a
+/// CODEOWNERS to link may already be.
 fn configure_intent(
     theme: &ColorfulTheme,
     enabled: bool,
     current: &ocgen::claude::IntentSettings,
+    root: Option<&Path>,
 ) -> Result<(bool, ocgen::claude::IntentSettings)> {
     let on = ask_confirm(
         theme,
@@ -1047,6 +1050,66 @@ fn configure_intent(
         &current.branch,
         validate::git_branch,
     )?;
+    let approvers = ask_optional_v(
+        theme,
+        "Approvers who must sign off before work starts (optional)",
+        "GitHub users or teams, comma-separated: @alice, @org/architects. They're named in every intent file and issue, and GitHub notifies them through the @mentions. Enter keeps, '-' clears.",
+        &current.approvers.join(", "),
+        |v: &str| {
+            v.split(',')
+                .map(str::trim)
+                .filter(|a| !a.is_empty())
+                .try_for_each(|a| validate::approver(a).map(drop))
+        },
+    )?;
+    s.approvers.clear();
+    for a in approvers
+        .split(',')
+        .map(str::trim)
+        .filter(|a| !a.is_empty())
+    {
+        s.add_approver(a)?;
+    }
+    // Their review on pull requests: a block in the project's own CODEOWNERS.
+    if let (Some(root), false) = (root, s.approvers.is_empty()) {
+        if s.codeowners.is_empty() {
+            if let Some(found) = ocgen::render::found_codeowners(root) {
+                if ask_confirm(
+                    theme,
+                    &format!("Keep the approvers in {found}?"),
+                    "ocgen adds a marked block for them (your lines stay) and links the file at .claude/CODEOWNERS. GitHub then asks them to review — and requires it once branch protection requires a review from code owners.",
+                    true,
+                )? {
+                    s.codeowners = ocgen::render::check_codeowners_link(root, found)?;
+                }
+            }
+        }
+        if !s.codeowners.is_empty() {
+            use ocgen::claude::CodeownersScope;
+            let scopes = [
+                CodeownersScope::Intents,
+                CodeownersScope::All,
+                CodeownersScope::Off,
+            ];
+            let labels = [
+                format!("intents — changes to {}/", s.dir),
+                "all — every change".to_string(),
+                "off — no block".to_string(),
+            ];
+            let at = scopes
+                .iter()
+                .position(|x| *x == s.codeowners_scope)
+                .unwrap_or(0);
+            let pick = ask_select(
+                theme,
+                "What the approvers review",
+                "CODEOWNERS makes them required reviewers of these paths (with branch protection on).",
+                &labels,
+                at,
+            )?;
+            s.codeowners_scope = scopes[pick];
+        }
+    }
     Ok((true, s))
 }
 
@@ -1069,13 +1132,14 @@ pub fn run_edit_intent(path: String, changes: IntentCli) -> Result<()> {
 
     if changes.is_empty() {
         if !crate::prompt::can_ask() {
-            bail!("no terminal to ask in — pass the changes as flags: --prefix, --digits, --dir, --max-words, --branch, --trust-domain/--untrust-domain, --enable/--disable, --issue-template, --intent-template, --reset-issue-template, --reset-intent-template (see --help)");
+            bail!("no terminal to ask in — pass the changes as flags: --prefix, --digits, --dir, --max-words, --branch, --trust-domain/--untrust-domain, --approver/--remove-approver, --codeowners, --codeowners-scope, --enable/--disable, --issue-template, --intent-template, --reset-issue-template, --reset-intent-template (see --help)");
         }
         ui::banner("edit /intent");
         let (on, s) = configure_intent(
             &ColorfulTheme::default(),
             project.claude.workflow.intent,
             &project.claude.intent,
+            Some(&root),
         )?;
         project.claude.workflow.intent = on;
         project.claude.intent = s;
@@ -1107,6 +1171,23 @@ pub fn run_edit_intent(path: String, changes: IntentCli) -> Result<()> {
             // Lenient: whatever form it was typed in, drop the matching host.
             let d = validate::trusted_domain(d).unwrap_or_else(|_| d.trim().to_lowercase());
             s.trusted_domains.retain(|x| *x != d);
+        }
+        for a in &changes.approver {
+            s.add_approver(a)?;
+        }
+        for a in &changes.remove_approver {
+            s.remove_approver(a);
+        }
+        if let Some(c) = &changes.codeowners {
+            s.codeowners = if c.trim().is_empty() || c.trim().eq_ignore_ascii_case("off") {
+                String::new()
+            } else {
+                ocgen::render::check_codeowners_link(&root, c)
+                    .map_err(|e| anyhow!("intent CODEOWNERS: {e}"))?
+            };
+        }
+        if let Some(scope) = changes.codeowners_scope {
+            s.codeowners_scope = scope;
         }
         if changes.enable {
             project.claude.workflow.intent = true;
@@ -1234,6 +1315,46 @@ fn print_intent(project: &Project, root: &Path) {
             ui::muted("none — every web fetch asks")
         } else {
             s.trusted_domains.join(", ")
+        },
+    );
+    ui::kv(
+        "approvers",
+        &if s.approvers.is_empty() {
+            ui::muted(
+                "none — drafts say \"No approvers configured\"; add one with `--approver @handle`",
+            )
+        } else {
+            s.approvers.join(", ")
+        },
+    );
+    ui::kv(
+        "CODEOWNERS",
+        &if s.codeowners.is_empty() {
+            match ocgen::render::found_codeowners(root) {
+                Some(f) => format!(
+                    "not linked {}",
+                    ui::muted(&format!(
+                        "— found {f}; link it with `ocgen edit intent --codeowners {f}`"
+                    ))
+                ),
+                None => format!("not linked {}", ui::muted("— none in the project")),
+            }
+        } else {
+            let block = if s.codeowners_rule().is_some() {
+                format!("scope {}", s.codeowners_scope.as_str())
+            } else if s.approvers.is_empty() {
+                "no block: no approvers".to_string()
+            } else {
+                format!("no block: scope {}", s.codeowners_scope.as_str())
+            };
+            format!(
+                "{} {}",
+                s.codeowners,
+                ui::muted(&format!(
+                    "(via {}) — {block}",
+                    ocgen::claude::CODEOWNERS_LINK
+                ))
+            )
         },
     );
     for (label, rel) in [
@@ -2034,6 +2155,9 @@ pub fn run_doctor(path: String, dry_run: bool, yes: bool) -> Result<()> {
             ocgen::render::pre_push_chain(&target)
         )),
         ocgen::render::PrePush::NotApplicable => {}
+    }
+    for note in project.codeowners_report(&target) {
+        ui::warning(&note);
     }
     println!();
     ui::success(&format!("applied {} change(s)", changed.len() - keep.len()));

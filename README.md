@@ -302,6 +302,9 @@ delete as stale (`-`) is listed with a short diff.
 - **git pre-push hook:** it runs the installed hook as git would — it must refuse a push made under
   Claude Code and let yours through, and it fails if it isn't executable;
 - **line endings:** a generated script with CRLF endings fails, with the fix;
+- **CODEOWNERS:** the file `/intent`'s approvers are linked to is still there, the link at
+  `.claude/CODEOWNERS` is in place, and no rule of yours after ocgen's block takes precedence
+  over it (with a reminder that GitHub enforces it only with "Require review from Code Owners");
 - the statusline renders;
 - a compatible `ocgen` is on your `PATH`; a stale binary is flagged, and so are ignored template
   overrides;
@@ -720,10 +723,13 @@ GitHub issue (wizard: "Include the /intent command…"; on by default). You star
 2. **Investigate — exhaustively.** It runs at `effort: xhigh` and works in passes:
    - **Map:** entry points, data flow and a list of search terms (symbols, errors, config keys,
      flags).
-   - **Deep dive:** several built-in `Explore` subagents at once — every call site, tests and gaps,
-     config/build/CI, history (`git log -S`, `git blame`, `git show`), prior work (existing intents,
-     open and closed GitHub issues and PRs) and docs.
-   - **Close the gaps:** again in parallel, one `Explore` subagent per open gap, until a pass
+   - **Deep dive:** several research subagents at once — the project's `explorer` when it's
+     preferred (the default; it has no shell, so `/intent` runs the git and `gh` reads itself and
+     hands them over), else the built-in `Explore` — covering every call site, tests and gaps,
+     config/build/CI, history (`git log -S`, `git blame`, `git show`: *why* the code is this way,
+     never *who* — no author names in the drafts), prior work (existing intents, open and closed
+     GitHub issues and PRs) and docs.
+   - **Close the gaps:** again in parallel, one research subagent per open gap, until a pass
      finds nothing new; then a **challenge** pass that hunts for evidence against the findings.
 
    It shows an analysis report — current behaviour, root cause, impact, constraints, related work,
@@ -742,19 +748,66 @@ GitHub issue (wizard: "Include the /intent command…"; on by default). You star
    The guard applies to every session in the project, and `ocgen verify` checks it.
 3. **Plan and approve** — options with a recommendation, scope, risks with mitigations, acceptance
    criteria. Every statement cites its findings (F#) or is labelled an Assumption; it iterates on
-   your push-back until you approve.
-4. **Intent file** (optional) — e.g. `docs/adr/ADR-0007-cache-invalidation.md`. The number is one
-   more than the highest found in the local directory **and** on the remote main branch
-   (`git fetch` + `git ls-tree`), matching both `ADR-0007-…` and `0007-…` names, so it never
-   collides with an existing ADR.
+   your push-back until you approve. Your approval makes the plan **approved for drafting**, not
+   accepted: the **approvers** decide (below).
+4. **Intent file** (optional) — e.g. `docs/adr/ADR-0007-cache-invalidation.md`, with
+   `Status: Proposed`, a `Severity:` line, an `Approvers:` line and every approver pending in its
+   Sign-off section. The number is one more than the highest found in the local directory **and**
+   on the remote main branch (`git fetch` + `git ls-tree`), matching both `ADR-0007-…` and `0007-…`
+   names, so it never collides with an existing ADR.
 5. **Issue draft** — an actionable title (≤ 72 characters) and a description of at most 250 words
-   that follows the project's issue template, plus the `gh issue create` command **for you to run**.
-   Claude never files it: the skill says so, and `Bash(gh issue create*)` is in the generated
-   `deny` list.
-6. **Link and continue** — after you file it, `/intent #123` (or the URL) adds `Issue:` to the
-   intent file and keeps collaborating; `/deliver` can take the intent file as its brief.
+   that follows the project's issue template — current behaviour, impact with its severity,
+   background, proposal, the **decision requested** from the approvers, and a pending sign-off
+   checklist that @mentions them — plus the `gh issue create` command **for you to run**. Claude
+   never files it: the skill says so, and `Bash(gh issue create*)` is in the generated `deny` list.
+   Approvers aren't made assignees (assignees do the work). Before you see either draft, a **tone
+   check** runs (below).
+6. **Sign-off, link and continue** — after you file it, `/intent #123` (or the URL) adds `Issue:`
+   to the intent file. Claude never marks or infers an approval: it records one only when you
+   report it with evidence (`@alice approved: <link>`) — **approved** (date and link), **changes
+   requested** (their feedback, quoted and linked; back to step 3) or **rejected**
+   (`Status: Rejected`). `Status: Accepted` needs every approver's approval and your confirmation.
 
 `/intent` with no arguments lists intents that have no issue yet; `/intent ADR-0007` resumes one.
+
+**Blameless, but completely honest.** The team that wrote the code reads these drafts, so they
+follow a writing standard: **soften the framing, never the facts**. The code, design or behaviour
+is the subject of every sentence, never a person; git history explains *why*, never *who*; context
+comes before the flaw; every flaw reads *when [trigger], [behavior], which means [impact]
+(evidence: F#, `file:line`)*, then the proposed fix; severity (Critical, High, Medium, Low, plus a
+likelihood) rests on the Verified findings, not on adjectives; what works is said too; and the
+drafts lead with a summary and the decision requested. The **tone check** — a fresh `reviewer`
+subagent (or the research agent, if there's no reviewer) — reads both drafts against the findings
+before you see them, checking both ways: blame and alarm (banned words, people as subjects, names
+from git history) **and** softening or omission (every Verified finding of Medium or higher present
+with its evidence, no severity below what the evidence supports, no hedge that contradicts a
+finding), plus every approver listed as pending. The severity definitions and the banned words live
+in a comment block at the top of both templates, so your team can tune its house style there.
+
+**Approvers who must sign off.** Name the architects and managers who decide with
+`ocgen edit intent --approver @alice --approver @org/architects` — GitHub users or teams only (no
+emails): GitHub notifies them through the @mentions in the issue, and neither ocgen nor Claude
+contacts anyone any other way. Every intent file and issue draft names them; with none configured,
+the drafts say "No approvers configured" and `/intent` asks whether to proceed without a sign-off.
+**`/deliver` checks the sign-off:** given an intent file (or an issue that links one) that isn't
+`Status: Accepted` with every approver approved, it lists who is still pending and stops — and if
+you insist, it says plainly that this bypasses the approvers' sign-off and waits for your explicit
+confirmation.
+
+Inside Claude this rule is enforced by the skills' instructions only. The hard enforcement is
+GitHub's: link the project's **existing** CODEOWNERS with `ocgen edit intent --codeowners
+.github/CODEOWNERS` (or `CODEOWNERS`, `docs/CODEOWNERS` — wherever GitHub reads it; ocgen never
+creates one). ocgen keeps a link to it at `.claude/CODEOWNERS` and a marked block in it that makes
+the approvers code owners — of the intent directory (`--codeowners-scope intents`, the default),
+of every file (`all`), or of nothing (`off`; the block also goes when there are no approvers or you
+unlink with `--codeowners off`). Your own lines are never touched. CODEOWNERS takes the **last**
+matching rule, so ocgen appends its block at the end and tells you when a rule of yours after it
+takes precedence. GitHub only *requires* their review once branch protection asks for it, which
+ocgen can't turn on: **Settings → Branches → Add classic branch protection rule** → your main
+branch → **Require a pull request before merging** → **Require review from Code Owners**; or with
+rulesets, **Settings → Rules → Rulesets → New branch ruleset** → target the branch → **Require a
+pull request before merging** → require review from code owners. `ocgen verify` reports the link
+and the block.
 
 **Configure it with `ocgen edit intent`:**
 
@@ -766,12 +819,19 @@ ocgen edit intent --trust-domain docs.example.org        # docs /intent may read
 ocgen edit intent --trust-domain "*.amazon.com"          # every subdomain (not amazon.com itself); *.com is refused
 ocgen edit intent --trust-domain serde.readthedocs.io    # shared hosts (*.github.io, *.readthedocs.io…) only by exact host
 ocgen edit intent --trust-domain https://docs.example.net  # https:// URLs are fine (stored as the host); http:// is refused
+ocgen edit intent --approver @alice --approver @org/architects  # who must sign off (--remove-approver to drop)
+ocgen edit intent --codeowners .github/CODEOWNERS        # keep the approvers in your CODEOWNERS (off to unlink)
+ocgen edit intent --codeowners-scope all                 # approvers review every change (intents | all | off)
 ocgen edit intent --issue-template                       # edit the issue structure in $EDITOR
 ocgen edit intent --reset-intent-template                # restore ocgen's default
 ```
 
 The two templates live in the project under `.claude/intent/` and belong to you: ocgen writes them
 once and never overwrites them (like `CLAUDE.md`), so commit them with the rest of `.claude/`.
+A project created before the writing standard and the approvers keeps its copies; run
+`ocgen edit intent --reset-issue-template --reset-intent-template` to pick up the new defaults
+(severity, background, decision requested, approvers and sign-off sections, and the house-style
+comment block).
 
 #### Agent Teams
 
@@ -1069,7 +1129,7 @@ for a plugin; `--team` is off by default. (The `--base-url` flag is OpenCode-onl
 | Command | What it does |
 |---|---|
 | `ocgen add skill [dir]` | Author a new skill → `.claude/skills/<name>/SKILL.md` (name, description, allowed-tools, body). |
-| `ocgen edit intent -p <dir> [--prefix --digits --dir --max-words --branch --trust-domain/--untrust-domain --enable/--disable --issue-template --intent-template --reset-…-template --show]` | Configure `/intent`: intent-file prefix, number width and directory, the issue word limit, the branch checked for taken numbers, the documentation sites it may read without asking, and the project's issue / intent-file templates. No flags = interactive. |
+| `ocgen edit intent -p <dir> [--prefix --digits --dir --max-words --branch --trust-domain/--untrust-domain --approver/--remove-approver --codeowners <path\|off> --codeowners-scope intents\|all\|off --enable/--disable --issue-template --intent-template --reset-…-template --show]` | Configure `/intent`: intent-file prefix, number width and directory, the issue word limit, the branch checked for taken numbers, the documentation sites it may read without asking, the approvers who must sign off (GitHub handles), the project's existing CODEOWNERS it keeps their block in, and the project's issue / intent-file templates. No flags = interactive. |
 | `ocgen edit permissions -p <dir> --list` | What `settings.json` actually holds, list by list in the order Claude Code checks them, each rule marked ocgen's or yours; flags yours that have no effect (`no effect: ocgen's ask rule wins`) or replace a generated one. Writes nothing. |
 | `ocgen edit permissions -p <dir> [--allow/--ask/--deny/--remove <RULE>]…` | Add or remove your own permission rules. They are saved in the state file and merged with ocgen's in `settings.json` by strictness, deny > ask > allow, so each rule sits in one list: a rule stricter than a generated one takes its place (`--deny "Bash(git push:*)"` moves it from ask to deny), a looser one has no effect, and both are warned about. Generated rules (including the approval-gate guards) can't be removed; removing your stricter rule restores ocgen's. No flags = interactive. |
 | `ocgen edit skill [name] -p <dir>` | Edit an existing skill; renaming cleans up the old skill directory. Omit `[name]` to pick from a list. |

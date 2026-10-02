@@ -1222,7 +1222,9 @@ fn edit_intent_help_has_examples() {
         .success()
         .stdout(contains("Examples:"))
         .stdout(contains("ocgen edit intent --prefix"))
-        .stdout(contains("--max-words"));
+        .stdout(contains("--max-words"))
+        .stdout(contains("ocgen edit intent --approver"))
+        .stdout(contains("--codeowners .github/CODEOWNERS"));
     ocgen()
         .args(["edit", "--help"])
         .assert()
@@ -1549,4 +1551,166 @@ fn verify_without_sh_on_path() {
         );
         assert!(out.contains("skipped"), "{out}");
     }
+}
+
+fn intent_state(dir: &Path) -> serde_json::Value {
+    let s = std::fs::read_to_string(dir.join(".claude/.ocgen-state.json")).unwrap();
+    serde_json::from_str::<serde_json::Value>(&s).unwrap()["claude"]["intent"].clone()
+}
+
+#[test]
+fn edit_intent_manages_approvers() {
+    let dir = tempdir().unwrap();
+    scaffold_claude(dir.path());
+    ocgen()
+        .args(["edit", "intent", "-p"])
+        .arg(dir.path())
+        .args(["--approver", "alice", "--approver", "@org/architects"])
+        .args(["--approver", "@Alice"]) // the same person: kept once
+        .assert()
+        .success();
+    assert_eq!(
+        intent_state(dir.path())["approvers"],
+        serde_json::json!(["@alice", "@org/architects"])
+    );
+    let skill = std::fs::read_to_string(dir.path().join(".claude/skills/intent/SKILL.md")).unwrap();
+    assert!(skill.contains("@alice, @org/architects"), "{skill}");
+    ocgen()
+        .args(["edit", "intent", "--show", "-p"])
+        .arg(dir.path())
+        .assert()
+        .success()
+        .stdout(contains("approvers"))
+        .stdout(contains("@alice, @org/architects"));
+
+    ocgen()
+        .args(["edit", "intent", "--remove-approver", "ALICE", "-p"])
+        .arg(dir.path())
+        .assert()
+        .success();
+    assert_eq!(
+        intent_state(dir.path())["approvers"],
+        serde_json::json!(["@org/architects"])
+    );
+
+    // Bad handles — and emails: GitHub notifies through @mentions — write nothing.
+    let state = dir.path().join(".claude/.ocgen-state.json");
+    let before = std::fs::read_to_string(&state).unwrap();
+    ocgen()
+        .args(["edit", "intent", "--approver", "alice@example.com", "-p"])
+        .arg(dir.path())
+        .assert()
+        .failure()
+        .stderr(contains("GitHub handles"));
+    ocgen()
+        .args(["edit", "intent", "--approver", "al--ice", "-p"])
+        .arg(dir.path())
+        .assert()
+        .failure()
+        .stderr(contains("@login"));
+    assert_eq!(before, std::fs::read_to_string(&state).unwrap());
+}
+
+#[test]
+fn edit_intent_links_the_projects_codeowners() {
+    let dir = tempdir().unwrap();
+    scaffold_claude(dir.path());
+    let owners = dir.path().join(".github/CODEOWNERS");
+    // Not linked, and ocgen never creates one.
+    ocgen()
+        .args(["edit", "intent", "--show", "-p"])
+        .arg(dir.path())
+        .assert()
+        .success()
+        .stdout(contains("not linked"));
+    std::fs::create_dir_all(owners.parent().unwrap()).unwrap();
+    std::fs::write(&owners, "* @owner\n").unwrap();
+    ocgen()
+        .args(["edit", "intent", "--show", "-p"])
+        .arg(dir.path())
+        .assert()
+        .success()
+        .stdout(contains("--codeowners .github/CODEOWNERS"));
+
+    ocgen()
+        .args(["edit", "intent", "-p"])
+        .arg(dir.path())
+        .args(["--approver", "@alice", "--codeowners", ".github/CODEOWNERS"])
+        .assert()
+        .success();
+    let text = std::fs::read_to_string(&owners).unwrap();
+    assert!(text.starts_with("* @owner\n"), "{text}");
+    assert!(text.contains("/docs/adr/ @alice"), "{text}");
+    assert_eq!(intent_state(dir.path())["codeowners"], ".github/CODEOWNERS");
+    #[cfg(unix)]
+    assert_eq!(
+        std::fs::read_link(dir.path().join(".claude/CODEOWNERS")).unwrap(),
+        Path::new("../.github/CODEOWNERS")
+    );
+    ocgen()
+        .args(["edit", "intent", "--show", "-p"])
+        .arg(dir.path())
+        .assert()
+        .success()
+        .stdout(contains(".github/CODEOWNERS"))
+        .stdout(contains("intents"));
+
+    ocgen()
+        .args(["edit", "intent", "--codeowners-scope", "all", "-p"])
+        .arg(dir.path())
+        .assert()
+        .success();
+    let text = std::fs::read_to_string(&owners).unwrap();
+    assert!(text.contains("\n* @alice\n"), "{text}");
+    ocgen()
+        .args(["edit", "intent", "--codeowners-scope", "off", "-p"])
+        .arg(dir.path())
+        .assert()
+        .success();
+    assert_eq!(std::fs::read_to_string(&owners).unwrap(), "* @owner\n");
+
+    // Unlinked: the link and the block go; the file and your lines stay.
+    ocgen()
+        .args(["edit", "intent", "--codeowners-scope", "intents", "-p"])
+        .arg(dir.path())
+        .assert()
+        .success();
+    assert!(std::fs::read_to_string(&owners).unwrap().contains("@alice"));
+    ocgen()
+        .args(["edit", "intent", "--codeowners", "off", "-p"])
+        .arg(dir.path())
+        .assert()
+        .success();
+    assert_eq!(std::fs::read_to_string(&owners).unwrap(), "* @owner\n");
+    assert!(std::fs::symlink_metadata(dir.path().join(".claude/CODEOWNERS")).is_err());
+    assert_eq!(intent_state(dir.path())["codeowners"], "");
+}
+
+#[test]
+fn edit_intent_refuses_a_codeowners_github_wont_read() {
+    let dir = tempdir().unwrap();
+    scaffold_claude(dir.path());
+    let state = dir.path().join(".claude/.ocgen-state.json");
+    let before = std::fs::read_to_string(&state).unwrap();
+    let refuse = |path: &str, why: &str| {
+        ocgen()
+            .args(["edit", "intent", "--codeowners", path, "-p"])
+            .arg(dir.path())
+            .assert()
+            .failure()
+            .stderr(contains(why));
+    };
+    // It must already exist: ocgen links it, never creates it.
+    refuse(".github/CODEOWNERS", "create it first");
+    std::fs::write(dir.path().join("OWNERS"), "* @owner\n").unwrap();
+    refuse("OWNERS", ".github/CODEOWNERS");
+    refuse("../CODEOWNERS", "inside the project");
+    // GitHub reads .github/CODEOWNERS first, so docs/CODEOWNERS would be ignored.
+    for rel in [".github/CODEOWNERS", "docs/CODEOWNERS"] {
+        let p = dir.path().join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, "* @owner\n").unwrap();
+    }
+    refuse("docs/CODEOWNERS", "GitHub reads .github/CODEOWNERS");
+    assert_eq!(before, std::fs::read_to_string(&state).unwrap());
 }

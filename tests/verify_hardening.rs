@@ -1205,3 +1205,38 @@ fn verify_warns_about_ignored_hook_script_overrides() {
     assert!(l.contains("claude/hooks/team-approval-gate.sh"), "{out}");
     assert!(l.contains("ignored"), "{out}");
 }
+
+/// The CODEOWNERS ocgen is linked to: verify says it's there and whether
+/// GitHub can enforce it, and warns when it went away.
+#[test]
+fn verify_reports_the_linked_codeowners() {
+    let dir = tempdir().unwrap();
+    git_init(dir.path());
+    claude_project("co").scaffold(dir.path(), false).unwrap();
+    let skip = verify_lib(dir.path());
+    assert_eq!(named(&skip, "CODEOWNERS").status, Status::Skip);
+
+    let owners = dir.path().join(".github/CODEOWNERS");
+    fs::create_dir_all(owners.parent().unwrap()).unwrap();
+    fs::write(&owners, "* @owner\n").unwrap();
+    let mut p = Project::load_state(dir.path()).unwrap();
+    p.claude.intent.approvers = vec!["@alice".into()];
+    p.claude.intent.codeowners = ".github/CODEOWNERS".into();
+    p.scaffold(dir.path(), true).unwrap();
+    let ok = verify_lib(dir.path());
+    let c = named(&ok, "CODEOWNERS");
+    // Native Windows may refuse the symbolic link (a warning that says so).
+    if cfg!(unix) {
+        assert_eq!(c.status, Status::Pass, "{c:?}");
+        assert!(
+            c.detail.contains("Require review from Code Owners"),
+            "{c:?}"
+        );
+    }
+
+    fs::remove_file(&owners).unwrap();
+    let gone = verify_lib(dir.path());
+    let c = named(&gone, "CODEOWNERS");
+    assert_eq!(c.status, Status::Warn, "{c:?}");
+    assert!(c.detail.contains("is gone"), "{c:?}");
+}

@@ -4683,7 +4683,8 @@ fn intent_skill_demands_an_exhaustive_evidence_based_analysis() {
         assert!(md.contains(pass), "missing {pass}");
     }
     assert!(md.contains("search terms"));
-    assert!(md.contains("`Explore` subagents") && !md.contains("explorer subagents"));
+    // The defaults deny the built-in Explore: the passes use the project's explorer.
+    assert!(md.contains("`explorer` subagents") && !md.contains("`Explore`"));
     assert!(md.contains("every call site"));
     assert!(md.contains("git log -S") && md.contains("git blame"));
     assert!(md.contains("gh search issues") && md.contains("closed"));
@@ -4788,6 +4789,231 @@ fn intent_template_has_an_evidence_section() {
     let dir = tempdir().unwrap();
     claude_default("id").scaffold(dir.path(), false).unwrap();
     assert!(read(dir.path(), ".claude/intent/intent-template.md").contains("## Evidence"));
+}
+
+/// A `## N.` step of a rendered skill, up to the next `## ` heading.
+fn skill_step(md: &str, n: u8) -> String {
+    let head = format!("\n## {n}. ");
+    let rest = md
+        .split(&head)
+        .nth(1)
+        .unwrap_or_else(|| panic!("no step {n}"));
+    rest.split("\n## ").next().unwrap().to_string()
+}
+
+#[test]
+fn intent_drafts_are_blameless_but_honest() {
+    let dir = tempdir().unwrap();
+    claude_default("tone").scaffold(dir.path(), false).unwrap();
+    let md = read(dir.path(), ".claude/skills/intent/SKILL.md");
+    // The writing standard — soften the framing, never the facts.
+    assert!(md.contains("## Writing standard"), "{md}");
+    for rule in [
+        "soften the framing, never the facts",
+        "System, not people",
+        "Context before the flaw",
+        "When [trigger], [behavior], which means [impact] (evidence: F#, `file:line`)",
+        "Severity",
+        "Likelihood",
+        "Balanced",
+        "Written for the approvers",
+        "comment block",
+    ] {
+        assert!(md.contains(rule), "missing {rule}");
+    }
+    // Steps 4 and 5 apply it.
+    assert!(skill_step(&md, 4).contains("writing standard"));
+    assert!(skill_step(&md, 5).contains("writing standard"));
+    // History says why, never who.
+    assert!(
+        md.contains("never who") && md.contains("author names"),
+        "{md}"
+    );
+    // A two-sided tone check by a fresh subagent before any draft is shown.
+    let step5 = skill_step(&md, 5);
+    assert!(step5.contains("Tone check") && step5.contains("fresh `reviewer` subagent"));
+    for side in [
+        "Blame and alarm",
+        "Softening and omission",
+        "Medium or higher",
+        "lower than the evidence supports",
+        "contradicts a Verified finding",
+    ] {
+        assert!(step5.contains(side), "tone check misses {side}");
+    }
+}
+
+/// The section of a rendered skill from `**Pass N` to the next `**Pass`/heading.
+fn skill_pass(md: &str, n: u8) -> String {
+    let head = format!("**Pass {n}");
+    let rest = md
+        .split(&head)
+        .nth(1)
+        .unwrap_or_else(|| panic!("no Pass {n}"));
+    rest.split("**Pass ")
+        .next()
+        .unwrap()
+        .split("\n## ")
+        .next()
+        .unwrap()
+        .to_string()
+}
+
+#[test]
+fn intent_uses_the_projects_own_research_and_review_agents() {
+    // The defaults: the explorer is preferred, so the built-in Explore is denied.
+    let dir = tempdir().unwrap();
+    claude_default("agents")
+        .scaffold(dir.path(), false)
+        .unwrap();
+    let deny = settings_of(dir.path())["permissions"]["deny"].clone();
+    assert!(
+        deny.as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r == "Agent(Explore)"),
+        "{deny}"
+    );
+    let md = read(dir.path(), ".claude/skills/intent/SKILL.md");
+    assert!(
+        !md.contains("`Explore`"),
+        "names the denied built-in Explore: {md}"
+    );
+    for n in [2, 3, 4] {
+        assert!(skill_pass(&md, n).contains("`explorer`"), "Pass {n}");
+    }
+    // The explorer has no shell: the git and gh reads stay with the lead.
+    assert!(skill_pass(&md, 2).contains("no shell"));
+    // The tone check is the reviewer's.
+    assert!(skill_step(&md, 5).contains("fresh `reviewer` subagent"));
+
+    // Without the preference: the built-in Explore; without a reviewer, the tone
+    // check falls back to the research agent.
+    let dir = tempdir().unwrap();
+    let mut p = claude_default("builtin");
+    p.claude.workflow.prefer_explorer = false;
+    p.agents.retain(|a| a.name != "reviewer");
+    p.scaffold(dir.path(), false).unwrap();
+    let md = read(dir.path(), ".claude/skills/intent/SKILL.md");
+    assert!(md.contains("built-in `Explore` subagents") && !md.contains("`explorer`"));
+    assert!(!md.contains("no shell"));
+    assert!(skill_step(&md, 5).contains("fresh `Explore` subagent"));
+}
+
+#[test]
+fn intent_names_the_approvers_and_waits_for_their_sign_off() {
+    let dir = tempdir().unwrap();
+    let mut p = claude_default("signoff");
+    p.claude.intent.approvers = vec!["@alice".into(), "@org/architects".into()];
+    p.scaffold(dir.path(), false).unwrap();
+    let md = read(dir.path(), ".claude/skills/intent/SKILL.md");
+    assert!(md.contains("@alice, @org/architects"), "{md}");
+    assert!(!md.contains("No approvers configured"));
+    // My approval is only for drafting; the approvers decide.
+    assert!(skill_step(&md, 3).contains("approved for drafting"));
+    // Named and pending in both drafts; GitHub's @mentions are the only notice.
+    let step4 = skill_step(&md, 4);
+    assert!(step4.contains("Approvers:") && step4.contains("pending"));
+    let step5 = skill_step(&md, 5);
+    assert!(step5.contains("@mentions") && step5.contains("--assignee"));
+    assert!(step5.contains("Never email"));
+    // Sign-off: recorded only from my report, never inferred.
+    let step6 = skill_step(&md, 6);
+    for rule in [
+        "Never mark an approval",
+        "with evidence",
+        "changes requested",
+        "back to step 3",
+        "Status: Rejected",
+        "Status: Accepted",
+        "every approver",
+    ] {
+        assert!(step6.contains(rule), "step 6 misses {rule}");
+    }
+}
+
+#[test]
+fn intent_without_approvers_says_so_in_both_drafts() {
+    let dir = tempdir().unwrap();
+    claude_default("noappr")
+        .scaffold(dir.path(), false)
+        .unwrap();
+    let md = read(dir.path(), ".claude/skills/intent/SKILL.md");
+    assert!(md.contains("No approvers configured"), "{md}");
+    assert!(md.contains("ocgen edit intent --approver @handle"));
+    assert!(md.contains("proceed without a sign-off"));
+}
+
+#[test]
+fn intent_templates_carry_severity_approvers_and_sign_off() {
+    let dir = tempdir().unwrap();
+    claude_default("tpl").scaffold(dir.path(), false).unwrap();
+    let issue = read(dir.path(), ".claude/intent/issue-template.md");
+    for section in [
+        "## Summary",
+        "## Current behaviour",
+        "## Impact",
+        "Severity:",
+        "## Background",
+        "## Proposal",
+        "## Decision requested",
+        "## Approvers / sign-off",
+        "- [ ] @",
+        "## Acceptance criteria",
+        "72 characters",
+        "--max-words",
+    ] {
+        assert!(issue.contains(section), "issue template misses {section}");
+    }
+    assert!(!issue.contains("## Problem"));
+    let intent = read(dir.path(), ".claude/intent/intent-template.md");
+    for section in [
+        "Status: Proposed",
+        "Severity:",
+        "Approvers:",
+        "constraints and decisions",
+        "## Evidence",
+        "## Sign-off",
+        "changes requested",
+    ] {
+        assert!(intent.contains(section), "intent template misses {section}");
+    }
+    // Both hold the house style the skill follows: severity and banned words.
+    for t in [&issue, &intent] {
+        for word in [
+            "Critical",
+            "High",
+            "Medium",
+            "Low",
+            "Likely",
+            "Rare",
+            "careless",
+            "minor quirk",
+        ] {
+            assert!(t.contains(word), "comment block misses {word}");
+        }
+    }
+}
+
+#[test]
+fn deliver_waits_for_the_approvers_sign_off() {
+    let dir = tempdir().unwrap();
+    let mut p = claude_default("gate");
+    p.claude.intent.approvers = vec!["@alice".into()];
+    p.scaffold(dir.path(), false).unwrap();
+    let md = read(dir.path(), ".claude/skills/deliver/SKILL.md");
+    assert!(
+        md.contains("Status: Accepted") && md.contains("every approver"),
+        "{md}"
+    );
+    assert!(md.contains("still pending") && md.contains("bypasses the approvers' sign-off"));
+    assert!(md.contains("@alice"));
+
+    let dir = tempdir().unwrap();
+    let mut p = claude_default("gate-off");
+    p.claude.workflow.intent = false;
+    p.scaffold(dir.path(), false).unwrap();
+    assert!(!read(dir.path(), ".claude/skills/deliver/SKILL.md").contains("sign-off"));
 }
 
 #[test]

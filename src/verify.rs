@@ -228,6 +228,7 @@ pub fn verify(project: &Project, root: &Path, opts: &Options) -> Vec<Check> {
         out.push(check_command(&sh, project, root, opts.run_check));
     }
     out.push(mcp_json(root));
+    out.push(codeowners(project, root));
     out.push(ocgen_on_path());
     out.extend(ignored_overrides());
     out.push(git_tracking(root));
@@ -2092,6 +2093,46 @@ fn ignored_overrides() -> Option<Check> {
             if ignored.len() == 1 { "it" } else { "them" }
         ),
     ))
+}
+
+/// The CODEOWNERS ocgen is linked to (`ocgen edit intent --codeowners`): still
+/// there and text, the link at `.claude/CODEOWNERS` in place, and no rule of the
+/// user's after ocgen's block taking precedence over it. The block's lines are
+/// checked with the other files ("files up to date").
+fn codeowners(project: &Project, root: &Path) -> Check {
+    let name = "CODEOWNERS";
+    let s = &project.claude.intent;
+    if s.codeowners.is_empty() {
+        return check(
+            name,
+            Status::Skip,
+            "not linked (`ocgen edit intent --codeowners <path>` keeps the approvers there)",
+        );
+    }
+    let notes = project.codeowners_report(root);
+    if !notes.is_empty() {
+        return check(name, Status::Warn, notes.join("; "));
+    }
+    let what = if s.codeowners_rule().is_some() {
+        format!(
+            "the approvers review {} — GitHub requires it only with branch protection's \"Require review from Code Owners\"",
+            match s.codeowners_scope {
+                crate::claude::CodeownersScope::All => "every change".to_string(),
+                _ => format!("{}/", s.dir.trim_matches('/')),
+            }
+        )
+    } else {
+        "no block (no approvers, or scope off)".to_string()
+    };
+    check(
+        name,
+        Status::Pass,
+        format!(
+            "{} (linked at {}); {what}",
+            s.codeowners,
+            crate::claude::CODEOWNERS_LINK
+        ),
+    )
 }
 
 fn git_tracking(root: &Path) -> Check {

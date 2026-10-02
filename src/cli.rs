@@ -341,6 +341,9 @@ Examples:
   ocgen edit intent --branch develop                       # check numbers against origin/develop
   ocgen edit intent --trust-domain docs.example.org        # let /intent read these docs without asking
   ocgen edit intent --trust-domain \"*.amazon.com\"          # every subdomain (not amazon.com itself)
+  ocgen edit intent --approver @alice                      # who must sign off (repeatable)
+  ocgen edit intent --codeowners .github/CODEOWNERS        # keep the approvers in your CODEOWNERS
+  ocgen edit intent --codeowners-scope all                 # approvers review every change, not just intents
   ocgen edit intent --issue-template                       # edit the issue structure in $EDITOR
   ocgen edit intent --reset-intent-template                # back to ocgen's default
   ocgen edit intent --disable                              # remove /intent from the project";
@@ -371,6 +374,22 @@ pub struct IntentCli {
     /// Stop trusting a documentation site (repeatable).
     #[arg(long, value_name = "DOMAIN")]
     pub untrust_domain: Vec<String>,
+    /// Add an approver who must sign off before work starts (repeatable): a GitHub
+    /// user (@login) or team (@org/team). GitHub notifies them through the
+    /// @mentions in the issue.
+    #[arg(long, value_name = "HANDLE")]
+    pub approver: Vec<String>,
+    /// Remove an approver (repeatable).
+    #[arg(long, value_name = "HANDLE")]
+    pub remove_approver: Vec<String>,
+    /// Link the project's existing CODEOWNERS file (.github/CODEOWNERS, CODEOWNERS
+    /// or docs/CODEOWNERS): ocgen keeps its approvers block in it and a link to it
+    /// at .claude/CODEOWNERS. "off" unlinks it and removes the block.
+    #[arg(long, value_name = "PATH")]
+    pub codeowners: Option<String>,
+    /// What the CODEOWNERS block covers: the intent directory, every file, or nothing.
+    #[arg(long, value_name = "SCOPE")]
+    pub codeowners_scope: Option<ocgen::claude::CodeownersScope>,
     /// Add /intent to the project.
     #[arg(long, conflicts_with = "disable")]
     pub enable: bool,
@@ -392,6 +411,7 @@ pub struct IntentCli {
     /// Show the settings and template paths, and write nothing.
     #[arg(long, conflicts_with_all = [
         "prefix", "digits", "dir", "max_words", "branch", "trust_domain", "untrust_domain",
+        "approver", "remove_approver", "codeowners", "codeowners_scope",
         "enable", "disable",
         "issue_template", "intent_template", "reset_issue_template", "reset_intent_template",
     ])]
@@ -407,6 +427,10 @@ impl IntentCli {
             && self.branch.is_none()
             && self.trust_domain.is_empty()
             && self.untrust_domain.is_empty()
+            && self.approver.is_empty()
+            && self.remove_approver.is_empty()
+            && self.codeowners.is_none()
+            && self.codeowners_scope.is_none()
             && !self.enable
             && !self.disable
             && !self.issue_template

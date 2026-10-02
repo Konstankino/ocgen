@@ -371,12 +371,13 @@ fn edit_intent_walks_every_setting() {
     let tmp = tempfile::tempdir().unwrap();
     let path = claude_project(tmp.path());
     script(&[
-        "",         // keep /intent on
-        "RFC",      // prefix
-        "3",        // digits
-        "docs/rfc", // directory
-        "200",      // max words
-        "",         // branch: the remote default
+        "",                              // keep /intent on
+        "RFC",                           // prefix
+        "3",                             // digits
+        "docs/rfc",                      // directory
+        "200",                           // max words
+        "",                              // branch: the remote default
+        "alice, org/architects, @Alice", // approvers (the same person once)
     ]);
     super::run_edit_intent(path, Default::default()).unwrap();
     assert_eq!(script_remaining(), 0);
@@ -385,7 +386,39 @@ fn edit_intent_walks_every_setting() {
     assert_eq!(p.claude.intent.digits, 3);
     assert_eq!(p.claude.intent.dir, "docs/rfc");
     assert_eq!(p.claude.intent.max_words, 200);
-    assert!(read(tmp.path(), ".claude/skills/intent/SKILL.md").contains("RFC-001"));
+    assert_eq!(p.claude.intent.approvers, ["@alice", "@org/architects"]);
+    // No CODEOWNERS in the project: nothing to link, so no more questions.
+    assert!(p.claude.intent.codeowners.is_empty());
+    let skill = read(tmp.path(), ".claude/skills/intent/SKILL.md");
+    assert!(skill.contains("RFC-001") && skill.contains("@alice, @org/architects"));
+}
+
+#[test]
+fn edit_intent_offers_to_link_the_projects_codeowners() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = claude_project(tmp.path());
+    let owners = tmp.path().join(".github/CODEOWNERS");
+    std::fs::create_dir_all(owners.parent().unwrap()).unwrap();
+    std::fs::write(&owners, "* @owner\n").unwrap();
+    script(&[
+        "", "", "", "", "", "",       // /intent and its settings, as they are
+        "@alice", // approvers
+        "",       // keep them in .github/CODEOWNERS: yes
+        "all",    // what they review: every change
+    ]);
+    super::run_edit_intent(path, Default::default()).unwrap();
+    assert_eq!(script_remaining(), 0);
+    let p = reload(tmp.path());
+    assert_eq!(p.claude.intent.codeowners, ".github/CODEOWNERS");
+    assert_eq!(
+        p.claude.intent.codeowners_scope,
+        ocgen::claude::CodeownersScope::All
+    );
+    let text = std::fs::read_to_string(&owners).unwrap();
+    assert!(
+        text.starts_with("* @owner\n") && text.contains("\n* @alice\n"),
+        "{text}"
+    );
 }
 
 // ---------- doctor: hand-added rules and the per-file review ----------
@@ -482,7 +515,7 @@ fn new_claude_answers<'a>(sandbox: &[&'a str]) -> Vec<&'a str> {
         "", // power-user defaults
         "", "", // extra hooks, formatter
         "", "", "", "", "", "", "", // intake … inquire
-        "", "", "", "", "", "", // /intent and its settings
+        "", "", "", "", "", "", "", // /intent, its settings and approvers
         "", "", "", // subagent confidence, check command, loop guard
         "", "", "", "", "", "", "", // Agent Teams and its gates
     ];

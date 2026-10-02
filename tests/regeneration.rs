@@ -1622,3 +1622,213 @@ fn a_linked_state_file_is_refused() {
     assert_eq!(fs::read_to_string(&elsewhere).unwrap(), before);
     assert!(!rules(&json_at(&dir, SETTINGS), "allow").contains(&"Bash(make:*)".to_string()));
 }
+
+// ------------------------------------------------------------ CODEOWNERS -----
+
+const OWNERS: &str = ".github/CODEOWNERS";
+const MINE: &str = "* @owner\n# the team's own rules\n";
+const OCGEN_MARK: &str =
+    "# ocgen: /intent approvers (ocgen edit intent --approver / --codeowners-scope)";
+
+/// A project with an existing CODEOWNERS of its own (not linked yet).
+fn with_codeowners(name: &str, rel: &str) -> tempfile::TempDir {
+    let dir = tempdir().unwrap();
+    claude(name).scaffold(dir.path(), false).unwrap();
+    let p = dir.path().join(rel);
+    fs::create_dir_all(p.parent().unwrap()).unwrap();
+    fs::write(p, MINE).unwrap();
+    dir
+}
+
+/// Reload, change the /intent settings, regenerate as `ocgen edit intent` does.
+fn edit_intent(dir: &Path, f: impl FnOnce(&mut ocgen::claude::IntentSettings)) -> Vec<String> {
+    let mut p = reload(dir);
+    f(&mut p.claude.intent);
+    p.apply(dir, &BTreeSet::new()).unwrap().notice(dir)
+}
+
+fn block(rule: &str) -> String {
+    format!("{MINE}\n{OCGEN_MARK}\n{rule}\n# ocgen: end\n")
+}
+
+#[test]
+fn codeowners_is_never_created() {
+    let dir = tempdir().unwrap();
+    claude("co-none").scaffold(dir.path(), false).unwrap();
+    edit_intent(dir.path(), |s| s.approvers = vec!["@alice".into()]);
+    for rel in [
+        OWNERS,
+        "CODEOWNERS",
+        "docs/CODEOWNERS",
+        ".claude/CODEOWNERS",
+    ] {
+        assert!(fs::symlink_metadata(dir.path().join(rel)).is_err(), "{rel}");
+    }
+}
+
+#[test]
+fn a_linked_codeowners_gets_the_approvers_block_and_a_link() {
+    let dir = with_codeowners("co-link", OWNERS);
+    edit_intent(dir.path(), |s| {
+        s.approvers = vec!["@alice".into(), "@org/architects".into()];
+        s.codeowners = OWNERS.into();
+    });
+    assert_eq!(
+        read(dir.path(), OWNERS),
+        block("/docs/adr/ @alice @org/architects")
+    );
+    #[cfg(unix)]
+    assert_eq!(
+        fs::read_link(dir.path().join(".claude/CODEOWNERS")).unwrap(),
+        Path::new("../.github/CODEOWNERS")
+    );
+    // Nothing more to do on the next run.
+    let plan = reload(dir.path()).plan_changes(dir.path()).unwrap();
+    let owners = plan.iter().find(|c| c.rel == OWNERS).unwrap();
+    assert_eq!(owners.kind, ChangeKind::Unchanged);
+
+    // The scope `all`: every change.
+    edit_intent(dir.path(), |s| {
+        s.codeowners_scope = ocgen::claude::CodeownersScope::All
+    });
+    assert_eq!(read(dir.path(), OWNERS), block("* @alice @org/architects"));
+}
+
+#[test]
+fn the_codeowners_block_follows_the_approvers_and_leaves_your_lines() {
+    let dir = with_codeowners("co-follow", OWNERS);
+    edit_intent(dir.path(), |s| {
+        s.approvers = vec!["@alice".into()];
+        s.codeowners = OWNERS.into();
+    });
+    // A rule of the user's after the block, which takes precedence over it.
+    let path = dir.path().join(OWNERS);
+    let text = format!("{}/docs/ @docs-team\n", read(dir.path(), OWNERS));
+    fs::write(&path, &text).unwrap();
+    let notice = edit_intent(dir.path(), |s| s.approvers.push("@bob".into()));
+    assert_eq!(
+        read(dir.path(), OWNERS),
+        format!("{}/docs/ @docs-team\n", block("/docs/adr/ @alice @bob"))
+    );
+    assert!(
+        notice
+            .iter()
+            .any(|l| l.contains("take precedence") && l.contains("/docs/ @docs-team")),
+        "{notice:?}"
+    );
+}
+
+#[test]
+fn the_codeowners_block_goes_and_your_file_stays() {
+    let dir = with_codeowners("co-off", OWNERS);
+    let link = |s: &mut ocgen::claude::IntentSettings| {
+        s.approvers = vec!["@alice".into()];
+        s.codeowners = OWNERS.into();
+        s.codeowners_scope = ocgen::claude::CodeownersScope::Intents;
+    };
+    edit_intent(dir.path(), link);
+    edit_intent(dir.path(), |s| {
+        s.codeowners_scope = ocgen::claude::CodeownersScope::Off
+    });
+    assert_eq!(read(dir.path(), OWNERS), MINE, "scope off");
+    edit_intent(dir.path(), link);
+    edit_intent(dir.path(), |s| s.approvers.clear());
+    assert_eq!(read(dir.path(), OWNERS), MINE, "no approvers");
+    edit_intent(dir.path(), link);
+    edit_intent(dir.path(), |s| s.codeowners.clear());
+    assert_eq!(read(dir.path(), OWNERS), MINE, "unlinked");
+    assert!(fs::symlink_metadata(dir.path().join(".claude/CODEOWNERS")).is_err());
+}
+
+#[test]
+fn a_root_codeowners_can_be_linked() {
+    let dir = with_codeowners("co-root", "CODEOWNERS");
+    edit_intent(dir.path(), |s| {
+        s.approvers = vec!["@alice".into()];
+        s.codeowners = "CODEOWNERS".into();
+    });
+    assert_eq!(read(dir.path(), "CODEOWNERS"), block("/docs/adr/ @alice"));
+    assert!(!dir.path().join(OWNERS).exists());
+    #[cfg(unix)]
+    assert_eq!(
+        fs::read_link(dir.path().join(".claude/CODEOWNERS")).unwrap(),
+        Path::new("../CODEOWNERS")
+    );
+}
+
+#[test]
+fn a_linked_codeowners_that_went_away_is_reported_not_recreated() {
+    let dir = with_codeowners("co-gone", OWNERS);
+    edit_intent(dir.path(), |s| {
+        s.approvers = vec!["@alice".into()];
+        s.codeowners = OWNERS.into();
+    });
+    fs::remove_file(dir.path().join(OWNERS)).unwrap();
+    let notice = edit_intent(dir.path(), |s| s.approvers.push("@bob".into()));
+    assert!(!dir.path().join(OWNERS).exists());
+    assert!(
+        notice
+            .iter()
+            .any(|l| l.contains(OWNERS) && l.contains("--codeowners")),
+        "{notice:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_linked_codeowners_replaced_by_a_symlink_is_left_alone() {
+    let dir = with_codeowners("co-sym", OWNERS);
+    edit_intent(dir.path(), |s| {
+        s.approvers = vec!["@alice".into()];
+        s.codeowners = OWNERS.into();
+    });
+    let elsewhere = tempdir().unwrap();
+    let theirs = elsewhere.path().join("CODEOWNERS");
+    fs::write(&theirs, "* @someone\n").unwrap();
+    fs::remove_file(dir.path().join(OWNERS)).unwrap();
+    std::os::unix::fs::symlink(&theirs, dir.path().join(OWNERS)).unwrap();
+    let notice = edit_intent(dir.path(), |s| s.approvers.push("@bob".into()));
+    assert_eq!(fs::read_to_string(&theirs).unwrap(), "* @someone\n");
+    assert!(
+        notice.iter().any(|l| l.contains("symbolic link")),
+        "{notice:?}"
+    );
+}
+
+#[test]
+fn an_old_state_without_approvers_loads() {
+    let dir = tempdir().unwrap();
+    claude("co-old").scaffold(dir.path(), false).unwrap();
+    let mut state = json_at(dir.path(), STATE);
+    let intent = state["claude"]["intent"].as_object_mut().unwrap();
+    for k in ["approvers", "codeowners", "codeowners_scope"] {
+        intent.remove(k);
+    }
+    write_json(dir.path(), STATE, &state);
+    let p = reload(dir.path());
+    assert!(p.claude.intent.approvers.is_empty());
+    assert!(p.claude.intent.codeowners.is_empty());
+    assert_eq!(
+        p.claude.intent.codeowners_scope,
+        ocgen::claude::CodeownersScope::Intents
+    );
+}
+
+/// An older ocgen doesn't know the approvers: it refuses to rewrite a state a
+/// newer one wrote rather than drop them.
+#[test]
+fn approvers_written_by_a_newer_ocgen_are_never_dropped() {
+    let dir = tempdir().unwrap();
+    claude("co-newer").scaffold(dir.path(), false).unwrap();
+    let mut state = json_at(dir.path(), STATE);
+    state["ocgen_version"] = json!("99.0.0");
+    state["claude"]["intent"]["approvers"] = json!(["@alice"]);
+    write_json(dir.path(), STATE, &state);
+    let before = read(dir.path(), STATE);
+    let err = reload(dir.path())
+        .scaffold(dir.path(), true)
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("upgrade"), "{err}");
+    assert_eq!(read(dir.path(), STATE), before);
+}

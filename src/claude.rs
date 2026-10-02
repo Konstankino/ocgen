@@ -128,6 +128,37 @@ pub struct ClaudeConfig {
 pub const INTENT_ISSUE_TEMPLATE: &str = ".claude/intent/issue-template.md";
 pub const INTENT_FILE_TEMPLATE: &str = ".claude/intent/intent-template.md";
 
+/// Where GitHub reads a CODEOWNERS file, in its search order (the first one found
+/// is used). ocgen links an existing one; it never creates one.
+pub const CODEOWNERS_PATHS: [&str; 3] = [".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS"];
+
+/// ocgen's symlink to the CODEOWNERS file it is linked to.
+pub const CODEOWNERS_LINK: &str = ".claude/CODEOWNERS";
+
+/// What ocgen's CODEOWNERS block makes the /intent approvers required reviewers
+/// of (once branch protection requires a review from code owners).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, clap::ValueEnum)]
+#[serde(rename_all = "lowercase")]
+pub enum CodeownersScope {
+    /// The intent directory.
+    #[default]
+    Intents,
+    /// Every file (`*`).
+    All,
+    /// No block.
+    Off,
+}
+
+impl CodeownersScope {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Intents => "intents",
+            Self::All => "all",
+            Self::Off => "off",
+        }
+    }
+}
+
 /// `/intent` settings (`ocgen edit intent`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -144,6 +175,14 @@ pub struct IntentSettings {
     pub branch: String,
     /// Documentation sites /intent may fetch without asking (official docs only).
     pub trusted_domains: Vec<String>,
+    /// Who must sign off before work starts: GitHub handles (`@login`,
+    /// `@org/team`), notified by the @mentions in the issue.
+    pub approvers: Vec<String>,
+    /// The project's existing CODEOWNERS file ocgen keeps its approvers block in
+    /// (relative to the project root; empty = not linked).
+    pub codeowners: String,
+    /// What that block covers.
+    pub codeowners_scope: CodeownersScope,
 }
 
 /// Read-only tools /intent may use without asking while it runs (skill
@@ -203,6 +242,9 @@ impl Default for IntentSettings {
             max_words: 250,
             branch: String::new(),
             trusted_domains: DEFAULT_TRUSTED_DOMAINS.map(String::from).to_vec(),
+            approvers: Vec::new(),
+            codeowners: String::new(),
+            codeowners_scope: CodeownersScope::Intents,
         }
     }
 }
@@ -254,7 +296,49 @@ impl IntentSettings {
         for d in &self.trusted_domains {
             v::domain(d).map_err(|e| anyhow::anyhow!("intent trusted domain: {e}"))?;
         }
+        for a in &self.approvers {
+            v::approver(a).map_err(|e| anyhow::anyhow!("intent approver: {e}"))?;
+        }
+        if !self.codeowners.is_empty() && !CODEOWNERS_PATHS.contains(&self.codeowners.as_str()) {
+            anyhow::bail!(
+                "intent CODEOWNERS: {} isn't a file GitHub reads — use one of {}",
+                self.codeowners,
+                CODEOWNERS_PATHS.join(", ")
+            );
+        }
         Ok(())
+    }
+
+    /// Add an approver as typed (`alice`, `@org/team`), normalized; one already
+    /// there (in any letter case) isn't added twice.
+    pub fn add_approver(&mut self, typed: &str) -> Result<()> {
+        let a = crate::validate::approver(typed)
+            .map_err(|e| anyhow::anyhow!("intent approver: {e}"))?;
+        if !self.approvers.iter().any(|x| x.eq_ignore_ascii_case(&a)) {
+            self.approvers.push(a);
+        }
+        Ok(())
+    }
+
+    /// Remove an approver, whatever form or letter case it is typed in.
+    pub fn remove_approver(&mut self, typed: &str) {
+        let t = typed.trim();
+        let a = format!("@{}", t.strip_prefix('@').unwrap_or(t));
+        self.approvers.retain(|x| !x.eq_ignore_ascii_case(&a));
+    }
+
+    /// ocgen's CODEOWNERS block for these settings (without its markers), or
+    /// `None` when there is none: no linked file, scope off, or no approvers.
+    pub fn codeowners_rule(&self) -> Option<String> {
+        if self.codeowners.is_empty() || self.approvers.is_empty() {
+            return None;
+        }
+        let pattern = match self.codeowners_scope {
+            CodeownersScope::Off => return None,
+            CodeownersScope::All => "*".to_string(),
+            CodeownersScope::Intents => format!("/{}/", self.dir.trim_matches('/')),
+        };
+        Some(format!("{pattern} {}", self.approvers.join(" ")))
     }
 }
 

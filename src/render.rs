@@ -286,6 +286,8 @@ struct Previous {
     user_rules: PermissionRules,
     /// The MCP servers the project had.
     servers: Vec<String>,
+    /// The CODEOWNERS it was linked to (empty: none).
+    codeowners: String,
 }
 
 /// A file ocgen generated before and no longer does.
@@ -953,6 +955,7 @@ impl Project {
                         language => lang,
                         inquire => self.claude.workflow.inquire,
                         intent => self.claude.workflow.intent,
+                        approvers => self.claude.intent.approvers.join(", "),
                     },
                 )
                 .context("rendering deliver command")?,
@@ -973,6 +976,15 @@ impl Project {
                         branch => i.branch.trim(),
                         allowed_tools => i.allowed_tools(),
                         trusted_domains => i.trusted_domains.join(", "),
+                        approvers => i.approvers.join(", "),
+                        // The research and review agents it hands work to: the
+                        // project's own where they exist (the built-in Explore is
+                        // denied when the explorer is preferred).
+                        prefer_explorer => self.prefers_explorer(),
+                        reviewer => self
+                            .agents
+                            .iter()
+                            .any(|a| a.name == "reviewer" && a.mode == "subagent"),
                         issue_template => crate::claude::INTENT_ISSUE_TEMPLATE,
                         intent_template => crate::claude::INTENT_FILE_TEMPLATE,
                     },
@@ -1917,7 +1929,7 @@ impl Project {
         let on_disk = self.previous(target);
         refuse_newer(self.target.state_file(), &on_disk.version, on_disk.schema)?;
         let mut adopted = self.hand_added(target);
-        let problems = self.adopt(&adopted);
+        let mut problems = self.adopt(&adopted);
         // Report as kept only what really was (a rule can't be in two lists).
         let mine = &self.claude.permissions;
         adopted.rules.allow.retain(|r| mine.allow.contains(r));
@@ -1944,6 +1956,7 @@ impl Project {
             .collect();
         let backup = Self::backup(target, &at_risk)?;
         let written = self.scaffold_keeping(target, keep)?;
+        problems.extend(self.codeowners_report(target));
         let rels = |pick: &dyn Fn(&FileChange) -> bool| -> Vec<String> {
             plan.iter()
                 .filter(|c| pick(c))
@@ -2011,6 +2024,20 @@ impl Project {
             }
         }
         let previous = self.previous(target);
+        // ocgen's block in the linked CODEOWNERS (the rest of the file is the user's),
+        // and out of one linked before (unlinked or re-linked since).
+        if let Some((path, _, _, Some(new))) = self.codeowners_change(&fence, keep) {
+            planned.push((path, new));
+        }
+        let linked = self.codeowners_block().map(|(rel, _)| rel);
+        if !previous.codeowners.is_empty()
+            && linked.as_ref() != Some(&previous.codeowners)
+            && !keep.contains(&previous.codeowners)
+        {
+            if let Some(change) = codeowners::remove_block(&fence, &previous.codeowners) {
+                planned.push(change);
+            }
+        }
         let (stale, renames) = self.stale_files(&fence, files, &previous.generated);
 
         // A case-only rename on a case-insensitive file system: the old entry is the
@@ -2038,6 +2065,7 @@ impl Project {
             if let PrePush::Installed(p) = self.install_pre_push(target)? {
                 written.push(p);
             }
+            self.sync_codeowners_link(target);
         }
 
         // Persist project state so `add agent` can reload and re-render, with a
@@ -2099,6 +2127,7 @@ impl Project {
                     .iter()
                     .map(|s| s.name.clone())
                     .collect(),
+                codeowners: self.claude.intent.codeowners.clone(),
             };
         };
         let parse = |p: &str| {
@@ -2134,6 +2163,11 @@ impl Project {
                 .flatten()
                 .filter_map(|s| s.get("name")?.as_str().map(String::from))
                 .collect(),
+            codeowners: v
+                .pointer("/claude/intent/codeowners")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
         }
     }
 
@@ -2580,6 +2614,21 @@ impl Project {
             };
             // ocgen only ever appends its block to the user's file.
             let hand_edited = (kind == ChangeKind::Modified).then_some(false);
+            plan.push(FileChange {
+                path,
+                rel,
+                kind,
+                old,
+                new,
+                hand_edited,
+            });
+        }
+        // The linked CODEOWNERS: ocgen only ever changes its own block in it.
+        if let Some((path, rel, old, new)) = self.codeowners_change(&fence, &BTreeSet::new()) {
+            let (kind, old, hand_edited) = match new {
+                Some(_) => (ChangeKind::Modified, Some(old), Some(false)),
+                None => (ChangeKind::Unchanged, None, None),
+            };
             plan.push(FileChange {
                 path,
                 rel,
@@ -3408,6 +3457,9 @@ fn body_as_template(env: &Environment, agent: &str, body: &str, ctx: minijinja::
         }
     }
 }
+
+mod codeowners;
+pub use codeowners::{check_link as check_codeowners_link, found as found_codeowners};
 
 #[cfg(test)]
 mod write_tests;
