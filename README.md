@@ -623,8 +623,10 @@ GitHub issue (wizard: "Include the /intent command…"; on by default). You star
    still ask.
    **The WebFetch guard** — a `PreToolUse` hook (`.claude/hooks/https-only-fetch.sh`, matcher
    `WebFetch`) — allows a fetch only over `https://` and only to a trusted site; plain `http://`,
-   any other host and look-alikes (`docs.rs.evil.com`) are blocked, even in auto or
-   bypass-permissions mode. An **empty trusted list trusts nothing**: every WebFetch is blocked.
+   any other host and look-alikes (`docs.rs.evil.com`, `evildocs.rs`) are blocked, even in auto or
+   bypass-permissions mode. The host must be a plain name with an optional port: a `user@` part,
+   a backslash (`https://evil.com\@docs.rs/` really goes to evil.com), `%`-escapes or spaces are
+   blocked rather than guessed at. An **empty trusted list trusts nothing**: every WebFetch is blocked.
    The guard applies to every session in the project, and `ocgen verify` checks it.
 3. **Plan and approve** — options with a recommendation, scope, risks with mitigations, acceptance
    criteria. Every statement cites its findings (F#) or is labelled an Assumption; it iterates on
@@ -650,6 +652,7 @@ ocgen edit intent --prefix RFC --digits 3 --dir docs/rfc # RFC-001-<slug>.md in 
 ocgen edit intent --max-words 150 --branch develop       # shorter issues; numbers checked on origin/develop
 ocgen edit intent --trust-domain docs.example.org        # docs /intent may read without asking (--untrust-domain to drop)
 ocgen edit intent --trust-domain "*.amazon.com"          # every subdomain (not amazon.com itself); *.com is refused
+ocgen edit intent --trust-domain serde.readthedocs.io    # shared hosts (*.github.io, *.readthedocs.io…) only by exact host
 ocgen edit intent --trust-domain https://docs.example.net  # https:// URLs are fine (stored as the host); http:// is refused
 ocgen edit intent --issue-template                       # edit the issue structure in $EDITOR
 ocgen edit intent --reset-intent-template                # restore ocgen's default

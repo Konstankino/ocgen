@@ -19,7 +19,7 @@ use serde_json::Value;
 /// hook command uses the binary only when `ocgen hook --check` prints exactly the
 /// protocol the project was generated with; any other ocgen (older or newer)
 /// falls back to the project's own scripts, which always match the project.
-pub const PROTOCOL: &str = "ocgen-hooks 6";
+pub const PROTOCOL: &str = "ocgen-hooks 7";
 
 /// Every hook `ocgen hook <name>` accepts (matching the script names minus `.sh`).
 pub const NAMES: [&str; 10] = [
@@ -626,10 +626,24 @@ impl<'a> Hook<'a> {
                 "Blocked: only https:// URLs may be fetched in this project.\n".to_string()
             });
         };
-        // The host: drop path/query/fragment, user part, port and a trailing dot.
-        let host = rest.split(['/', '?', '#']).next().unwrap_or("");
-        let host = host.rsplit('@').next().unwrap_or(host);
-        let host = host.split(':').next().unwrap_or(host);
+        // The host part (up to path/query/fragment) must be a plain host name with
+        // an optional port. Anything else — a user part, a backslash (a path
+        // separator to WHATWG parsers, so `evil.com\@docs.rs` goes to evil.com),
+        // %-escapes, whitespace, non-ASCII — could be read differently by the
+        // fetcher than here, so it is blocked rather than parsed.
+        let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+        let (host, port) = authority.split_once(':').unwrap_or((authority, "1"));
+        let plain = !host.is_empty()
+            && host
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'.' || b == b'-')
+            && !port.is_empty()
+            && port.bytes().all(|b| b.is_ascii_digit());
+        if !plain {
+            return Outcome::block(
+                "Blocked: the URL's host must be a plain host name (letters, digits, dots, hyphens) with an optional port — no user@ part, backslash, %-escape or spaces. Fetch https://<host>/<path> instead, or skip it.\n".to_string(),
+            );
+        }
         let host = host.strip_suffix('.').unwrap_or(host);
         let list = self.env("OCGEN_WEBFETCH_DOMAINS");
         if list.trim().is_empty() {

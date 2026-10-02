@@ -261,7 +261,58 @@ pub fn trusted_domain(s: &str) -> Result<String, String> {
     }
     let host = host.strip_suffix('/').unwrap_or(host);
     domain(host)?;
+    if shared_hosting_wildcard(host) {
+        let base = host.trim_start_matches("*.");
+        return Err(format!(
+            "'{host}' would trust anyone's site — anyone can register a subdomain of {base}; trust one exact domain there instead (e.g. --trust-domain project.{base})"
+        ));
+    }
     Ok(host.to_string())
+}
+
+/// Hosting services where anyone can get a subdomain: a `*.` entry over one of
+/// these would let a stranger's site pass the WebFetch guard.
+pub const SHARED_HOSTING_SUFFIXES: [&str; 25] = [
+    "github.io",
+    "githubusercontent.com",
+    "gitlab.io",
+    "amazonaws.com",
+    "cloudfront.net",
+    "azurewebsites.net",
+    "windows.net",
+    "appspot.com",
+    "web.app",
+    "firebaseapp.com",
+    "herokuapp.com",
+    "vercel.app",
+    "netlify.app",
+    "pages.dev",
+    "workers.dev",
+    "onrender.com",
+    "fly.dev",
+    "ngrok.io",
+    "ngrok-free.app",
+    "readthedocs.io",
+    "gitbook.io",
+    "blogspot.com",
+    "wordpress.com",
+    "notion.site",
+    "glitch.me",
+];
+
+/// A `*.` entry whose domain is (or sits under) a shared-hosting suffix, such as
+/// `*.github.io` or `*.s3.amazonaws.com`. Exact hosts are never flagged.
+pub fn shared_hosting_wildcard(entry: &str) -> bool {
+    let Some(base) = entry
+        .to_ascii_lowercase()
+        .strip_prefix("*.")
+        .map(str::to_string)
+    else {
+        return false;
+    };
+    SHARED_HOSTING_SUFFIXES
+        .iter()
+        .any(|s| base == *s || base.ends_with(&format!(".{s}")))
 }
 
 /// A Claude Code permission rule: `Tool` or `Tool(specifier)`, e.g. `Read`,

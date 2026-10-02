@@ -633,6 +633,26 @@ fn https_only_fetch(sh: &Path, root: &Path, settings: &Value) -> Check {
             Some(rest) => format!("ocgen-verify.{rest}"),
             None => d.to_string(),
         });
+    // A `*.` entry over a shared-hosting suffix trusts strangers' sites.
+    let shared: Vec<String> = env
+        .get("OCGEN_WEBFETCH_DOMAINS")
+        .map(|l| {
+            l.split_whitespace()
+                .filter(|d| crate::validate::shared_hosting_wildcard(d))
+                .map(String::from)
+                .collect()
+        })
+        .unwrap_or_default();
+    if let Some(d) = shared.first() {
+        return check(
+            name,
+            Status::Fail,
+            format!(
+                "trusts {} — anyone can register a subdomain there; drop it with `ocgen edit intent --untrust-domain '{d}'` and trust exact hosts",
+                shared.join(", ")
+            ),
+        );
+    }
     let mut must_block = vec![
         "http://example.com/".to_string(),
         "HTTP://example.com/".to_string(),
@@ -641,6 +661,11 @@ fn https_only_fetch(sh: &Path, root: &Path, settings: &Value) -> Check {
     if let Some(t) = &trusted {
         must_block.push(format!("http://{t}/"));
         must_block.push(format!("https://{t}.ocgen-verify.invalid/"));
+        // Host parts a URL parser reads differently: a backslash is a path
+        // separator to the fetcher, so these really go to ocgen-verify.invalid.
+        must_block.push(format!("https://ocgen-verify.invalid\\@{t}/"));
+        must_block.push(format!("https://ocgen-verify.invalid\\.{t}/"));
+        must_block.push(format!("https://ocgen-verify.invalid@{t}/"));
     }
     let leaks: Vec<String> = must_block
         .into_iter()

@@ -1384,7 +1384,7 @@ fn edit_intent_trusts_and_untrusts_domains() {
         "nothing written"
     );
 
-    for bad in ["https://evil.example/x", "*.com"] {
+    for bad in ["https://evil.example/x", "*.com", "*.github.io"] {
         ocgen()
             .args(["edit", "intent", "--trust-domain", bad, "-p"])
             .arg(dir.path())

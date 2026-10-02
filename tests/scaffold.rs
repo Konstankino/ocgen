@@ -4785,6 +4785,22 @@ fn trusted_domains_are_https_only() {
     ] {
         assert!(trusted_domain(bad).is_err(), "{bad}");
     }
+    // A wildcard over a shared-hosting suffix would trust every stranger's
+    // subdomain; one exact host there is fine.
+    for bad in ["*.github.io", "*.S3.amazonaws.com", "https://*.vercel.app/"] {
+        let err = trusted_domain(bad).unwrap_err();
+        assert!(err.contains("anyone"), "{bad}: {err}");
+    }
+    assert_eq!(
+        trusted_domain("serde.readthedocs.io").unwrap(),
+        "serde.readthedocs.io"
+    );
+    assert_eq!(trusted_domain("*.docs.rs").unwrap(), "*.docs.rs");
+    assert!(ocgen::validate::shared_hosting_wildcard("*.github.io"));
+    assert!(!ocgen::validate::shared_hosting_wildcard(
+        "rust-lang.github.io"
+    ));
+    assert!(!ocgen::validate::shared_hosting_wildcard("*.notgithub.io"));
 
     // The skill fetches over HTTPS only.
     let dir = tempdir().unwrap();
@@ -4892,6 +4908,42 @@ fn verify_checks_that_plain_http_fetches_are_blocked() {
         Status::Fail,
         "{checks:#?}"
     );
+
+    // So does the old guard: it dropped backslashes and took the host after the
+    // last `@`, so `https://evil\@docs.github.com/` passed (it goes to evil).
+    fs::write(
+        dir.path().join(".claude/hooks/https-only-fetch.sh"),
+        "#!/bin/sh\nurl=$(cat | sed -n 's/.*\"url\":\"\\([^\"]*\\)\".*/\\1/p' | tr -d '\\\\')\n\
+         case \"$url\" in https://*) ;; *) exit 2 ;; esac\n\
+         h=${url#https://}; h=${h%%/*}; h=${h##*@}; h=${h%%:*}\n\
+         for d in $OCGEN_WEBFETCH_DOMAINS; do [ \"$h\" = \"$d\" ] && exit 0; done\nexit 2\n",
+    )
+    .unwrap();
+    let checks = verify_no_claude(dir.path());
+    let c = checks.iter().find(|c| c.name == "WebFetch guard").unwrap();
+    assert_eq!(c.status, Status::Fail, "{checks:#?}");
+    assert!(c.detail.contains("ocgen-verify.invalid\\@"), "{c:#?}");
+}
+
+#[test]
+fn verify_fails_a_trusted_shared_hosting_wildcard() {
+    use ocgen::verify::Status;
+    let dir = tempdir().unwrap();
+    claude_default("vw").scaffold(dir.path(), false).unwrap();
+    let mut s = settings_of(dir.path());
+    s["env"]["OCGEN_WEBFETCH_DOMAINS"] = "docs.rs *.github.io".into();
+    fs::write(
+        dir.path().join(".claude/settings.json"),
+        serde_json::to_string_pretty(&s).unwrap(),
+    )
+    .unwrap();
+    let checks = verify_no_claude(dir.path());
+    let c = checks.iter().find(|c| c.name == "WebFetch guard").unwrap();
+    assert_eq!(c.status, Status::Fail, "{checks:#?}");
+    assert!(
+        c.detail.contains("*.github.io") && c.detail.contains("--untrust-domain"),
+        "{c:#?}"
+    );
 }
 
 #[test]
@@ -4970,7 +5022,7 @@ fn inquire_registers_the_notes_hook() {
     assert_eq!(notes["matcher"], "Write|Edit|MultiEdit");
     let cmd = notes["hooks"][0]["command"].as_str().unwrap();
     assert!(
-        cmd.contains("ocgen hook inquire-notes") && cmd.contains("ocgen-hooks 6"),
+        cmd.contains("ocgen hook inquire-notes") && cmd.contains("ocgen-hooks 7"),
         "{cmd}"
     );
     assert_eq!(notes["hooks"][0]["shell"], "bash");

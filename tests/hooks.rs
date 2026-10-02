@@ -722,95 +722,107 @@ fn check_failure_shows_the_tail_of_its_output() {
 
 const TRUSTED: &[(&str, &str)] = &[("OCGEN_WEBFETCH_DOMAINS", "docs.rs *.amazon.com")];
 const NO_SITES: &[(&str, &str)] = &[("OCGEN_WEBFETCH_DOMAINS", "")];
+const TRUSTED_NO_JQ: &[(&str, &str)] = &[
+    ("OCGEN_WEBFETCH_DOMAINS", "docs.rs *.amazon.com"),
+    ("OCGEN_NO_JQ", "1"),
+];
+const NO_SITES_NO_JQ: &[(&str, &str)] = &[("OCGEN_WEBFETCH_DOMAINS", ""), ("OCGEN_NO_JQ", "1")];
+const UNSET_NO_JQ: &[(&str, &str)] = &[("OCGEN_NO_JQ", "1")];
 
-#[test]
-fn webfetch_guard_parity() {
-    let step = |env: &'static [(&'static str, &'static str)], payload: &'static str| Step {
+/// The WebFetch guard scenario, for a given trusted / empty / unset environment.
+fn webfetch_steps(
+    trusted: &'static [(&'static str, &'static str)],
+    no_sites: &'static [(&'static str, &'static str)],
+    unset: &'static [(&'static str, &'static str)],
+) -> Vec<Step> {
+    let step = |env: &'static [(&'static str, &'static str)], url: &'static str| Step {
         hook: "https-only-fetch",
         env,
         setup: none,
-        payload,
+        payload: url,
     };
+    let t = |payload| step(trusted, payload);
+    vec![
+        // Trusted hosts over https:// pass — exact host, any case, with a port,
+        // JSON-escaped slashes, and any subdomain of a `*.` entry.
+        t(r#"{"tool_name":"WebFetch","tool_input":{"url":"https://docs.rs/serde","prompt":"x"}}"#),
+        t(r#"{"tool_name":"WebFetch","tool_input":{"url":"https://DOCS.RS/","prompt":"x"}}"#),
+        t(
+            r#"{"tool_name":"WebFetch","tool_input":{"url":"https://docs.rs:443/x?q=1#f","prompt":"x"}}"#,
+        ),
+        t(
+            r#"{"tool_name":"WebFetch","tool_input":{"url":"https:\/\/docs.rs\/serde","prompt":"x"}}"#,
+        ),
+        t(
+            r#"{"tool_name":"WebFetch","tool_input":{"url":"https://docs.aws.amazon.com/s3/","prompt":"x"}}"#,
+        ),
+        // Everything else is blocked: plain http (any case or escaping)…
+        t(r#"{"tool_name":"WebFetch","tool_input":{"url":"http://docs.rs/serde","prompt":"x"}}"#),
+        t(r#"{"tool_name":"WebFetch","tool_input":{"url":"HTTP://Docs.RS/","prompt":"x"}}"#),
+        t(r#"{"tool_name":"WebFetch","tool_input":{"url":"http:\/\/docs.rs\/","prompt":"x"}}"#),
+        t(r#"{"tool_name":"WebFetch","tool_input":{"url":"  http://docs.rs","prompt":"x"}}"#),
+        // …untrusted hosts, look-alikes, and the bare domain of a `*.` entry…
+        t(r#"{"tool_name":"WebFetch","tool_input":{"url":"https://example.com/","prompt":"x"}}"#),
+        t(
+            r#"{"tool_name":"WebFetch","tool_input":{"url":"https://docs.rs.evil.com/","prompt":"x"}}"#,
+        ),
+        t(r#"{"tool_name":"WebFetch","tool_input":{"url":"https://evildocs.rs/","prompt":"x"}}"#),
+        t(r#"{"tool_name":"WebFetch","tool_input":{"url":"https://amazon.com/","prompt":"x"}}"#),
+        t(
+            r#"{"tool_name":"WebFetch","tool_input":{"url":"https://evil.com/?docs.rs","prompt":"x"}}"#,
+        ),
+        // …a host part a URL parser could read differently: a user part (either
+        // side), a backslash (a path separator to WHATWG parsers, so the real
+        // host is evil.com), %-escapes and whitespace…
+        t(
+            r#"{"tool_name":"WebFetch","tool_input":{"url":"https://docs.rs@evil.com/","prompt":"x"}}"#,
+        ),
+        t(
+            r#"{"tool_name":"WebFetch","tool_input":{"url":"https://u@docs.rs:443/x?q=1#f","prompt":"x"}}"#,
+        ),
+        t(
+            r#"{"tool_name":"WebFetch","tool_input":{"url":"https://evil.com\\@docs.rs/","prompt":"x"}}"#,
+        ),
+        t(
+            r#"{"tool_name":"WebFetch","tool_input":{"url":"https://evil.com\u005c@docs.rs/","prompt":"x"}}"#,
+        ),
+        t(
+            r#"{"tool_name":"WebFetch","tool_input":{"url":"https://evil.com\\.docs.aws.amazon.com/","prompt":"x"}}"#,
+        ),
+        t(r#"{"tool_name":"WebFetch","tool_input":{"url":"https://docs.rs%2e/","prompt":"x"}}"#),
+        t(r#"{"tool_name":"WebFetch","tool_input":{"url":"https://docs.rs\t/","prompt":"x"}}"#),
+        t(r#"{"tool_name":"WebFetch","tool_input":{"url":"https://docs.rs:/","prompt":"x"}}"#),
+        // …a URL it can't read (fail closed)…
+        t(r#"{"tool_name":"WebFetch","tool_input":{"prompt":"x"}}"#),
+        t("not json"),
+        // …and with no trusted sites (empty or unset), every fetch.
+        step(
+            no_sites,
+            r#"{"tool_name":"WebFetch","tool_input":{"url":"https://docs.rs/","prompt":"x"}}"#,
+        ),
+        step(
+            unset,
+            r#"{"tool_name":"WebFetch","tool_input":{"url":"https://docs.rs/","prompt":"x"}}"#,
+        ),
+    ]
+}
+
+#[test]
+fn webfetch_guard_parity() {
+    check("webfetch", &webfetch_steps(TRUSTED, NO_SITES, &[]));
+}
+
+/// Without jq the script reads the URL with grep/sed — same verdicts.
+#[test]
+fn webfetch_guard_parity_without_jq() {
     check(
-        "webfetch",
-        &[
-            // Trusted hosts over https:// pass — exact host, any case, with a
-            // port or user part, and any subdomain of a `*.` entry.
-            step(
-                TRUSTED,
-                r#"{"tool_name":"WebFetch","tool_input":{"url":"https://docs.rs/serde","prompt":"x"}}"#,
-            ),
-            step(
-                TRUSTED,
-                r#"{"tool_name":"WebFetch","tool_input":{"url":"https://DOCS.RS/","prompt":"x"}}"#,
-            ),
-            step(
-                TRUSTED,
-                r#"{"tool_name":"WebFetch","tool_input":{"url":"https://u@docs.rs:443/x?q=1#f","prompt":"x"}}"#,
-            ),
-            step(
-                TRUSTED,
-                r#"{"tool_name":"WebFetch","tool_input":{"url":"https://docs.aws.amazon.com/s3/","prompt":"x"}}"#,
-            ),
-            // Everything else is blocked: plain http (any case or escaping)…
-            step(
-                TRUSTED,
-                r#"{"tool_name":"WebFetch","tool_input":{"url":"http://docs.rs/serde","prompt":"x"}}"#,
-            ),
-            step(
-                TRUSTED,
-                r#"{"tool_name":"WebFetch","tool_input":{"url":"HTTP://Docs.RS/","prompt":"x"}}"#,
-            ),
-            step(
-                TRUSTED,
-                r#"{"tool_name":"WebFetch","tool_input":{"url":"http:\/\/docs.rs\/","prompt":"x"}}"#,
-            ),
-            step(
-                TRUSTED,
-                r#"{"tool_name":"WebFetch","tool_input":{"url":"  http://docs.rs","prompt":"x"}}"#,
-            ),
-            // …untrusted hosts, look-alikes, and the bare domain of a `*.` entry…
-            step(
-                TRUSTED,
-                r#"{"tool_name":"WebFetch","tool_input":{"url":"https://example.com/","prompt":"x"}}"#,
-            ),
-            step(
-                TRUSTED,
-                r#"{"tool_name":"WebFetch","tool_input":{"url":"https://docs.rs.evil.com/","prompt":"x"}}"#,
-            ),
-            step(
-                TRUSTED,
-                r#"{"tool_name":"WebFetch","tool_input":{"url":"https://evildocs.rs/","prompt":"x"}}"#,
-            ),
-            step(
-                TRUSTED,
-                r#"{"tool_name":"WebFetch","tool_input":{"url":"https://amazon.com/","prompt":"x"}}"#,
-            ),
-            step(
-                TRUSTED,
-                r#"{"tool_name":"WebFetch","tool_input":{"url":"https://evil.com/?docs.rs","prompt":"x"}}"#,
-            ),
-            step(
-                TRUSTED,
-                r#"{"tool_name":"WebFetch","tool_input":{"url":"https://docs.rs@evil.com/","prompt":"x"}}"#,
-            ),
-            // …a URL it can't read (fail closed)…
-            step(
-                TRUSTED,
-                r#"{"tool_name":"WebFetch","tool_input":{"prompt":"x"}}"#,
-            ),
-            step(TRUSTED, "not json"),
-            // …and with no trusted sites (empty or unset), every fetch.
-            step(
-                NO_SITES,
-                r#"{"tool_name":"WebFetch","tool_input":{"url":"https://docs.rs/","prompt":"x"}}"#,
-            ),
-            step(
-                &[],
-                r#"{"tool_name":"WebFetch","tool_input":{"url":"https://docs.rs/","prompt":"x"}}"#,
-            ),
-        ],
+        "webfetch (no jq)",
+        &webfetch_steps(TRUSTED_NO_JQ, NO_SITES_NO_JQ, UNSET_NO_JQ),
     );
+}
+
+#[test]
+fn webfetch_guard_messages() {
     let env = |pairs: &[(&str, &str)]| -> HashMap<String, String> {
         pairs
             .iter()
@@ -842,6 +854,42 @@ fn webfetch_guard_parity() {
         none.stderr.contains("no documentation sites are trusted"),
         "{}",
         none.stderr
+    );
+    // Parity pins sh to Rust; these pin Rust to the right verdicts.
+    for url in [
+        "https://docs.rs/",
+        "https://DOCS.RS:443/x?q=1#f",
+        "https://docs.rs./",
+        "https://docs.aws.amazon.com/",
+    ] {
+        assert_eq!(run(TRUSTED, url).code, 0, "{url} is trusted");
+    }
+    for url in [
+        "https://badgithub.com/",
+        "https://evildocs.rs/",
+        "https://docs.rs.evil.com/",
+        "https://docs.rs@evil.com/",
+        "https://u@docs.rs/",
+        "https://evil.com\\@docs.rs/",
+        "https://evil.com\\.docs.aws.amazon.com/",
+        "https://evil.com\t@docs.rs/",
+        "https://docs.rs%2e/",
+        "https://docs.rs:/",
+        "https://docs.rs:x/",
+        "https://[::1]/",
+        "https://\u{ff44}ocs.rs/",
+    ] {
+        assert_eq!(run(TRUSTED, url).code, 2, "{url:?} must be blocked");
+    }
+    let bypass = run(TRUSTED, "https://evil.com\\@docs.rs/");
+    assert_eq!(
+        bypass.code, 2,
+        "a backslash is a path separator to the fetcher"
+    );
+    assert!(
+        bypass.stderr.contains("plain host name"),
+        "{}",
+        bypass.stderr
     );
     assert!(ocgen::hooks::NAMES.contains(&"https-only-fetch"));
 }
@@ -931,5 +979,5 @@ fn inquire_notes_renders_the_view_and_the_script_is_a_no_op() {
     assert_eq!(o.code, 0);
     assert!(o.stderr.starts_with("inquire-notes:"), "{o:?}");
     assert!(ocgen::hooks::NAMES.contains(&"inquire-notes"));
-    assert_eq!(ocgen::hooks::PROTOCOL, "ocgen-hooks 6");
+    assert_eq!(ocgen::hooks::PROTOCOL, "ocgen-hooks 7");
 }

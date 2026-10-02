@@ -8,15 +8,16 @@
 #   exit 2 -> block (stderr shown to the agent).   exit 0 -> allow.
 payload=$(cat)
 
-# The URL: jq when available, otherwise the "url" string value. JSON may escape
-# "/" as "\/", so backslashes are dropped before comparing.
+# The URL: jq when available, otherwise the "url" string value with JSON's "\/"
+# turned back into "/". Any other escape is left as a backslash, which the host
+# check below blocks (fail closed).
 if [ -z "${OCGEN_NO_JQ:-}" ] && command -v jq >/dev/null 2>&1; then
     url=$(printf '%s' "$payload" | jq -r '.tool_input.url // empty' 2>/dev/null)
 else
     url=$(printf '%s' "$payload" | tr '\n' ' ' | grep -oE '"url"[[:space:]]*:[[:space:]]*"([^"\\]|\\.)*"' |
-        head -n 1 | sed -E 's/^"url"[[:space:]]*:[[:space:]]*"(.*)"$/\1/')
+        head -n 1 | sed -E 's/^"url"[[:space:]]*:[[:space:]]*"(.*)"$/\1/' | sed 's#\\/#/#g')
 fi
-url=$(printf '%s' "$url" | tr -d '\\' | sed -E 's/^[[:space:]]+//')
+url=$(printf '%s' "$url" | sed -E 's/^[[:space:]]+//')
 lower=$(printf '%s' "$url" | tr 'A-Z' 'a-z')
 case "$lower" in
 https://*) ;;
@@ -34,13 +35,25 @@ http://*)
     ;;
 esac
 
-# The host: drop the scheme, then path/query/fragment, user part, port and a trailing dot.
-host=${lower#https://}
-host=${host%%/*}
-host=${host%%\?*}
-host=${host%%#*}
-host=${host##*@}
-host=${host%%:*}
+# The host part (up to path/query/fragment) must be a plain host name with an
+# optional port. Anything else — a user part, a backslash (a path separator to
+# WHATWG parsers, so "evil.com\@docs.rs" goes to evil.com), %-escapes,
+# whitespace, non-ASCII — could be read differently by the fetcher than here,
+# so it is blocked rather than parsed.
+auth=${lower#https://}
+auth=${auth%%/*}
+auth=${auth%%\?*}
+auth=${auth%%#*}
+host=${auth%%:*}
+port=1
+case "$auth" in *:*) port=${auth#*:} ;; esac
+plain=1
+case "$host" in "" | *[!abcdefghijklmnopqrstuvwxyz0123456789.-]*) plain= ;; esac
+case "$port" in "" | *[!0123456789]*) plain= ;; esac
+if [ -z "$plain" ]; then
+    echo "Blocked: the URL's host must be a plain host name (letters, digits, dots, hyphens) with an optional port — no user@ part, backslash, %-escape or spaces. Fetch https://<host>/<path> instead, or skip it." >&2
+    exit 2
+fi
 host=${host%.}
 
 if [ -z "$(printf '%s' "${OCGEN_WEBFETCH_DOMAINS:-}" | tr -d '[:space:]')" ]; then
