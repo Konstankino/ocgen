@@ -22,6 +22,8 @@ use crate::prompt::{
 use crate::ui;
 
 mod mcp;
+#[cfg(test)]
+mod regeneration_tests;
 mod skill;
 #[cfg(test)]
 mod tests;
@@ -80,6 +82,9 @@ pub fn run_templates_edit(path_arg: Option<String>) -> Result<()> {
 
     let path = match path_arg {
         Some(p) => {
+            if !templates::is_overridable(&p) {
+                bail!("{p} can't be edited — {}", templates::NOT_OVERRIDABLE);
+            }
             if !available.iter().any(|a| a == &p) {
                 bail!(
                     "unknown template: {p}\n\
@@ -267,14 +272,18 @@ fn pick_target(theme: &ColorfulTheme, given: Option<TargetArg>) -> Result<Target
 }
 
 /// Write the project under `target`. Existing files that differ from what ocgen
-/// generates are listed first and the user decides what happens to each; whatever
-/// gets overwritten is backed up. Identical files and the user-owned `CLAUDE.md`
-/// are not conflicts.
+/// generates (or that it would remove) are listed first and the user decides what
+/// happens to each; whatever gets overwritten or removed is backed up. Identical
+/// files and the user-owned `CLAUDE.md` are not conflicts. An existing ocgen
+/// project's configuration is replaced only when the user says so.
 fn write_with_review(theme: &ColorfulTheme, project: &Project, target: &Path) -> Result<()> {
+    let Some(old_state) = confirm_replacing_state(theme, project, target)? else {
+        return Ok(());
+    };
     let plan = project.plan_changes(target)?;
     let conflicts: Vec<&FileChange> = plan
         .iter()
-        .filter(|c| c.kind == ChangeKind::Modified)
+        .filter(|c| matches!(c.kind, ChangeKind::Modified | ChangeKind::Removed))
         .collect();
     let keep = if conflicts.is_empty() {
         BTreeSet::new()
@@ -292,16 +301,71 @@ fn write_with_review(theme: &ColorfulTheme, project: &Project, target: &Path) ->
         }
     };
 
-    let applied: Vec<FileChange> = plan
+    let mut applied: Vec<FileChange> = plan
         .into_iter()
         .filter(|c| !keep.contains(&c.rel))
         .collect();
+    // The replaced state goes into the same backup folder as the files.
+    applied.extend(old_state);
     let backup = Project::backup(target, &applied)?;
     let written = project.scaffold_keeping(target, &keep)?;
     report_written(&written);
     report_backup(target, backup.as_deref());
     report_kept(&keep);
     Ok(())
+}
+
+/// `ocgen new` where an ocgen project already is: its state holds what no file
+/// does (skills, MCP servers, permission rules, settings), so replacing it needs
+/// a yes — and no terminal means no. `Ok(None)`: stop, nothing written.
+/// `Ok(Some(states))`: go ahead, backing up `states` (none when nothing changes).
+fn confirm_replacing_state(
+    theme: &ColorfulTheme,
+    project: &Project,
+    target: &Path,
+) -> Result<Option<Vec<FileChange>>> {
+    let existing: Vec<&str> = Target::state_files()
+        .into_iter()
+        .filter(|rel| target.join(rel).is_file())
+        .collect();
+    if existing.is_empty() {
+        return Ok(Some(Vec::new()));
+    }
+    let ours = target.join(project.target.state_file());
+    let same = existing == [project.target.state_file()]
+        && std::fs::read_to_string(&ours).ok() == Some(project.rendered_state()?);
+    if same {
+        return Ok(Some(Vec::new())); // re-running with the same answers changes nothing
+    }
+    let how = "change it with `ocgen edit …` / `ocgen add …`, or repair it with `ocgen doctor`";
+    if !crate::prompt::can_ask() {
+        bail!(
+            "{} already has an ocgen project — {how} (replacing its configuration needs a terminal to confirm)",
+            target.display()
+        );
+    }
+    if !ask_confirm(
+        theme,
+        "This directory already has an ocgen project. Replace its configuration? (the current state is backed up)",
+        "Its skills, MCP servers, permission rules and settings are replaced by these answers.",
+        false,
+    )? {
+        println!("Nothing written — {how}.");
+        return Ok(None);
+    }
+    Ok(Some(
+        existing
+            .into_iter()
+            .map(|rel| FileChange {
+                path: target.join(rel),
+                rel: rel.to_string(),
+                kind: ChangeKind::Modified,
+                old: None,
+                new: None,
+                hand_edited: None,
+            })
+            .collect(),
+    ))
 }
 
 /// Where the previous versions went, if anything was backed up.
@@ -395,13 +459,15 @@ fn choose_keep(
         _ => return Ok(None),
     }
 
-    let per_file = [
-        "Overwrite".to_string(),
-        "Keep mine".to_string(),
-        "Show full diff".to_string(),
-    ];
     let mut keep = BTreeSet::new();
     for c in conflicts {
+        // A file ocgen no longer generates is removed, not overwritten.
+        let per_file = if c.kind == ChangeKind::Removed {
+            ["Remove", "Keep mine", "Show it"]
+        } else {
+            ["Overwrite", "Keep mine", "Show full diff"]
+        }
+        .map(String::from);
         loop {
             match ask_select(theme, &c.rel, "", &per_file, 0)? {
                 0 => break,
@@ -416,13 +482,35 @@ fn choose_keep(
     Ok(Some(keep))
 }
 
-/// One existing file that differs from what would be generated, with its diff.
+/// One existing file that differs from what would be generated (or that ocgen no
+/// longer generates), with its diff.
 fn print_conflict(c: &FileChange, context: usize, max: usize) {
+    if c.kind == ChangeKind::Removed {
+        let why = match c.hand_edited {
+            Some(true) => "no longer generated, and edited by hand — removed unless you keep it",
+            _ => "no longer generated — removed unless you keep it",
+        };
+        println!(
+            "  {} {}  {}",
+            style("-").red(),
+            style(&c.rel).bold(),
+            ui::muted(why)
+        );
+        if let Some(old) = &c.old {
+            print_diff(old, "", context, max);
+        }
+        return;
+    }
+    let why = if c.old.is_none() {
+        "already exists — not readable as text, so it can't be shown"
+    } else {
+        "already exists — differs"
+    };
     println!(
         "  {} {}  {}",
         style("~").yellow(),
         style(&c.rel).bold(),
-        ui::muted("already exists — differs")
+        ui::muted(why)
     );
     if let (Some(old), Some(new)) = (&c.old, &c.new) {
         print_diff(old, new, context, max);
@@ -485,28 +573,6 @@ fn build_claude_project(
         };
     }
     configure_hooks_extra(theme, &mut p)?;
-    p.claude.sandbox.enabled = ask_confirm(
-        theme,
-        "Enable the sandbox (OS-level containment of shell commands)?",
-        "Bash runs with limited file and network access (Seatbelt on macOS, bubblewrap on Linux). Safer, but new network hosts prompt until allowed. Off by default.",
-        false,
-    )?;
-    if p.claude.sandbox.enabled {
-        let extra = ask(
-            theme,
-            "  Extra allowed domains (comma-separated; optional)",
-            "GitHub and the npm/crates/PyPI/Go/Terraform registries are already allowed.",
-            Some(&p.claude.sandbox.extra_domains.join(", ")),
-            true,
-        )?;
-        p.claude.sandbox.extra_domains = ocgen::claude::split_list(&extra);
-        p.claude.sandbox.allow_credentials = ask_confirm(
-            theme,
-            "  Let sandboxed commands use your push/deploy credentials?",
-            "No (recommended): ~/.ssh, the gh token, AWS and kube config are withheld, so an agent can't push or deploy however the command is phrased — you do those steps.",
-            false,
-        )?;
-    }
     if !ask_confirm(
         theme,
         "Include the /intake + /refine workflow commands?",
@@ -599,6 +665,18 @@ fn build_claude_project(
         OutputArg::Plugin => (false, true),
         OutputArg::Both => (true, true),
     };
+    // Asked after the team: with the approval gate on, it defaults to on. A
+    // plugin alone writes no settings.json, so there is nothing to sandbox.
+    if project_out {
+        let gate = p.claude.team.enabled && p.claude.team.approval_gate;
+        configure_sandbox(
+            theme,
+            &mut p.claude.sandbox,
+            "Enable the sandbox (OS-level containment of shell commands)?",
+            &sandbox_help(gate),
+            gate && ocgen::claude::sandbox_supported(),
+        )?;
+    }
     p.claude.output = Output {
         project: project_out,
         plugin: plugin_out,
@@ -712,8 +790,84 @@ pub fn run_edit_team(path: String) -> Result<()> {
     ui::banner("edit agent teams");
     let theme = ColorfulTheme::default();
     project.claude.team = configure_claude_team(&theme, &project.claude.team)?;
+    let team = &project.claude.team;
+    if team.enabled
+        && team.approval_gate
+        && project.claude.output.project
+        && !project.claude.sandbox.enabled
+    {
+        // The gate is only a pattern match without the sandbox: offer it, never
+        // switch it on unasked.
+        if ocgen::claude::sandbox_supported() {
+            // Enter keeps an earlier no.
+            let default = !project.claude.sandbox.declined;
+            configure_sandbox(
+                &theme,
+                &mut project.claude.sandbox,
+                "Enable the sandbox? (recommended — without it the approval gate is advisory)",
+                &sandbox_help(true),
+                default,
+            )?;
+        } else {
+            ui::warning(SANDBOX_UNSUPPORTED);
+        }
+    }
     let written = project.scaffold(&root, true)?;
     report_written(&written);
+    Ok(())
+}
+
+/// What native Windows users are told about the sandbox and the approval gate.
+const SANDBOX_UNSUPPORTED: &str = "The sandbox isn't available on native Windows, so here the approval gate is advisory (it still applies where these settings run on macOS, Linux or WSL2).";
+
+/// The sandbox question's help line. With the approval gate on it says what the
+/// gate amounts to without the sandbox.
+fn sandbox_help(gate: bool) -> String {
+    sandbox_help_for(ocgen::claude::sandbox_supported(), gate)
+}
+
+/// [`sandbox_help`] for a platform that does (`supported`) or doesn't sandbox.
+fn sandbox_help_for(supported: bool, gate: bool) -> String {
+    let what = "Bash runs with limited file and network access (Seatbelt on macOS, bubblewrap on Linux/WSL2); new network hosts prompt until allowed.";
+    match (supported, gate) {
+        (false, true) => format!("{what} {SANDBOX_UNSUPPORTED}"),
+        (false, false) => format!("{what} It isn't available on native Windows; it applies where these settings run on macOS, Linux or WSL2."),
+        (true, true) => format!("{what} It keeps sandboxed commands (and the hooks' check and formatter) off the approval store and away from the credentials ocgen knows about. Without it the approval gate is advisory only: a pattern match an agent can phrase its way around."),
+        (true, false) => format!("{what} Off by default."),
+    }
+}
+
+/// Ask whether to sandbox shell commands (Enter gives `default`), then the extra
+/// domains and credentials when it's on. Only a no to a yes default is recorded
+/// as declined: keeping a default of no (no approval gate yet) is no opt-out, so
+/// turning the gate on later still offers the sandbox as yes. Shared by `new`
+/// and `edit team`.
+fn configure_sandbox(
+    theme: &ColorfulTheme,
+    sandbox: &mut ocgen::claude::SandboxProfile,
+    question: &str,
+    help: &str,
+    default: bool,
+) -> Result<()> {
+    sandbox.enabled = ask_confirm(theme, question, help, default)?;
+    sandbox.declined = !sandbox.enabled && default;
+    if !sandbox.enabled {
+        return Ok(());
+    }
+    let extra = ask(
+        theme,
+        "  Extra allowed domains (comma-separated; optional)",
+        "GitHub and the npm/crates/PyPI/Go/Terraform registries are already allowed.",
+        Some(&sandbox.extra_domains.join(", ")),
+        true,
+    )?;
+    sandbox.extra_domains = ocgen::claude::split_list(&extra);
+    sandbox.allow_credentials = ask_confirm(
+        theme,
+        "  Let sandboxed commands use your push/deploy credentials?",
+        "No (recommended): SSH keys, the gh and git tokens, cloud and kube logins and the npm/cargo/PyPI/gem tokens are withheld, so a push or publish that needs them fails — you do those steps. A credential an OS keychain helper hands out (osxkeychain, Git Credential Manager) may still be reachable; branch protection on the server is the real stop for pushes.",
+        false,
+    )?;
     Ok(())
 }
 
@@ -765,7 +919,8 @@ pub fn run_edit_permissions(path: String, changes: PermissionsCli) -> Result<()>
     }
     let written = project.scaffold(&root, true)?;
     report_written(&written);
-    print_extra_permissions(&project);
+    // As saved: the write also adopts rules added to settings.json by hand.
+    print_extra_permissions(&Project::load_state(&root)?);
     Ok(())
 }
 
@@ -775,7 +930,7 @@ fn edit_permissions_interactively(theme: &ColorfulTheme, project: &mut Project) 
     ui::kv(
         "generated by ocgen",
         &ui::muted(&format!(
-            "{} allow, {} ask, {} deny (always kept)",
+            "{} allow, {} ask, {} deny (always kept; yours can make one stricter, never looser)",
             generated.allow.len(),
             generated.ask.len(),
             generated.deny.len()
@@ -1100,7 +1255,8 @@ fn print_intent(project: &Project, root: &Path) {
     );
 }
 
-/// Tell the user when a generated deny/ask rule makes theirs pointless.
+/// Tell the user when their rule meets a generated copy in another list: a looser
+/// one has no effect, a stricter one takes the generated rule's place.
 fn warn_if_shadowed(project: &Project, list: ocgen::claude::RuleList, rule: &str) {
     if let Some(by) = project.shadowing_rule(list, rule) {
         ui::warning(&format!(
@@ -1109,21 +1265,30 @@ fn warn_if_shadowed(project: &Project, list: ocgen::claude::RuleList, rule: &str
             by.key(),
             by.key()
         ));
+    } else if let Some(from) = project.replaced_rule(list, rule) {
+        ui::warning(&format!(
+            "{rule} ({}) replaces ocgen's {} rule: settings.json moves it to {}, which is checked first",
+            list.key(),
+            from.key(),
+            list.key()
+        ));
     }
 }
 
 /// Every rule settings.json gets, list by list in the order Claude Code checks
-/// them, each marked as ocgen's or yours (and yours flagged when it has no effect).
+/// them, each marked as ocgen's or yours — read from the rules settings.json is
+/// rendered with, so yours that it leaves out are flagged with the rule that wins.
 fn print_all_permissions(project: &Project) {
     use ocgen::claude::RuleList;
     let generated = project.generated_permissions();
+    let effective = project.effective_permissions();
     let yours = &project.claude.permissions;
     ui::section("Permission rules (.claude/settings.json)");
     println!(
         "  {}",
         ui::muted("Claude Code checks deny, then ask, then allow; the first match wins.")
     );
-    let width = generated
+    let width = effective
         .entries()
         .iter()
         .chain(yours.entries().iter())
@@ -1132,45 +1297,84 @@ fn print_all_permissions(project: &Project) {
         .unwrap_or(0)
         .min(48);
     for list in [RuleList::Deny, RuleList::Ask, RuleList::Allow] {
-        let own: Vec<&String> = yours
+        let in_effect = effective.list(list);
+        let left_out: Vec<(&str, String)> = yours
             .list(list)
             .iter()
-            .filter(|r| !generated.list(list).contains(r))
+            .filter_map(|r| no_effect(&generated, &effective, list, r).map(|why| (r.trim(), why)))
             .collect();
-        let total = generated.list(list).len() + own.len();
         println!();
-        println!("  {}", style(format!("{} ({total})", list.key())).bold());
-        if total == 0 {
+        println!(
+            "  {}",
+            style(format!("{} ({})", list.key(), in_effect.len())).bold()
+        );
+        if in_effect.is_empty() && left_out.is_empty() {
             println!("    {}", ui::muted("none"));
         }
-        for rule in generated.list(list) {
-            println!("    {rule:<width$}  {}", ui::muted("ocgen"));
-        }
-        for rule in own {
-            let note = match project.shadowing_rule(list, rule) {
-                Some(by) => style(format!("yours — no effect: ocgen's {} rule wins", by.key()))
-                    .yellow()
-                    .to_string(),
-                None => style("yours").cyan().to_string(),
+        for rule in in_effect {
+            let note = if generated.list(list).contains(rule) {
+                ui::muted("ocgen")
+            } else {
+                match generated.list_of(rule) {
+                    Some(from) => style(format!("yours — replaces ocgen's {} rule", from.key())),
+                    None => style("yours".to_string()),
+                }
+                .cyan()
+                .to_string()
             };
+            println!("    {rule:<width$}  {note}");
+        }
+        for (rule, why) in left_out {
+            let note = style(format!("yours — no effect: {why}")).yellow();
             println!("    {rule:<width$}  {note}");
         }
     }
     println!();
     println!(
         "  {}",
-        ui::muted("Change yours with `ocgen edit permissions --allow/--ask/--deny/--remove <RULE>`; ocgen's always stay.")
+        ui::muted("Change yours with `ocgen edit permissions --allow/--ask/--deny/--remove <RULE>`; ocgen's stay, and yours can only make one stricter.")
     );
+}
+
+/// Why settings.json leaves out your `rule` in `list` — the rule that wins over
+/// it — or `None` when settings.json holds it there.
+fn no_effect(
+    generated: &ocgen::claude::PermissionRules,
+    effective: &ocgen::claude::PermissionRules,
+    list: ocgen::claude::RuleList,
+    rule: &str,
+) -> Option<String> {
+    let rule = rule.trim();
+    if effective.list(list).iter().any(|r| r == rule) {
+        return None;
+    }
+    Some(match effective.list_of(rule) {
+        Some(by) if generated.list(by).iter().any(|r| r == rule) => {
+            format!("ocgen's {} rule wins", by.key())
+        }
+        Some(by) => format!("your {} rule wins", by.key()),
+        None => "not a valid rule".to_string(),
+    })
 }
 
 fn print_extra_permissions(project: &Project) {
     let entries = project.claude.permissions.entries();
+    let generated = project.generated_permissions();
+    let effective = project.effective_permissions();
     ui::section(&format!("Your permission rules ({})", entries.len()));
     if entries.is_empty() {
         println!("  {}", ui::muted("none"));
     }
     for (list, rule) in entries {
-        println!("  {}  {rule}", style(format!("{:<5}", list.key())).cyan());
+        // Flag the ones settings.json leaves out (a stricter rule wins).
+        let note = match no_effect(&generated, &effective, list, &rule) {
+            Some(why) => style(format!("  no effect: {why}")).yellow().to_string(),
+            None => String::new(),
+        };
+        println!(
+            "  {}  {rule}{note}",
+            style(format!("{:<5}", list.key())).cyan()
+        );
     }
 }
 
@@ -1495,6 +1699,15 @@ fn print_claude_summary(project: &Project, target_dir: &str) {
         out.push("plugin");
     }
     ui::kv("output", &out.join(" + "));
+    let gate = project.claude.team.enabled && project.claude.team.approval_gate;
+    let sandbox = match (project.claude.sandbox.enabled, gate) {
+        (true, _) => "on".to_string(),
+        (false, true) => style("off — the approval gate is advisory")
+            .yellow()
+            .to_string(),
+        (false, false) => ui::muted("off"),
+    };
+    ui::kv("sandbox", &sandbox);
 }
 
 /// `ocgen add agent` — reload the saved project, append one agent, re-render.
@@ -1718,6 +1931,13 @@ pub fn run_doctor(path: String, dry_run: bool, yes: bool) -> Result<()> {
     ui::banner("doctor");
     ui::kv("project", &style(&project.project_name).bold().to_string());
     ui::kv("path", &ui::muted(&target.display().to_string()));
+    // A newer ocgen's state is never rewritten: say so before asking anything.
+    if let Err(e) = project.check_version() {
+        if !dry_run {
+            return Err(e);
+        }
+        ui::warning(&e.to_string());
+    }
 
     let fixes = project.doctor();
     if fixes.is_empty() {
@@ -1730,11 +1950,11 @@ pub fn run_doctor(path: String, dry_run: bool, yes: bool) -> Result<()> {
         }
     }
 
-    // Permission rules added to settings.json by hand would be dropped by the
-    // rewrite: offer to keep them as the user's rules first, so the plan below
+    // Permission rules and MCP servers added by hand would be dropped by the
+    // rewrite: offer to keep them as the user's own first, so the plan below
     // already includes them.
     if project.target == Target::ClaudeCode {
-        adopt_hand_added_permissions(&theme, &mut project, &target, dry_run, yes)?;
+        adopt_hand_added(&theme, &mut project, &target, dry_run, yes)?;
     }
 
     // Show exactly what regenerating would do before touching anything.
@@ -1764,18 +1984,13 @@ pub fn run_doctor(path: String, dry_run: bool, yes: bool) -> Result<()> {
     }
     let conflicts: Vec<&FileChange> = plan
         .iter()
-        .filter(|c| c.kind == ChangeKind::Modified)
+        .filter(|c| matches!(c.kind, ChangeKind::Modified | ChangeKind::Removed))
         .collect();
     let keep = if changed.is_empty() || yes || !crate::prompt::can_ask() {
         BTreeSet::new()
     } else if conflicts.is_empty() {
-        // Only new or stale files: nothing of yours is overwritten.
-        if !ask_confirm(
-            &theme,
-            "Apply these changes?",
-            "Stale files are backed up before they're removed.",
-            true,
-        )? {
+        // Only new files: nothing of yours is overwritten or removed.
+        if !ask_confirm(&theme, "Apply these changes?", "", true)? {
             println!("Nothing written.");
             return Ok(());
         }
@@ -1814,9 +2029,10 @@ pub fn run_doctor(path: String, dry_run: bool, yes: bool) -> Result<()> {
         ocgen::render::PrePush::Installed(_) => {
             println!("  {}", ui::muted("git pre-push hook: installed (blocks unapproved pushes made under Claude Code)"))
         }
-        ocgen::render::PrePush::Foreign(_) => ui::warning(
-            "another git pre-push hook is in place — add `sh .claude/hooks/git-pre-push.sh || exit 1` to it to gate pushes",
-        ),
+        ocgen::render::PrePush::Foreign(_) => ui::warning(&format!(
+            "another git pre-push hook is in place — add `{}` to it to gate pushes",
+            ocgen::render::pre_push_chain(&target)
+        )),
         ocgen::render::PrePush::NotApplicable => {}
     }
     println!();
@@ -1832,35 +2048,55 @@ pub fn run_doctor(path: String, dry_run: bool, yes: bool) -> Result<()> {
     Ok(())
 }
 
-/// Find permission rules added to settings.json by hand and offer to keep them as
-/// the user's own (as `ocgen edit permissions --allow …` would). A dry run or
-/// `--yes` keeps them without asking, as does a run without a terminal; a dry run
+/// Find permission rules (settings.json) and MCP servers (.mcp.json) added by hand
+/// and offer to keep them as the user's own (as `ocgen edit permissions --allow …`
+/// or `ocgen add mcp` would). A dry run or `--yes` keeps them without asking, as
+/// does a run without a terminal — as every `ocgen add`/`edit` does; a dry run
 /// only plans with them (nothing is saved).
-fn adopt_hand_added_permissions(
+fn adopt_hand_added(
     theme: &ColorfulTheme,
     project: &mut Project,
     target: &Path,
     dry_run: bool,
     yes: bool,
 ) -> Result<()> {
-    let found = project.hand_added_permissions(target);
-    let entries = found.rules.entries();
-    if entries.is_empty() && found.invalid.is_empty() {
+    let found = project.hand_added(target);
+    for rel in &found.linked {
+        println!("  {}", ui::muted(&ocgen::render::linked_note(rel)));
+    }
+    if found.is_empty() {
         return Ok(());
     }
-    ui::section(&format!(
-        "Permission rules added by hand ({})",
-        entries.len()
-    ));
+    let entries = found.rules.entries();
+    let n = entries.len() + found.servers.len();
+    let what = match (entries.len(), found.servers.len()) {
+        (_, 0) => "Permission rules",
+        (0, _) => "MCP servers",
+        _ => "Permission rules and MCP servers",
+    };
+    ui::section(&format!("{what} added by hand ({n})"));
     for (list, rule) in &entries {
         println!("  {}  {rule}", style(format!("{:<5}", list.key())).cyan());
+    }
+    for s in &found.servers {
+        println!(
+            "  {}  {}  {}",
+            style("mcp  ").cyan(),
+            s.name,
+            ui::muted(&s.target())
+        );
     }
     for bad in &found.invalid {
         ui::warning(&format!(
             "{bad}: not a valid permission rule — it will be dropped"
         ));
     }
-    if entries.is_empty() {
+    for bad in &found.invalid_servers {
+        ui::warning(&format!(
+            "MCP server '{bad}': ocgen can't use that name (letters, digits, '-', '_') — it will be dropped"
+        ));
+    }
+    if n == 0 {
         return Ok(());
     }
     let keep = dry_run
@@ -1868,33 +2104,54 @@ fn adopt_hand_added_permissions(
         || !crate::prompt::can_ask()
         || ask_confirm(
             theme,
-            "Keep them as your rules?",
-            "Saved like `ocgen edit permissions`, so every regeneration keeps them. No = they're dropped (the old settings.json is backed up).",
+            "Keep them as yours?",
+            "Saved like `ocgen edit permissions` / `ocgen add mcp`, so every regeneration keeps them. No = they're dropped (the old files are backed up).",
             true,
         )?;
     if !keep {
         return Ok(());
     }
-    let mut kept = 0;
+    let problems = project.adopt(&found);
+    for p in &problems {
+        ui::warning(p);
+    }
+    // A looser copy of a generated rule is kept, but settings.json leaves it out.
+    let mut no_effect = 0;
     for (list, rule) in &entries {
-        match project.claude.permissions.add(*list, rule) {
-            Ok(_) => {
-                kept += 1;
-                warn_if_shadowed(project, *list, rule);
+        if !project.claude.permissions.list(*list).contains(rule) {
+            continue;
+        }
+        match project.shadowing_rule(*list, rule) {
+            Some(by) => {
+                no_effect += 1;
+                ui::warning(&ocgen::render::no_effect_note(*list, rule, by));
             }
-            Err(e) => ui::warning(&e.to_string()),
+            None => warn_if_shadowed(project, *list, rule),
         }
     }
+    let rules = entries.len() - problems.len() - no_effect;
+    let servers: Vec<&str> = found.servers.iter().map(|s| s.name.as_str()).collect();
+    let mut kept = Vec::new();
+    if rules > 0 {
+        kept.push(format!("{rules} rule(s)"));
+    }
+    if !servers.is_empty() {
+        kept.push(format!("MCP server(s) {}", servers.join(", ")));
+    }
+    if kept.is_empty() {
+        return Ok(());
+    }
+    let kept = kept.join(" and ");
     if dry_run {
         println!(
             "  {}",
             ui::muted(&format!(
-                "would keep {kept} rule(s) as yours — the plan below includes them"
+                "would keep {kept} as yours — the plan below includes them"
             ))
         );
     } else {
         ui::success(&format!(
-            "kept {kept} rule(s) as yours (see `ocgen edit permissions --list`)"
+            "kept {kept} as yours (see `ocgen edit permissions --list`, `ocgen landscape`)"
         ));
     }
     Ok(())
@@ -1904,7 +2161,14 @@ fn adopt_hand_added_permissions(
 fn print_change(c: &FileChange) {
     let (mark, note) = match c.kind {
         ChangeKind::Added => (style("+").green(), "new".to_string()),
-        ChangeKind::Removed => (style("-").red(), "stale — no longer generated".to_string()),
+        ChangeKind::Removed => (
+            style("-").red(),
+            match c.hand_edited {
+                Some(true) => "no longer generated — edited by hand, so backed up before it's removed",
+                _ => "stale — no longer generated",
+            }
+            .to_string(),
+        ),
         ChangeKind::Modified => (
             style("~").yellow(),
             match c.hand_edited {
@@ -2497,7 +2761,7 @@ fn configure_hooks_extra(theme: &ColorfulTheme, p: &mut Project) -> Result<()> {
     let items = [
         "Re-inject context after compaction — re-points Claude at the rules and any /inquire notes",
         "Desktop notification when Claude needs you or a turn fails",
-        "Log settings/skills changes made during a session (.claude/audit/, git-ignored)",
+        "Log settings/skills changes made during a session (.claude/audit/, git-ignored), and block one that would weaken a gate",
         "Drop a no-op `cd <this folder> &&` so read-only commands after it don't ask (blockReadsOutsideWorkingDirectories)",
     ];
     let x = &p.claude.hooks_extra;
@@ -2505,7 +2769,7 @@ fn configure_hooks_extra(theme: &ColorfulTheme, p: &mut Project) -> Result<()> {
     let chosen = ask_multi(
         theme,
         "Extra hooks",
-        "Space toggles, Enter confirms. None of these ever block Claude.",
+        "Space toggles, Enter confirms. Only the settings log ever blocks, and only a change that weakens a gate.",
         &items.iter().map(|x| x.to_string()).collect::<Vec<_>>(),
         &defaults,
     )?;

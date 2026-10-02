@@ -1432,9 +1432,9 @@ fn team_governance_wires_settings_command_and_hooks() {
     assert_eq!(s["env"]["TEAM_RISK_ROUNDS"], "1");
     assert_eq!(s["env"]["TEAM_APPROVAL_GATE"], "1");
 
-    // The execution-approval gate is a PreToolUse hook with a tool-name matcher.
+    // The execution-approval gate is a PreToolUse hook for every tool (no matcher).
     let pre = &s["hooks"]["PreToolUse"][0];
-    assert!(pre["matcher"].as_str().unwrap().contains("Bash"));
+    assert!(pre.get("matcher").is_none());
     assert!(pre["hooks"][0]["command"]
         .as_str()
         .unwrap()
@@ -2047,8 +2047,8 @@ fn subagent_confidence_gate_blocks_low_confidence_writers() {
 
     // The worker writes a file → now it must be confident.
     fs::write(wt.join("new.rs"), "// change\n").unwrap();
-    assert_eq!(run(&ev("done. Confidence: 97%")), 0);
-    assert_eq!(run(&ev("done. Confidence: 50%")), 2);
+    assert_eq!(run(&ev("done.\\nConfidence: 97%")), 0);
+    assert_eq!(run(&ev("done.\\nConfidence: 50%")), 2);
     assert_eq!(run(&ev("done, no rating")), 2);
 
     // Threshold 0 disables the gate even for a low-confidence writer.
@@ -2260,34 +2260,30 @@ fn confidence_gate_is_parallel_safe_per_completion() {
         child.wait().unwrap().code().unwrap()
     };
 
-    // Confidence stated in THIS completion — read from its own stdin (race-free).
-    assert_eq!(
-        run(
-            r#"{"task_id":"t1","summary":"done. Confidence: 97%"}"#,
-            "96"
-        ),
-        0
-    );
-    assert_eq!(
-        run(
-            r#"{"task_id":"t2","summary":"done. Confidence: 50%"}"#,
-            "96"
-        ),
-        2
-    );
-    assert_eq!(
-        run(r#"{"task_id":"t3","summary":"done, no rating"}"#, "96"),
-        2
-    );
-    // Fallback: per-task marker keyed by this event's task id.
-    fs::create_dir_all(dir.path().join(".claude/team/confidence")).unwrap();
-    fs::write(dir.path().join(".claude/team/confidence/t5.txt"), "97").unwrap();
-    assert_eq!(run(r#"{"task_id":"t5","summary":"done"}"#, "96"), 0);
+    // Each completion is judged on its own teammate's last message (its
+    // transcript) — never another's, and never the lead-written task text.
+    let ev = |tid: &str, said: &str| {
+        serde_json::json!({
+            "task_id": tid,
+            "task_subject": "Raise parser confidence to 97%",
+            "team_name": "session-x",
+            "transcript_path": teammate_said(dir.path(), tid, said),
+        })
+        .to_string()
+    };
+    assert_eq!(run(&ev("t1", "done.\nConfidence: 97%"), "96"), 0);
+    assert_eq!(run(&ev("t2", "done.\nConfidence: 50%"), "96"), 2);
+    assert_eq!(run(&ev("t3", "done, no rating"), "96"), 2);
+    // Fallback: a marker keyed by this event's team and task.
+    fs::create_dir_all(dir.path().join(".claude/team/confidence/session-x")).unwrap();
+    fs::write(
+        dir.path().join(".claude/team/confidence/session-x/t5.txt"),
+        "97",
+    )
+    .unwrap();
+    assert_eq!(run(&ev("t5", "done"), "96"), 0);
     // Threshold 0 disables the gate.
-    assert_eq!(
-        run(r#"{"task_id":"t6","summary":"Confidence: 10%"}"#, "0"),
-        0
-    );
+    assert_eq!(run(&ev("t6", "Confidence: 10%"), "0"), 0);
 }
 
 #[test]
@@ -2473,6 +2469,23 @@ fn run_hook(hook: &Path, envs: &[(&str, &str)], payload: &str) -> (i32, String, 
     )
 }
 
+/// A teammate's transcript under `root` whose last assistant message is `text`
+/// (one content block per line, keys in Claude Code's order); its path, as the
+/// shell writes it.
+fn teammate_said(root: &Path, name: &str, text: &str) -> String {
+    let p = root.join(format!("tr/{name}.jsonl"));
+    fs::create_dir_all(p.parent().unwrap()).unwrap();
+    let text = serde_json::to_string(text).unwrap();
+    fs::write(
+        &p,
+        format!(
+            r#"{{"isSidechain":false,"message":{{"role":"assistant","content":[{{"type":"text","text":{text}}}]}},"type":"assistant","uuid":"u1"}}"#
+        ) + "\n",
+    )
+    .unwrap();
+    ocgen::paths::for_shell(&p)
+}
+
 /// A git worktree with an uncommitted change, so the subagent gate treats it as a writer.
 fn dirty_worktree(root: &Path) -> std::path::PathBuf {
     let wt = root.join("wt");
@@ -2562,7 +2575,12 @@ fn loop_guard_resets_after_the_gate_passes() {
         ("LOOP_GUARD_MAX_BLOCKS", "3"),
     ];
     let ev = |tid: &str, msg: &str| {
-        format!(r#"{{"session_id":"s1","task_id":"{tid}","summary":"{msg}"}}"#)
+        serde_json::json!({
+            "session_id": "s1",
+            "task_id": tid,
+            "transcript_path": teammate_said(dir.path(), tid, msg),
+        })
+        .to_string()
     };
     assert_eq!(run_hook(&hook, &env, &ev("t1", "no rating")).0, 2);
     assert_eq!(run_hook(&hook, &env, &ev("t1", "no rating")).0, 2);
@@ -3568,7 +3586,7 @@ fn stale_generated_commands_are_removed_but_user_commands_kept() {
     let dir = tempdir().unwrap();
     let cmds = dir.path().join(".claude/commands");
     fs::create_dir_all(&cmds).unwrap();
-    fs::write(cmds.join("deliver.md"), "---\ndescription: Take a complex task end-to-end\nargument-hint: \"[the goal]\"\n---\nold\n").unwrap();
+    fs::write(cmds.join("deliver.md"), "---\ndescription: Take a complex task end-to-end — sharpen, plan, research in parallel, gated execution\nargument-hint: \"[the goal]\"\n---\nold\n").unwrap();
     fs::write(
         cmds.join("my-own.md"),
         "---\ndescription: mine\n---\nkeep me\n",
@@ -3774,7 +3792,7 @@ fn plan_classifies_added_modified_unchanged_and_stale() {
     fs::create_dir_all(dir.path().join(".claude/commands")).unwrap();
     fs::write(
         dir.path().join(".claude/commands/deliver.md"),
-        "---\ndescription: old\n---\nx\n",
+        "---\ndescription: Take a complex task end-to-end — sharpen, plan, research in parallel, gated execution\n---\nx\n",
     )
     .unwrap();
 
@@ -3934,14 +3952,18 @@ fn managed_policy_enforces_the_safety_line() {
 
 // ---------------------------------------------------------------- verify -----
 
+/// verify in-process, with no user settings: never the developer's own
+/// ~/.claude/settings.json.
 fn verify_no_claude(dir: &Path) -> Vec<ocgen::verify::Check> {
     let p = Project::load_state(dir).unwrap();
+    let user = tempdir().unwrap();
     ocgen::verify::verify(
         &p,
         dir,
         &ocgen::verify::Options {
             run_claude: false,
             run_check: false,
+            user_settings: Some(user.path().join("settings.json")),
         },
     )
 }
@@ -4021,22 +4043,21 @@ fn verify_catches_drift_bad_settings_broken_hooks_and_statusline() {
         Status::Warn,
         "unknown key teamateMode"
     );
-    assert_eq!(status_of(&checks, "statusline"), Status::Fail);
     assert_eq!(
         status_of(&checks, "hook scripts"),
         Status::Fail,
         "loop-guard.sh missing"
     );
-    // With no compatible ocgen on PATH the command falls back to the (broken)
-    // script, so the gate must be reported as not blocking.
-    let gate = checks
-        .iter()
-        .find(|c| c.name.contains("approval gate"))
-        .unwrap();
-    assert!(
-        gate.status == Status::Fail || gate.detail.contains("ocgen hook"),
-        "{gate:?}"
-    );
+    // Scripts that aren't what ocgen generates are reported, never run — and a
+    // gate that isn't ocgen's fails, unverified.
+    for (name, status) in [
+        ("statusline", Status::Warn),
+        ("approval gate", Status::Fail),
+    ] {
+        let c = checks.iter().find(|c| c.name.contains(name)).unwrap();
+        assert_eq!(c.status, status, "{c:?}");
+        assert!(c.detail.contains("not running a hand-edited"), "{c:?}");
+    }
 }
 
 // ----------------------------------------------------- credentials + store -----
@@ -4056,12 +4077,13 @@ fn credentials_and_the_approval_store_are_off_limits() {
         "Read(~/.ssh/**)",
         "Read(~/.aws/**)",
         "Read(~/.config/gh/**)",
-        "Read(~/.claude/ocgen/**)",
         "Edit(~/.claude/ocgen/**)",
         "Bash(ocgen approve*)",
     ] {
         assert!(deny.contains(&want), "missing {want}: {deny:?}");
     }
+    // Readable: the pre-push hook reads an approval from inside the sandbox.
+    assert!(!deny.contains(&"Read(~/.claude/ocgen/**)"), "{deny:?}");
 }
 
 #[test]
@@ -4849,7 +4871,8 @@ fn the_noop_cd_hook_is_wired_after_the_gate_and_verified() {
     let c = checks.iter().find(|c| c.name == "no-op cd").unwrap();
     assert_eq!(c.status, Status::Pass, "{checks:#?}");
 
-    // A hook that strips every cd fails verification.
+    // A hand-edited hook (here: one that strips every cd) is reported, never run.
+    // That the probe catches such a hook is a unit test in src/verify.rs.
     fs::write(
         dir.path().join(".claude/hooks/drop-noop-cd.sh"),
         "#!/bin/sh\njq -c '{hookSpecificOutput:{hookEventName:\"PreToolUse\",updatedInput:(.tool_input|.command=\"echo ok\")}}'\n",
@@ -4871,15 +4894,10 @@ fn the_noop_cd_hook_is_wired_after_the_gate_and_verified() {
         serde_json::to_string_pretty(&s).unwrap(),
     )
     .unwrap();
-    if std::process::Command::new("jq")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        let checks = verify_no_claude(dir.path());
-        let c = checks.iter().find(|c| c.name == "no-op cd").unwrap();
-        assert_eq!(c.status, Status::Fail, "{checks:#?}");
-    }
+    let checks = verify_no_claude(dir.path());
+    let c = checks.iter().find(|c| c.name == "no-op cd").unwrap();
+    assert_eq!(c.status, Status::Warn, "{checks:#?}");
+    assert!(c.detail.contains("not running a hand-edited"), "{c:?}");
 
     // Off: no group, no script.
     let dir = tempdir().unwrap();
@@ -5016,45 +5034,18 @@ fn verify_checks_that_plain_http_fetches_are_blocked() {
         "{checks:#?}"
     );
 
-    // A hook that lets http:// through fails verification.
+    // A hand-edited guard (here: one that lets everything through) is never
+    // run, and fails unverified. That the probe catches leaky guards — the old
+    // one too — is a unit test in src/verify.rs.
     fs::write(
         dir.path().join(".claude/hooks/https-only-fetch.sh"),
         "#!/bin/sh\nexit 0\n",
     )
     .unwrap();
-    let mut s = settings_of(dir.path());
-    for g in s["hooks"]["PreToolUse"].as_array_mut().unwrap() {
-        if g["matcher"] == "WebFetch" {
-            g["hooks"][0]["command"] =
-                "sh \"$CLAUDE_PROJECT_DIR/.claude/hooks/https-only-fetch.sh\"".into();
-        }
-    }
-    fs::write(
-        dir.path().join(".claude/settings.json"),
-        serde_json::to_string_pretty(&s).unwrap(),
-    )
-    .unwrap();
-    let checks = verify_no_claude(dir.path());
-    assert_eq!(
-        status_of(&checks, "WebFetch guard"),
-        Status::Fail,
-        "{checks:#?}"
-    );
-
-    // So does the old guard: it dropped backslashes and took the host after the
-    // last `@`, so `https://evil\@docs.github.com/` passed (it goes to evil).
-    fs::write(
-        dir.path().join(".claude/hooks/https-only-fetch.sh"),
-        "#!/bin/sh\nurl=$(cat | sed -n 's/.*\"url\":\"\\([^\"]*\\)\".*/\\1/p' | tr -d '\\\\')\n\
-         case \"$url\" in https://*) ;; *) exit 2 ;; esac\n\
-         h=${url#https://}; h=${h%%/*}; h=${h##*@}; h=${h%%:*}\n\
-         for d in $OCGEN_WEBFETCH_DOMAINS; do [ \"$h\" = \"$d\" ] && exit 0; done\nexit 2\n",
-    )
-    .unwrap();
     let checks = verify_no_claude(dir.path());
     let c = checks.iter().find(|c| c.name == "WebFetch guard").unwrap();
     assert_eq!(c.status, Status::Fail, "{checks:#?}");
-    assert!(c.detail.contains("ocgen-verify.invalid\\@"), "{c:#?}");
+    assert!(c.detail.contains("https-only-fetch.sh differs"), "{c:#?}");
 }
 
 #[test]
@@ -5154,7 +5145,7 @@ fn inquire_registers_the_notes_hook() {
     assert_eq!(notes["matcher"], "Write|Edit|MultiEdit");
     let cmd = notes["hooks"][0]["command"].as_str().unwrap();
     assert!(
-        cmd.contains("ocgen hook inquire-notes") && cmd.contains("ocgen-hooks 8"),
+        cmd.contains("ocgen hook inquire-notes") && cmd.contains("ocgen-hooks 9"),
         "{cmd}"
     );
     assert_eq!(notes["hooks"][0]["shell"], "bash");
@@ -5199,35 +5190,23 @@ fn verify_reports_the_notes_view() {
         "{checks:#?}"
     );
 
-    // With the current binary, the view renders.
-    let set_cmd = |cmd: String| {
-        let mut s = settings_of(dir.path());
-        for g in s["hooks"]["PostToolUse"].as_array_mut().unwrap() {
-            if g.to_string().contains("inquire-notes") {
-                g["hooks"][0]["command"] = cmd.clone().into();
-            }
+    // A hand-edited hook command is reported, never run. (With the current
+    // binary on PATH the view renders: tests/verify_hardening.rs.)
+    let mut s = settings_of(dir.path());
+    for g in s["hooks"]["PostToolUse"].as_array_mut().unwrap() {
+        if g.to_string().contains("inquire-notes") {
+            g["hooks"][0]["command"] = "cat >/dev/null # inquire-notes".into();
         }
-        fs::write(
-            dir.path().join(".claude/settings.json"),
-            serde_json::to_string_pretty(&s).unwrap(),
-        )
-        .unwrap();
-    };
-    let bin = ocgen::paths::for_shell(Path::new(env!("CARGO_BIN_EXE_ocgen")));
-    set_cmd(format!("\"{bin}\" hook inquire-notes # inquire-notes"));
+    }
+    fs::write(
+        dir.path().join(".claude/settings.json"),
+        serde_json::to_string_pretty(&s).unwrap(),
+    )
+    .unwrap();
     let checks = verify_no_claude(dir.path());
     assert_eq!(
         status_of(&checks, "notes view"),
-        Status::Pass,
-        "{checks:#?}"
-    );
-
-    // A hook that renders nothing is reported.
-    set_cmd("cat >/dev/null # inquire-notes".into());
-    let checks = verify_no_claude(dir.path());
-    assert_ne!(
-        status_of(&checks, "notes view"),
-        Status::Pass,
+        Status::Warn,
         "{checks:#?}"
     );
 

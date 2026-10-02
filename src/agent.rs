@@ -61,6 +61,9 @@ pub struct Agent {
     pub prompt_file: bool,
     /// External prompt content (used when `prompt_file` is true).
     pub prompt_body: Option<String>,
+    /// Keys this ocgen doesn't know (written by a newer one), kept as they are.
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
 impl Agent {

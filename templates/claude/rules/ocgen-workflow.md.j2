@@ -20,8 +20,9 @@ For any complex or multi-step prompt, build self-checking into the plan — "don
 
 `{{ check_cmd }}` must pass before a worker that changed files may finish, and before a team
 task may be completed — a hook runs it and sends the work back while it fails, whatever
-confidence was stated. Run it yourself before you declare anything done, fix what it reports,
-and never claim success over a failing check. If it can't pass for a reason outside your
+confidence was stated (a hung check is stopped after `OCGEN_CHECK_TIMEOUT` seconds, 300 by
+default, and counts as failed). Run it yourself before you declare anything done, fix what it
+reports, and never claim success over a failing check. If it can't pass for a reason outside your
 change, stop and say so with the output.
 {% endif %}
 ## Loop discipline
@@ -81,9 +82,10 @@ Isolation is the *subagent* path. If Agent Teams is enabled, a named delegation 
 shared-directory teammate instead — for conflict-free parallel writes, use the worktree/subagent
 route above.
 {% if subagent_confidence %}
-Each worker that **edits files** must state `Confidence: NN%` in its final message and be
-≥ {{ subagent_confidence }}% confident — a `SubagentStop` hook blocks a writer below the bar and
-sends it back to keep working. Read-only workers are not gated.
+Each worker that **edits files** must end its final message with a line `Confidence: NN%` and be
+≥ {{ subagent_confidence }}% confident — a `SubagentStop` hook blocks a worker that changed its
+tree since it started (edits or commits) below the bar and sends it back to keep working. Only
+that line in its final message counts. Read-only workers are not gated.
 {%- endif %}
 {% endif %}
 {% if deliver %}

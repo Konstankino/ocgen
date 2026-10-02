@@ -979,7 +979,7 @@ fn inquire_notes_renders_the_view_and_the_script_is_a_no_op() {
     assert_eq!(o.code, 0);
     assert!(o.stderr.starts_with("inquire-notes:"), "{o:?}");
     assert!(ocgen::hooks::NAMES.contains(&"inquire-notes"));
-    assert_eq!(ocgen::hooks::PROTOCOL, "ocgen-hooks 8");
+    assert_eq!(ocgen::hooks::PROTOCOL, "ocgen-hooks 9");
 }
 
 // ---------------------------------------------------------- drop-noop-cd --
@@ -1101,8 +1101,12 @@ fn drop_noop_cd_strips_only_a_cd_into_the_current_folder() {
                 "cwd": cwd.map(String::from).unwrap_or(d.clone()),
             })
             .to_string();
-            let env: HashMap<String, String> =
+            let mut env: HashMap<String, String> =
                 [("CLAUDE_PROJECT_DIR".to_string(), d.clone())].into();
+            if cwd.is_some() {
+                // Windows spellings are one folder only under Git Bash / on Windows.
+                env.insert("MSYSTEM".into(), "MINGW64".into());
+            }
             let o = if rust {
                 let o = ocgen::hooks::run("drop-noop-cd", &payload, &env);
                 (o.code, o.stdout, o.stderr)

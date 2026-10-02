@@ -820,7 +820,8 @@ fn verify_exits_nonzero_on_failure() {
         .assert()
         .success()
         .stdout(contains("up to date"));
-    std::fs::write(dir.path().join(".claude/statusline.sh"), "exit 3\n").unwrap();
+    // A missing script fails to run (an edited one wouldn't be run at all).
+    std::fs::remove_file(dir.path().join(".claude/statusline.sh")).unwrap();
     ocgen()
         .args(["verify", "--no-claude"])
         .arg(dir.path())
@@ -1062,8 +1063,12 @@ fn edit_permissions_list_shows_every_rule_at_a_glance() {
         .assert()
         .success()
         // Every list, generated rules and yours, each with where it comes from.
-        .stdout(contains("allow (10)"))
-        .stdout(contains("ask (17)"))
+        // Counts are what settings.json holds: the shadowed allow isn't in it.
+        .stdout(contains("allow (9)"))
+        .stdout(contains(format!(
+            "ask ({})",
+            ocgen::claude::HIGH_IMPACT_ASK.len()
+        )))
         .stdout(contains("deny ("))
         .stdout(contains("Bash(ocgen approve*)"))
         .stdout(contains("Bash(gh run view:*)"))
@@ -1475,6 +1480,8 @@ fn notes_open_matches_topic_line_or_latest_and_prints_the_url() {
             .arg("--path")
             .arg(dir.path())
             .env("OCGEN_NOTES_BROWSER", &browser)
+            // The override runs detached; wait for it so the log is complete.
+            .env("OCGEN_NOTES_BROWSER_WAIT", "1")
             .env("OCGEN_NOTES_IDLE_SECS", "30")
             .env_remove("OCGEN_NOTES_OPEN")
             .assert()

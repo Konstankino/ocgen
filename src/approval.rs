@@ -1,8 +1,9 @@
 //! The execution-approval store. An approval is a small file OUTSIDE the project
 //! (`~/.claude/ocgen/approvals/<project-key>`) holding the UNIX time it expires,
 //! written by a human with `ocgen approve`. Keeping it out of the project — and
-//! time-limited — means an agent can't create it as a side effect of normal work,
-//! and a forgotten approval re-locks by itself.
+//! time-limited — means normal work never creates it by accident (the sandbox's
+//! denyWrite is what stops a deliberate attempt), and a forgotten approval
+//! re-locks by itself.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -10,6 +11,15 @@ use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
+
+/// The longest approval `ocgen approve --minutes` grants: 24 hours.
+pub const MAX_MINUTES: u64 = 24 * 60;
+
+/// How far ahead an expiry may lie and still count: the longest approval plus a
+/// little slack for clock skew. A file that says more was not written by `ocgen
+/// approve` (e.g. a hand-written `9999999999`), so it is no approval at all. The
+/// hook scripts use the same number (`max_ahead=…`; a test compares them).
+pub const MAX_AHEAD_SECS: u64 = MAX_MINUTES * 60 + 300;
 
 fn now() -> u64 {
     SystemTime::now()
@@ -40,8 +50,9 @@ fn root_of(project: &Path) -> String {
 }
 
 /// A file-name-safe key for the project: its root path with every byte outside
-/// `A-Za-z0-9._-` replaced by `_` (last 200 bytes). The gate script computes the
-/// same key with `tr -c 'A-Za-z0-9._-' '_' | tail -c 200`.
+/// `A-Za-z0-9._-` replaced by `_` (last 200 bytes). The hook scripts compute the
+/// same key with `LC_ALL=C tr -c 'A-Za-z0-9._-' '_' | LC_ALL=C tail -c 200` — byte
+/// by byte too, so a non-ASCII path gives the same key in a UTF-8 locale.
 pub fn project_key(project: &Path) -> String {
     let root = root_of(project);
     let bytes: Vec<u8> = root
@@ -64,8 +75,13 @@ pub fn marker_path(home: &Path, project: &Path) -> PathBuf {
         .join(project_key(project))
 }
 
-/// Approve high-impact actions for `minutes`. Returns the marker path.
+/// Approve high-impact actions for `minutes` (1 to [`MAX_MINUTES`]). Returns the
+/// marker path.
 pub fn grant(home: &Path, project: &Path, minutes: u64) -> Result<PathBuf> {
+    anyhow::ensure!(
+        (1..=MAX_MINUTES).contains(&minutes),
+        "an approval lasts 1 to {MAX_MINUTES} minutes (24 hours), not {minutes}"
+    );
     let marker = marker_path(home, project);
     if let Some(dir) = marker.parent() {
         fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
@@ -85,14 +101,17 @@ pub fn revoke(home: &Path, project: &Path) -> Result<bool> {
     Ok(false)
 }
 
-/// Seconds of approval left, or `None` when locked (no approval, or expired).
+/// Seconds of approval left, or `None` when locked: no approval, an expired one,
+/// or one ocgen didn't write — further out than `ocgen approve` can grant
+/// ([`MAX_AHEAD_SECS`]), or more than 12 digits (the hook scripts read no more).
 pub fn remaining(home: &Path, project: &Path) -> Option<u64> {
     let text = fs::read_to_string(marker_path(home, project)).ok()?;
-    let expiry: u64 = text
-        .chars()
-        .filter(char::is_ascii_digit)
-        .collect::<String>()
-        .parse()
-        .ok()?;
-    expiry.checked_sub(now()).filter(|left| *left > 0)
+    let digits: String = text.chars().filter(char::is_ascii_digit).collect();
+    if digits.len() > 12 {
+        return None;
+    }
+    let expiry: u64 = digits.parse().ok()?;
+    expiry
+        .checked_sub(now())
+        .filter(|left| (1..=MAX_AHEAD_SECS).contains(left))
 }

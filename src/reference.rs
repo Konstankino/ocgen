@@ -17,7 +17,9 @@ const AGENT_FIELDS: &[Field] = &[
         label: "name",
         detail: "Identifier for the agent. Becomes the file .opencode/agents/<name>.md and the \
                  @<name> other agents (and you) use to invoke or delegate to it. Use a short, \
-                 lowercase word with no spaces.",
+                 lowercase word with no spaces. It must be a plain identifier, unique ignoring \
+                 case (names that differ only in case collide on macOS and Windows); a state \
+                 file holding any other name fails to load.",
         example: "editor",
     },
     Field {
@@ -117,7 +119,11 @@ const AGENT_FIELDS: &[Field] = &[
     Field {
         label: "system prompt (body)",
         detail: "The agent's system prompt — its persona and standing instructions, in Markdown. \
-                 The token $ARGUMENTS is replaced with the user's task when the agent is invoked.",
+                 The token $ARGUMENTS is replaced with the user's task when the agent is invoked. \
+                 A coordinator's body is rendered as a template, so it may use {{ subagents }}; \
+                 text that isn't a valid template, or names a value ocgen doesn't know (a GitHub \
+                 Actions ${{ secrets.X }}, a Helm {{ .Values }}), is written exactly as typed, \
+                 with a warning.",
         example: "You are a proofreader. Fix errors and list the changes you made.",
     },
     Field {
@@ -125,7 +131,8 @@ const AGENT_FIELDS: &[Field] = &[
         detail: "If enabled, the system prompt is stored in a separate file \
                  .opencode/prompts/<name>.txt and referenced from the agent, instead of being \
                  inlined. Useful for long coordinator prompts, and the external prompt can \
-                 reference {{ subagents }} to list the team dynamically.",
+                 reference {{ subagents }} to list the team dynamically. Like a coordinator's \
+                 body, a prompt that isn't a valid template is written as typed, with a warning.",
         example: "enabled for coordinators",
     },
     Field {
@@ -198,7 +205,10 @@ const CLAUDE_FIELDS: &[Field] = &[
                  http/sse (a URL). Reference secrets as ${VAR}, never literal values — `landscape` \
                  flags literal tokens. Pre-approving writes enabledMcpjsonServers so the team isn't \
                  prompted once they trust the folder. Add with `ocgen add mcp`; change or remove \
-                 with `ocgen edit mcp`.",
+                 with `ocgen edit mcp`. A server added to .mcp.json by hand (e.g. `claude mcp add \
+                 --scope project`) is kept as yours by the next add, edit or doctor, with the \
+                 fields ocgen doesn't model (timeout, oauth) under its `extra` key in the state; \
+                 one you removed with ocgen stays removed.",
         example: "tf: stdio  npx -y terraform-mcp   env TF_TOKEN=${TF_TOKEN}",
     },
     Field {
@@ -249,23 +259,71 @@ const CLAUDE_FIELDS: &[Field] = &[
         label: "team governance",
         detail: "Optional gates layered on Agent Teams. Plan gate: /team-plan builds the shared \
                  task list + risk register and the TaskCreated hook blocks work until \
-                 .claude/team/plan.md is APPROVED. Confidence gate: a teammate must record \
-                 >= N% (0 disables) before completing a task. Risk rounds: every risk gets a \
-                 mitigation round before teammates go idle.",
+                 .claude/team/plan.md says `Status: APPROVED session=<id>`; editing the plan \
+                 (ticking a task or closing a risk isn't an edit), or a later session or team \
+                 run, makes the approval stale until you approve again. Confidence gate: a \
+                 teammate's own last message must hold a line `Confidence: NN%` >= N (the last \
+                 such line counts; 0 disables) before its task completes — never the task's \
+                 subject or description. Risk rounds: every risk, owned by a teammate name \
+                 (`Owner: implementer-1`), gets a mitigation round before that teammate goes idle; \
+                 a role as owner holds no one.",
         example: "--team-confidence 96  --no-plan-gate  --no-risk-rounds",
     },
     Field {
         label: "execution approval gate",
-        detail: "Deterministic human-approval line for high-impact EXTERNAL actions (ssh, cloud \
-                 mutations, git push/merge, gh pr merge/release, terraform/kubectl/helm, deploys, \
-                 publishes). A PreToolUse hook matches the command (through flags and quoting) and \
-                 blocks it until a human runs `ocgen approve` from their own terminal. The \
-                 approval is time-limited (30 minutes by default) and stored outside the project \
-                 (~/.claude/ocgen/approvals), so an agent can't create it; the command itself \
-                 refuses to run under Claude Code. A git pre-push hook blocks any unapproved \
-                 push however it is launched, and reads of credentials are denied. Emitted \
-                 independently of the quality-gate hook stubs so it is never silently off.",
+        detail: "A human-approval line for high-impact EXTERNAL actions (ssh, cloud mutations, \
+                 git push/merge, gh pr merge/release/workflow run, terraform/pulumi/kubectl/helm, \
+                 deploys, publishes). A PreToolUse hook checks every tool call's command and file \
+                 path (through flags, quoting and shell operators) and blocks a match until you \
+                 run `ocgen approve` from your own terminal (1 to 1440 minutes, 30 by default; \
+                 the command refuses to run under Claude Code). The approval is stored outside \
+                 the project (~/.claude/ocgen/approvals), and tool calls that name it are \
+                 blocked. The hook is a text match — a guard-rail, not a boundary: the sandbox \
+                 is the boundary (sandboxed commands can't write the approval store and, unless \
+                 you allow credentials, run without the credentials ocgen knows about), and it \
+                 is on by default with the gate on macOS, Linux and WSL2. A git pre-push hook \
+                 is a backstop for pushes made under Claude Code (`--no-verify` skips it); \
+                 branch protection on the server is what really stops a push. With the gate on, \
+                 settings.json always denies Edit(~/.claude/ocgen/**) and `ocgen approve`, and \
+                 asks before edits to the gate's hooks, settings, state file, statusline and git \
+                 hooks, and before `ocgen edit` and `ocgen doctor`.",
         example: "on by default with --team;  --no-approval-gate to disable",
+    },
+    Field {
+        label: "worker confidence",
+        detail: "The bar (default 96, 0 = off) for a subagent that changed its tree since it \
+                 started — edits or commits; SubagentStart records where it began. Its final \
+                 message must hold a line `Confidence: NN%` at or above the bar; a number \
+                 mentioned mid-sentence doesn't count, and the last such line wins. Read-only \
+                 roles (SUBAGENT_READONLY_ROLES: agents without Write/Edit, plus the built-in \
+                 Explore and Plan) are never gated.",
+        example: "96  (SUBAGENT_CONFIDENCE_THRESHOLD in settings.json)",
+    },
+    Field {
+        label: "sandbox",
+        detail: "Runs Bash with OS-level file and network limits (Seatbelt on macOS, bubblewrap \
+                 on Linux/WSL2; native Windows has none), a starter network allowlist plus your \
+                 extra domains, and no unsandboxed retries. Sandboxed commands can't write the \
+                 approval store (keep ~/.claude a real folder: a symbolic link there is protected \
+                 where it points, not by its name), the statusline, ocgen's state file or \
+                 .git/hooks. Unless you allow credentials, it withholds the credential files and \
+                 variables of ssh, git, GitHub, the clouds, Docker and the package registries; \
+                 one an OS keychain helper hands out may still be reachable. It contains shell \
+                 commands only, not the file tools, hooks or MCP servers (the hooks run the \
+                 check and formatter in a sandbox of their own). The wizard asks after the \
+                 Agent Teams questions and defaults to yes when the approval gate is on and the \
+                 platform has a sandbox; without it the gate is advisory. claude.sandbox.declined \
+                 records a no to that default, so `ocgen edit team` keeps your no as its default.",
+        example: "sandbox.enabled: true   extra_domains: [registry.example.com]",
+    },
+    Field {
+        label: "permission rules (yours)",
+        detail: "Your own allow/ask/deny rules (`ocgen edit permissions`), kept in the state and \
+                 merged with ocgen's in settings.json by strictness, deny > ask > allow: a rule \
+                 stricter than a generated one takes its place, a looser one has no effect, and \
+                 each rule sits in one list. Rules added to settings.json by hand are adopted as \
+                 yours by the next add, edit or doctor. `--list` shows what settings.json holds.",
+        example: "--deny \"Bash(git push:*)\"   (moves it from ocgen's ask list to deny)",
     },
     Field {
         label: "check command",
@@ -273,7 +331,14 @@ const CLAUDE_FIELDS: &[Field] = &[
                  before a team task may complete — e.g. cargo test or terraform validate. An \
                  objective gate next to the self-reported confidence: a failing check sends the \
                  work back with the tail of its output, whatever confidence was stated. It runs \
-                 in the worker's own directory. Empty = off.",
+                 in the worker's own directory; team checks run one at a time, and a task may \
+                 narrow it with a `Check: <this command> <args>` line in its description (any \
+                 other Check: line is ignored). It is stopped, with all it started, after \
+                 OCGEN_CHECK_TIMEOUT seconds (300). With the sandbox on, the hooks run it — and \
+                 the formatter — in an OS sandbox that can't write the approval store, ~/.claude, \
+                 shell and git config or the project's Claude settings and git hooks, and \
+                 (unless you allow credentials) without credentials; on Linux without bubblewrap \
+                 the check isn't run and counts as failed. Empty = off.",
         example: "cargo test",
     },
     Field {

@@ -18,8 +18,8 @@ worktree subagent cannot edit the main checkout. Give each subagent only its sli
 Note: if Agent Teams is enabled, a *named* delegation becomes a shared-directory teammate, not an
 isolated subagent. For isolated parallel *writes*, use this subagent/worktree path.
 
-Each worker must state `Confidence: NN%` in its final message before finishing (a `SubagentStop`
-hook can block a writer that isn't confident enough).
+Each worker must end its final message with a line `Confidence: NN%` before finishing (a
+`SubagentStop` hook can block a writer that isn't confident enough; only that line counts).
 
 ## 3. Consolidate and merge back
 When the subagents finish, review their results, then **merge each worktree's branch** back into

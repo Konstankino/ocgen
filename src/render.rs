@@ -1,8 +1,8 @@
 //! Turning a [`Project`] into concrete files.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use anyhow::{anyhow, bail, Context, Result};
 use minijinja::{context, Environment};
@@ -10,10 +10,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::agent::Agent;
-use crate::claude::{ClaudeConfig, PermissionRules, RuleList, Skill};
+use crate::claude::{ClaudeConfig, McpServer, PermissionRules, RuleList, Skill};
 use crate::manifest::{Manifest, Provider};
 use crate::target::Target;
 use crate::templates;
+
+/// The state file's schema. Bump it when a field changes meaning, so an older
+/// ocgen refuses to regenerate a project instead of misreading its state.
+pub const STATE_SCHEMA: u32 = 1;
 
 /// Everything needed to render a scaffold. Serializable so it can be saved to
 /// the target's state file (e.g. `.opencode/.ocgen-state.json`) and reloaded by
@@ -21,6 +25,10 @@ use crate::templates;
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)] // tolerate state files from older versions (see migrate_state)
 pub struct Project {
+    /// The ocgen that last wrote this state (empty: one from before it was recorded).
+    pub ocgen_version: String,
+    /// [`STATE_SCHEMA`] of that ocgen (0: from before it was recorded).
+    pub schema: u32,
     /// Which platform this project targets. Defaults to OpenCode for old state files.
     pub target: Target,
     pub project_name: String,
@@ -38,7 +46,13 @@ pub struct Project {
     pub skills: Vec<Skill>,
     /// Fingerprint of every file the last scaffold wrote (relative path → hash), so
     /// `doctor` can tell a hand edit from an ocgen change.
-    pub generated: std::collections::BTreeMap<String, String>,
+    pub generated: BTreeMap<String, String>,
+    /// The permission rules the last scaffold generated (`None`: not recorded), so
+    /// a rule ocgen stopped generating is never mistaken for one added by hand.
+    pub generated_rules: Option<PermissionRules>,
+    /// Keys this ocgen doesn't know (written by a newer one), kept as they are.
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, Value>,
 }
 
 /// Outcome of [`Project::install_pre_push`].
@@ -47,10 +61,42 @@ pub enum PrePush {
     /// ocgen's hook was written (or refreshed) at this path.
     Installed(PathBuf),
     /// Another pre-push hook (or a custom `core.hooksPath`) is in place; it was
-    /// left alone. Chain `.claude/hooks/git-pre-push.sh` from it to get the gate.
+    /// left alone. Chain `.claude/hooks/git-pre-push.sh` from it ([`pre_push_chain`])
+    /// to get the gate.
     Foreign(PathBuf),
     /// Not a git repository, not a Claude project, or the approval gate is off.
     NotApplicable,
+}
+
+/// The project's half of the git pre-push gate. Someone else's pre-push hook may
+/// chain it ([`pre_push_chain`]), so once generated it is never removed: with the
+/// gate off it lets every push through.
+const PRE_PUSH_SCRIPT: &str = ".claude/hooks/git-pre-push.sh";
+
+/// The line to add to another pre-push hook (husky, lefthook, your own) to chain
+/// the gate of the project at `root`: it runs the project's script, and passes
+/// when there is none. git runs hooks from the repository's top, so a project in
+/// a subfolder is named by its path from there.
+pub fn pre_push_chain(root: &Path) -> String {
+    let prefix = std::process::Command::new("git")
+        .arg("-C")
+        .arg(crate::paths::plain(root))
+        .args(["rev-parse", "--show-prefix"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default();
+    let script = format!("{prefix}{PRE_PUSH_SCRIPT}");
+    let plain = script
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b"._-/".contains(&b));
+    let script = if plain {
+        script
+    } else {
+        format!("'{}'", script.replace('\'', "'\\''"))
+    };
+    format!("[ ! -f {script} ] || sh {script} || exit 1")
 }
 
 /// User-owned files: ocgen creates them once (with its default) and never
@@ -66,13 +112,192 @@ fn user_owned(rel: &Path) -> bool {
     USER_OWNED.contains(&rel.as_str())
 }
 
-/// Permission rules found in `settings.json` that ocgen didn't write.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// Opens ocgen's block in a `.gitattributes`. ocgen adds the block once and never
+/// rewrites the file: the rest of it (and the block, once there) is the user's.
+const GITATTRIBUTES_MARK: &str =
+    "# ocgen: generated files keep LF line endings (CRLF breaks the sh hooks)";
+
+/// The project's block: the trees ocgen generates (`text=auto`, so binaries
+/// stay untouched).
+const GITATTRIBUTES_PROJECT: &str = "\
+# ocgen: generated files keep LF line endings (CRLF breaks the sh hooks)
+.claude/** text=auto eol=lf
+.mcp.json text=auto eol=lf
+.worktreeinclude text=auto eol=lf
+# ocgen: end
+";
+
+/// The plugin tree's block: it is published as a repository of its own.
+const GITATTRIBUTES_PLUGIN: &str = "\
+# ocgen: generated files keep LF line endings (CRLF breaks the sh hooks)
+* text=auto eol=lf
+# ocgen: end
+";
+
+/// `existing` with ocgen's `block` appended, or `None` when it already has it.
+fn with_gitattributes_block(existing: Option<&str>, block: &str) -> Option<String> {
+    match existing {
+        Some(s) if s.contains(GITATTRIBUTES_MARK) => None,
+        Some(s) if s.trim().is_empty() => Some(block.to_string()),
+        Some(s) => {
+            let sep = if s.ends_with('\n') { "" } else { "\n" };
+            Some(format!("{s}{sep}\n{block}"))
+        }
+        None => Some(block.to_string()),
+    }
+}
+
+/// Things on disk that ocgen didn't write and that a regeneration would drop
+/// unless they're adopted as the user's own: permission rules in `settings.json`
+/// and MCP servers in `.mcp.json`.
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct HandAdded {
     /// Valid rules, by list, that could be adopted as the user's own.
     pub rules: PermissionRules,
     /// Entries that aren't valid permission rules (never adopted).
     pub invalid: Vec<String>,
+    /// MCP servers in `.mcp.json` that neither this project nor the last write had.
+    pub servers: Vec<McpServer>,
+    /// Hand-added servers whose name ocgen can't use (never adopted).
+    pub invalid_servers: Vec<String>,
+    /// `settings.json` / `.mcp.json` when it is a symbolic link (relative paths):
+    /// nothing is adopted from it, as ocgen never writes through it.
+    pub linked: Vec<String>,
+}
+
+impl HandAdded {
+    pub fn is_empty(&self) -> bool {
+        self.rules.is_empty()
+            && self.invalid.is_empty()
+            && self.servers.is_empty()
+            && self.invalid_servers.is_empty()
+    }
+}
+
+/// What [`Project::apply`] did, for the short report a regeneration prints.
+#[derive(Debug, Clone, Default)]
+pub struct Applied {
+    /// Every file written.
+    pub written: Vec<PathBuf>,
+    /// Where the previous versions of the overwritten and removed files went.
+    pub backup: Option<PathBuf>,
+    /// Files removed because ocgen no longer generates them (relative paths).
+    pub removed: Vec<String>,
+    /// Overwritten or removed files that had been edited by hand (relative paths).
+    pub hand_edited: Vec<String>,
+    /// What was found added by hand and adopted (or dropped, when invalid).
+    pub adopted: HandAdded,
+    /// Adopted rules settings.json leaves out, as (list, rule, the generated list
+    /// that holds it): a looser copy of a generated rule has no effect.
+    pub no_effect: Vec<(RuleList, String, RuleList)>,
+    /// Hand-added things that couldn't be adopted, and why.
+    pub problems: Vec<String>,
+}
+
+impl Applied {
+    /// The report, one line each (empty when there's nothing to say).
+    pub fn notice(&self, target: &Path) -> Vec<String> {
+        let mut lines = Vec::new();
+        let a = &self.adopted;
+        let rules: Vec<String> = a
+            .rules
+            .entries()
+            .into_iter()
+            .filter(|(list, r)| !self.no_effect.iter().any(|(l, n, _)| l == list && n == r))
+            .map(|(_, r)| r)
+            .collect();
+        if !rules.is_empty() {
+            lines.push(format!(
+                "kept {} permission rule(s) added to settings.json by hand as yours: {}",
+                rules.len(),
+                rules.join(", ")
+            ));
+        }
+        for (list, rule, by) in &self.no_effect {
+            lines.push(no_effect_note(*list, rule, *by));
+        }
+        lines.extend(a.linked.iter().map(|rel| linked_note(rel)));
+        if !a.servers.is_empty() {
+            let names: Vec<&str> = a.servers.iter().map(|s| s.name.as_str()).collect();
+            lines.push(format!(
+                "kept MCP server(s) added to .mcp.json by hand as yours: {}",
+                names.join(", ")
+            ));
+        }
+        for bad in &a.invalid {
+            lines.push(format!(
+                "dropped {bad} from settings.json: not a valid permission rule"
+            ));
+        }
+        for bad in &a.invalid_servers {
+            lines.push(format!(
+                "dropped MCP server '{bad}' from .mcp.json: ocgen can't use that name (letters, digits, '-', '_')"
+            ));
+        }
+        lines.extend(self.problems.iter().cloned());
+        if !self.removed.is_empty() {
+            lines.push(format!(
+                "removed (no longer generated): {}",
+                self.removed.join(", ")
+            ));
+        }
+        if let Some(b) = &self.backup {
+            // Forward slashes on every platform (it's shown, and matched by tests).
+            let shown = crate::paths::for_shell(b.strip_prefix(target).unwrap_or(b));
+            lines.push(format!(
+                "backup: {shown}/ (the previous versions; copy a file back to restore it)"
+            ));
+        }
+        if !self.hand_edited.is_empty() {
+            lines.push(format!(
+                "edited by hand, so their old versions are in the backup: {}",
+                self.hand_edited.join(", ")
+            ));
+        }
+        lines
+    }
+}
+
+/// The report line for an adopted `rule` in `list` that settings.json leaves out
+/// because ocgen's stricter list `by` holds it.
+pub fn no_effect_note(list: RuleList, rule: &str, by: RuleList) -> String {
+    format!(
+        "{rule} ({}) is kept in your rules but has no effect: ocgen's {} rule wins",
+        list.key(),
+        by.key()
+    )
+}
+
+/// The report line for a `settings.json` / `.mcp.json` that is a symbolic link.
+pub fn linked_note(rel: &str) -> String {
+    format!("{rel} is a symbolic link: ocgen adopts nothing from it, and never writes through it")
+}
+
+/// What the last write recorded, read from the state file on disk: the project
+/// in memory may already hold the user's changes.
+struct Previous {
+    /// The ocgen that wrote it, and its state schema.
+    version: String,
+    schema: u32,
+    generated: BTreeMap<String, String>,
+    /// The permission rules ocgen generated (`None`: not recorded).
+    rules: Option<PermissionRules>,
+    /// The user's own permission rules.
+    user_rules: PermissionRules,
+    /// The MCP servers the project had.
+    servers: Vec<String>,
+}
+
+/// A file ocgen generated before and no longer does.
+struct Stale {
+    path: PathBuf,
+    rel: String,
+    hand_edited: Option<bool>,
+}
+
+/// A relative path as the state and the plan spell it (forward slashes).
+fn rel_str(rel: &Path) -> String {
+    rel.to_string_lossy().replace('\\', "/")
 }
 
 /// What `doctor` would do to one file.
@@ -102,14 +327,341 @@ pub struct FileChange {
     pub hand_edited: Option<bool>,
 }
 
-/// FNV-1a 64-bit fingerprint of file content (stable across Rust versions).
+/// FNV-1a 64-bit fingerprint of file content (stable across Rust versions), over
+/// LF line endings so a CRLF checkout (git's `autocrlf` on Windows) isn't an edit.
 fn fingerprint(content: &str) -> String {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    for b in content.as_bytes() {
+    for b in lf(content).as_bytes() {
         h ^= u64::from(*b);
         h = h.wrapping_mul(0x0000_0100_0000_01b3);
     }
     format!("{h:016x}")
+}
+
+/// `s` with CRLF line endings turned into LF.
+fn lf(s: &str) -> std::borrow::Cow<'_, str> {
+    if s.contains("\r\n") {
+        s.replace("\r\n", "\n").into()
+    } else {
+        s.into()
+    }
+}
+
+/// A path relative to the project that stays inside it: plain names only, no
+/// `..`, root or drive.
+fn plain_rel(rel: &Path) -> bool {
+    !rel.as_os_str().is_empty() && rel.components().all(|c| matches!(c, Component::Normal(_)))
+}
+
+fn is_symlink(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink())
+}
+
+/// Why ocgen won't write a file: it could reach outside the project. The message
+/// says what to change — `ocgen doctor` can't, it refuses the same way.
+#[derive(Debug)]
+pub struct Refused(String);
+
+impl std::fmt::Display for Refused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Refused {}
+
+/// Where a linked folder came from, as far as git can tell.
+#[derive(Debug, Clone)]
+enum Origin {
+    /// No repository tracks it (or there's none, or no git): the user made it.
+    Made,
+    /// The repository holding its folder tracks it — the project's own, or one
+    /// checked out inside it (a submodule) — with that repository's work tree,
+    /// resolved (`None`: unknown).
+    Tracked(Option<PathBuf>),
+}
+
+/// Where ocgen may write in a project. One per regeneration: it remembers where
+/// each linked folder came from.
+struct Fence<'a> {
+    target: &'a Path,
+    /// `target`, resolved (`None`: it doesn't exist yet, so nothing in it does).
+    root: Option<PathBuf>,
+    /// The linked folders met so far (relative paths), and where each came from.
+    origins: std::cell::RefCell<BTreeMap<PathBuf, Origin>>,
+}
+
+impl<'a> Fence<'a> {
+    fn new(target: &'a Path) -> Self {
+        Fence {
+            target,
+            root: target.canonicalize().ok(),
+            origins: Default::default(),
+        }
+    }
+
+    /// `target/rel`, refused when writing it could reach outside the project:
+    /// `rel` isn't plain, the file is a symbolic link, or a folder on the way is
+    /// a link out of the project that a repository brought in (git tracks it, in
+    /// the project's repository or one inside it, like a submodule) and that
+    /// leads out of that repository — it may point anywhere (into `~/.claude`,
+    /// say). A linked folder the user made (git doesn't track it, or there's no
+    /// repository) is theirs to put where they like, and so is everything past
+    /// it: `.claude` kept in a dotfiles store, say. A tracked link that stays in
+    /// its repository (a monorepo's shared folder) is fine too.
+    fn path(&self, rel: &Path) -> Result<PathBuf> {
+        self.check(rel, false)
+    }
+
+    /// Like [`Fence::path`], but through no link out of the project at all: for
+    /// files ocgen takes to be its own only by their content (an older ocgen's),
+    /// which a linked folder may share with other projects.
+    fn strict(&self, rel: &Path) -> Result<PathBuf> {
+        self.check(rel, true)
+    }
+
+    fn check(&self, rel: &Path, strict: bool) -> Result<PathBuf> {
+        let refuse = |why: String| -> Result<PathBuf> { Err(Refused(why).into()) };
+        if !plain_rel(rel) {
+            return refuse(format!(
+                "refusing to write {}: not a plain path inside the project",
+                rel.display()
+            ));
+        }
+        let path = self.target.join(rel);
+        if is_symlink(&path) {
+            return refuse(format!(
+                "refusing to write {}: it is a symbolic link (ocgen writes only real files inside the project) — replace it with a real file",
+                path.display()
+            ));
+        }
+        let Some(root) = &self.root else {
+            return Ok(path); // nothing exists yet, so nothing can lead outside
+        };
+        // Each linked folder on the way out of the project.
+        let mut linked_out = false;
+        let mut dir = PathBuf::new();
+        for c in rel.parent().into_iter().flat_map(Path::components) {
+            dir.push(c);
+            let abs = self.target.join(&dir);
+            if !is_symlink(&abs) {
+                continue;
+            }
+            // Dangling: nothing is written through it (making the folder fails).
+            let Ok(real) = abs.canonicalize() else {
+                continue;
+            };
+            if real.starts_with(root) {
+                continue;
+            }
+            if strict {
+                return refuse(format!(
+                    "refusing to write {}: {} leads outside the project",
+                    path.display(),
+                    abs.display()
+                ));
+            }
+            match self.origin(&dir) {
+                // The user's link: what lies past it is theirs.
+                Origin::Made => return Ok(path),
+                Origin::Tracked(Some(top)) if real.starts_with(&top) => linked_out = true,
+                Origin::Tracked(_) => {
+                    let link = rel_str(&dir);
+                    return refuse(format!(
+                        "refusing to write {}: {link} is a symbolic link git tracks, and it leads out of its repository (to {}) — a link a repository brings in may point anywhere, so ocgen won't write through it: replace it with a real folder, or, if you made it and want ocgen's files there, untrack it (`git rm --cached {link}`, in the repository that holds it)",
+                        path.display(),
+                        real.display()
+                    ));
+                }
+            }
+        }
+        if linked_out {
+            return Ok(path);
+        }
+        // No link on the way leads out: nothing on the way may resolve outside.
+        let mut dir = path.parent();
+        while let Some(d) = dir {
+            if let Ok(real) = d.canonicalize() {
+                if !real.starts_with(root) {
+                    return refuse(format!(
+                        "refusing to write {}: {} leads outside the project",
+                        path.display(),
+                        d.display()
+                    ));
+                }
+                break;
+            }
+            dir = d.parent();
+        }
+        Ok(path)
+    }
+
+    /// Where the link at `rel` came from. Git is asked from the link's own folder,
+    /// so a repository checked out inside the project (a submodule) answers for
+    /// its links, not the project's, which doesn't track them.
+    fn origin(&self, rel: &Path) -> Origin {
+        if let Some(o) = self.origins.borrow().get(rel) {
+            return o.clone();
+        }
+        let folder = self.target.join(rel.parent().unwrap_or(Path::new("")));
+        let name = rel
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let git = |args: &[&str]| {
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(&folder)
+                .args(args)
+                .output()
+                .ok()
+                .filter(|o| o.status.success())
+                .map(|o| o.stdout)
+        };
+        let tracked = git(&[
+            "--literal-pathspecs",
+            "ls-files",
+            "--stage",
+            "-z",
+            "--",
+            &name,
+        ])
+        .is_some_and(|out| {
+            // `<mode> <object> <stage>\t<path>`; 120000 is a symbolic link.
+            out.split(|b| *b == 0).any(|e| {
+                e.starts_with(b"120000 ")
+                    && e.iter()
+                        .position(|b| *b == b'\t')
+                        .is_some_and(|tab| &e[tab + 1..] == name.as_bytes())
+            })
+        });
+        let origin = if tracked {
+            let top = git(&["rev-parse", "--show-toplevel"]).and_then(|out| {
+                let top = String::from_utf8_lossy(&out);
+                Path::new(top.trim_end_matches(['\n', '\r']))
+                    .canonicalize()
+                    .ok()
+            });
+            Origin::Tracked(top)
+        } else {
+            Origin::Made
+        };
+        self.origins
+            .borrow_mut()
+            .insert(rel.to_path_buf(), origin.clone());
+        origin
+    }
+}
+
+/// Whether `a` and `b` name the same file — e.g. `Reviewer.md` and `reviewer.md`
+/// on a case-insensitive file system (macOS and Windows defaults).
+fn same_file(a: &Path, b: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        match (fs::metadata(a), fs::metadata(b)) {
+            (Ok(x), Ok(y)) => x.dev() == y.dev() && x.ino() == y.ino(),
+            _ => false,
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        // canonicalize spells each name the way it is stored on disk.
+        match (a.canonicalize(), b.canonicalize()) {
+            (Ok(x), Ok(y)) => x == y,
+            _ => false,
+        }
+    }
+}
+
+/// Whether `path`'s folder holds an entry spelled exactly like its file name (a
+/// case-insensitive file system also opens `Reviewer.md` as `reviewer.md`).
+fn has_entry(path: &Path) -> bool {
+    let (Some(dir), Some(name)) = (path.parent(), path.file_name()) else {
+        return false;
+    };
+    fs::read_dir(dir).is_ok_and(|d| d.filter_map(|e| e.ok()).any(|e| e.file_name() == name))
+}
+
+/// `major.minor.patch` of a version string (a pre-release suffix is ignored).
+fn semver(v: &str) -> Option<(u64, u64, u64)> {
+    let core = v.trim().trim_start_matches('v');
+    let core = core.split(['-', '+']).next()?;
+    let mut parts = core.split('.').map(|p| p.parse::<u64>().ok());
+    let major = parts.next()??;
+    let minor = parts.next().unwrap_or(Some(0))?;
+    let patch = parts.next().unwrap_or(Some(0))?;
+    Some((major, minor, patch))
+}
+
+/// Remove `dir` and each parent that is left empty, up to (not including) `stop`.
+fn remove_empty_dirs(mut dir: Option<&Path>, stop: &Path) {
+    while let Some(d) = dir {
+        if d == stop || !d.starts_with(stop) {
+            break;
+        }
+        if fs::read_dir(d).map_or(true, |mut e| e.next().is_some()) {
+            break;
+        }
+        if fs::remove_dir(d).is_err() {
+            break;
+        }
+        dir = d.parent();
+    }
+}
+
+/// An MCP server as `.mcp.json` describes it; fields ocgen doesn't model are kept
+/// in `extra` so the server is written back unchanged.
+fn mcp_server_from_json(name: &str, v: &Value) -> McpServer {
+    let mut s = McpServer {
+        name: name.to_string(),
+        ..Default::default()
+    };
+    let Some(obj) = v.as_object() else {
+        return s;
+    };
+    let strings = |v: &Value| -> Option<Vec<String>> {
+        v.as_array()?
+            .iter()
+            .map(|x| x.as_str().map(String::from))
+            .collect()
+    };
+    let string_map = |v: &Value| -> Option<BTreeMap<String, String>> {
+        v.as_object()?
+            .iter()
+            .map(|(k, x)| x.as_str().map(|x| (k.clone(), x.to_string())))
+            .collect()
+    };
+    for (k, val) in obj {
+        let taken = match k.as_str() {
+            "type" => val.as_str().map(|t| s.transport = t.to_string()).is_some(),
+            "command" => val.as_str().map(|c| s.command = c.to_string()).is_some(),
+            "url" => val.as_str().map(|u| s.url = u.to_string()).is_some(),
+            "args" => strings(val).map(|a| s.args = a).is_some(),
+            "env" => string_map(val).map(|e| s.env = e).is_some(),
+            "headers" => string_map(val).map(|h| s.headers = h).is_some(),
+            _ => false,
+        };
+        if !taken {
+            s.extra.insert(k.clone(), val.clone());
+        }
+    }
+    if s.transport.is_empty() {
+        // Claude Code's default: a command means a local (stdio) server.
+        s.transport = if s.url.is_empty() { "stdio" } else { "http" }.into();
+    }
+    // Fields the transport doesn't write back stay as they were.
+    let moved: &[&str] = if s.transport == "stdio" {
+        &["url", "headers"]
+    } else {
+        &["command", "args", "env"]
+    };
+    for k in moved {
+        if let Some(v) = obj.get(*k) {
+            s.extra.insert(k.to_string(), v.clone());
+        }
+    }
+    s
 }
 
 /// UTC `YYYYMMDD-HHMMSS` for backup folder names.
@@ -249,12 +801,12 @@ impl Project {
 
             if agent.prompt_file {
                 if let Some(prompt_src) = &agent.prompt_body {
-                    let txt = env
-                        .render_str(
-                            prompt_src,
-                            context! { subagents => &subs, language => lang, parallel => false },
-                        )
-                        .with_context(|| format!("rendering prompt for '{}'", agent.name))?;
+                    let txt = body_as_template(
+                        &env,
+                        &agent.name,
+                        prompt_src,
+                        context! { subagents => &subs, language => lang, parallel => false },
+                    );
                     out.push((
                         PathBuf::from(format!(".opencode/prompts/{}.txt", agent.name)),
                         txt,
@@ -496,24 +1048,24 @@ impl Project {
                     "team-task-created.sh",
                     "team-task-completed.sh",
                 ] {
-                    let body = templates::load(&format!("claude/hooks/{h}"))?;
+                    let body = templates::load_embedded(&format!("claude/hooks/{h}"))?;
                     components.push((format!("hooks/{h}"), body));
                 }
             }
             // The execution-approval gate is emitted independently of `hooks` so
             // this safety line is never silently disabled.
             if self.claude.team.approval_gate {
-                let body = templates::load("claude/hooks/team-approval-gate.sh")?;
+                let body = templates::load_embedded("claude/hooks/team-approval-gate.sh")?;
                 components.push(("hooks/team-approval-gate.sh".to_string(), body));
                 // The git-side half of the gate (installed into .git/hooks by
                 // `scaffold`, or chained by hand when another hook is present).
-                let body = templates::load("claude/hooks/git-pre-push.sh")?;
+                let body = templates::load_embedded("claude/hooks/git-pre-push.sh")?;
                 components.push(("hooks/git-pre-push.sh".to_string(), body));
             }
         }
         // Per-worker confidence gate (SubagentStop) — independent of Agent Teams.
         if self.worker_gate() {
-            let body = templates::load("claude/hooks/subagent-confidence-gate.sh")?;
+            let body = templates::load_embedded("claude/hooks/subagent-confidence-gate.sh")?;
             components.push(("hooks/subagent-confidence-gate.sh".to_string(), body));
         }
         // Optional quality-of-life hook scripts.
@@ -525,24 +1077,24 @@ impl Project {
             (x.drop_noop_cd, "drop-noop-cd.sh"),
         ] {
             if on {
-                let body = templates::load(&format!("claude/hooks/{script}"))?;
+                let body = templates::load_embedded(&format!("claude/hooks/{script}"))?;
                 components.push((format!("hooks/{script}"), body));
             }
         }
         // /intent fetches docs over HTTPS only; this PreToolUse hook enforces it.
         if self.claude.workflow.intent {
-            let body = templates::load("claude/hooks/https-only-fetch.sh")?;
+            let body = templates::load_embedded("claude/hooks/https-only-fetch.sh")?;
             components.push(("hooks/https-only-fetch.sh".to_string(), body));
         }
         // /inquire ledgers get an HTML view, rendered and shown by this hook.
         if self.claude.workflow.inquire {
-            let body = templates::load("claude/hooks/inquire-notes.sh")?;
+            let body = templates::load_embedded("claude/hooks/inquire-notes.sh")?;
             components.push(("hooks/inquire-notes.sh".to_string(), body));
         }
         // Shared loop guard, sourced by every blocking hook so no gate can hold an
         // agent forever.
         if self.has_blocking_hooks() {
-            let body = templates::load("claude/hooks/loop-guard.sh")?;
+            let body = templates::load_embedded("claude/hooks/loop-guard.sh")?;
             components.push(("hooks/loop-guard.sh".to_string(), body));
         }
 
@@ -572,12 +1124,12 @@ impl Project {
         // Coordinator body may itself be a template (the orchestrator prompt loops
         // over subagents), so render it with that context for CLAUDE.md.
         let coordinator = match self.primary() {
-            Some(p) => env
-                .render_str(
-                    &p.body,
-                    context! { subagents => &subs, language => lang, parallel => true },
-                )
-                .context("rendering coordinator instructions")?,
+            Some(p) => body_as_template(
+                &env,
+                &p.name,
+                &p.body,
+                context! { subagents => &subs, language => lang, parallel => true },
+            ),
             None => String::new(),
         };
         // Behavioral guidance lives in .claude/rules/ (loads every session at CLAUDE.md
@@ -650,7 +1202,7 @@ impl Project {
                 // Project-only: a plugin can't set statusLine.
                 out.push((
                     PathBuf::from(".claude/statusline.sh"),
-                    templates::load("claude/statusline.sh")?,
+                    templates::load_embedded("claude/statusline.sh")?,
                 ));
             }
             out.push((PathBuf::from("CLAUDE.md"), claude_md));
@@ -685,6 +1237,8 @@ impl Project {
 
         if want_plugin {
             let plugin_name = self.plugin_name();
+            crate::validate::folder_name(&plugin_name)
+                .map_err(|e| anyhow!("plugin folder '{plugin_name}': {e}"))?;
             let base = format!("plugin/{plugin_name}");
             for (rel, c) in &components {
                 out.push((PathBuf::from(format!("{base}/{rel}")), c.clone()));
@@ -797,11 +1351,7 @@ impl Project {
         });
         let obj = root.as_object_mut().unwrap();
         // The generated rules, then the user's own (`ocgen edit permissions`).
-        let mut rules = self.generated_permissions();
-        for (list, rule) in self.claude.permissions.entries() {
-            // Only ever appended: the user's rules can't drop a generated guard.
-            let _ = rules.add(list, &rule);
-        }
+        let rules = self.effective_permissions();
         if !rules.is_empty() {
             let mut perms = serde_json::Map::new();
             for list in RuleList::ALL {
@@ -821,19 +1371,25 @@ impl Project {
                     domains.push(d.clone());
                 }
             }
+            // No sandboxed command may write the approval store, nor what runs
+            // outside the sandbox and Claude Code's own protection leaves out:
+            // the status line, ocgen's state (it regenerates the hooks) and git's
+            // hooks (a human's own push runs them). The store stays readable —
+            // the pre-push hook reads an approval from inside the sandbox.
+            let mut no_write = vec!["~/.claude/ocgen"];
+            if self.claude.powerups.statusline {
+                no_write.push("./.claude/statusline.sh");
+            }
+            no_write.extend(["./.claude/.ocgen-state.json", "./.git/hooks"]);
             let mut sandbox = json!({
                 "enabled": true,
                 // Strict: a sandboxed failure can't be retried unsandboxed.
                 "allowUnsandboxedCommands": false,
                 "network": { "allowedDomains": domains },
-                // No sandboxed command may touch the approval store.
-                "filesystem": {
-                    "denyWrite": ["~/.claude/ocgen"],
-                    "denyRead": ["~/.claude/ocgen"]
-                }
+                "filesystem": { "denyWrite": no_write }
             });
             if !self.claude.sandbox.allow_credentials {
-                // Without credentials an agent can't push or deploy at all,
+                // A push or publish that needs a withheld credential fails,
                 // however the command is phrased.
                 let files: Vec<Value> = crate::claude::CREDENTIAL_PATHS
                     .iter()
@@ -878,12 +1434,17 @@ impl Project {
             );
         }
         let sub_conf = self.claude.workflow.subagent_confidence;
-        if self.claude.team.enabled || sub_conf > 0 || self.worker_gate() {
+        let gate_env = self.gate_env();
+        if self.claude.team.enabled
+            || sub_conf > 0
+            || self.worker_gate()
+            || gate_env.contains_key("OCGEN_SANDBOX")
+        {
             let mut env = serde_json::Map::new();
             if self.claude.team.enabled {
                 env.insert("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS".into(), json!("1"));
             }
-            env.extend(self.gate_env());
+            env.extend(gate_env);
             obj.insert("env".into(), Value::Object(env));
             if self.claude.team.enabled {
                 obj.insert("teammateMode".into(), json!(self.teammate_mode()));
@@ -903,6 +1464,11 @@ impl Project {
     fn gate_env(&self) -> serde_json::Map<String, Value> {
         let mut env = serde_json::Map::new();
         if self.claude.team.enabled {
+            if self.claude.team.hooks {
+                // TaskCompleted judges teammates per task, so the worker gate
+                // leaves their turn ends alone.
+                env.insert("TEAM_TASK_GATE".into(), json!("1"));
+            }
             if self.claude.team.plan_gate {
                 env.insert("TEAM_PLAN_GATE".into(), json!("1"));
             }
@@ -916,18 +1482,7 @@ impl Project {
                 env.insert("TEAM_RISK_ROUNDS".into(), json!("1"));
                 // Read-only roles (no Write/Edit tool) can't mitigate, so the
                 // TeammateIdle gate exempts them instead of livelocking them.
-                let readonly: Vec<&str> = self
-                    .agents
-                    .iter()
-                    .filter(|a| a.mode != "primary")
-                    .filter(|a| {
-                        let t = a.tools.trim();
-                        let d = &a.disallowed_tools;
-                        (!t.is_empty() && !t.contains("Write") && !t.contains("Edit"))
-                            || (d.contains("Write") && d.contains("Edit"))
-                    })
-                    .map(|a| a.name.as_str())
-                    .collect();
+                let readonly = self.readonly_roles();
                 if !readonly.is_empty() {
                     env.insert("TEAM_READONLY_ROLES".into(), json!(readonly.join(" ")));
                 }
@@ -943,9 +1498,42 @@ impl Project {
                 json!(sub_conf.to_string()),
             );
         }
+        if self.worker_gate() {
+            // Read-only workers can't change files, so the worker gate never
+            // holds them — including Claude Code's own read-only Explore and Plan
+            // agents, unless the project defines its own under those names.
+            let mut readonly = self.readonly_roles();
+            for builtin in ["Explore", "Plan"] {
+                if !self.agents.iter().any(|a| a.name == builtin) {
+                    readonly.push(builtin);
+                }
+            }
+            env.insert("SUBAGENT_READONLY_ROLES".into(), json!(readonly.join(" ")));
+        }
         let check = self.claude.workflow.check_cmd.trim();
         if !check.is_empty() {
             env.insert("OCGEN_CHECK_CMD".into(), json!(check));
+        }
+        let format = self.claude.hooks_extra.format_cmd.trim();
+        if self.claude.sandbox.enabled && !(check.is_empty() && format.is_empty()) {
+            // Claude Code doesn't sandbox hooks: the hooks run the check and the
+            // formatter in an OS sandbox of their own, from these lists.
+            use crate::claude::{CREDENTIAL_ENV, CREDENTIAL_PATHS, HOOK_DENY_WRITE};
+            env.insert("OCGEN_SANDBOX".into(), json!("1"));
+            env.insert(
+                "OCGEN_SANDBOX_DENY_WRITE".into(),
+                json!(HOOK_DENY_WRITE.join(" ")),
+            );
+            if !self.claude.sandbox.allow_credentials {
+                env.insert(
+                    "OCGEN_SANDBOX_DENY_READ".into(),
+                    json!(CREDENTIAL_PATHS.join(" ")),
+                );
+                env.insert(
+                    "OCGEN_SANDBOX_DENY_ENV".into(),
+                    json!(CREDENTIAL_ENV.join(" ")),
+                );
+            }
         }
         if self.claude.workflow.intent {
             // The WebFetch guard's trusted documentation sites (empty = none).
@@ -963,9 +1551,34 @@ impl Project {
         env
     }
 
+    /// The project's read-only roles: subagents with no Write/Edit tool.
+    fn readonly_roles(&self) -> Vec<&str> {
+        self.agents
+            .iter()
+            .filter(|a| a.mode != "primary")
+            .filter(|a| {
+                let t = a.tools.trim();
+                let d = &a.disallowed_tools;
+                (!t.is_empty() && !t.contains("Write") && !t.contains("Edit"))
+                    || (d.contains("Write") && d.contains("Edit"))
+            })
+            .map(|a| a.name.as_str())
+            .collect()
+    }
+
     /// The permission rules ocgen generates itself, before the user's own.
     pub fn generated_permissions(&self) -> PermissionRules {
         let mut rules = self.default_permissions();
+        if self.claude.team.enabled && self.claude.team.approval_gate {
+            // The gate's own guards, kept even without the permission defaults:
+            // the sandbox contains Bash, not the file tools.
+            for r in crate::claude::GATE_DENY {
+                rules.tighten(RuleList::Deny, r);
+            }
+            for r in crate::claude::GATE_ASK {
+                rules.tighten(RuleList::Ask, r);
+            }
+        }
         if self.claude.workflow.intent {
             // /intent drafts the issue; the user files it. Kept even without the
             // permission defaults, since the workflow relies on it.
@@ -1052,20 +1665,36 @@ impl Project {
         found
     }
 
+    /// The permission rules settings.json gets: the generated ones, then the
+    /// user's own. Claude Code checks deny, then ask, then allow, so a user rule
+    /// stricter than ocgen's copy (a deny of a generated ask or allow, an ask of
+    /// a generated allow) takes its place, and a looser one is left out: the
+    /// user's rules can tighten a generated guard, never loosen it.
+    pub fn effective_permissions(&self) -> PermissionRules {
+        let mut rules = self.generated_permissions();
+        for (list, rule) in self.claude.permissions.entries() {
+            if crate::validate::permission_rule(rule.trim()).is_ok() {
+                rules.tighten(list, &rule);
+            }
+        }
+        rules
+    }
+
     /// The generated list that overrides `rule` in list `list`, if any. Claude
     /// Code checks deny, then ask, then allow, so e.g. an allow for a rule the
     /// generated ask list holds has no effect.
     pub fn shadowing_rule(&self, list: RuleList, rule: &str) -> Option<RuleList> {
-        let g = self.generated_permissions();
-        let earlier: &[RuleList] = match list {
-            RuleList::Allow => &[RuleList::Deny, RuleList::Ask],
-            RuleList::Ask => &[RuleList::Deny],
-            RuleList::Deny => &[],
-        };
-        earlier
-            .iter()
-            .copied()
-            .find(|l| g.list(*l).iter().any(|r| r == rule.trim()))
+        self.generated_permissions()
+            .list_of(rule)
+            .filter(|held| held.stricter_than(list))
+    }
+
+    /// The looser generated list whose copy of `rule` the user's stricter rule in
+    /// `list` replaces, if any — e.g. a deny of the generated ask `git push`.
+    pub fn replaced_rule(&self, list: RuleList, rule: &str) -> Option<RuleList> {
+        self.generated_permissions()
+            .list_of(rule)
+            .filter(|held| list.stricter_than(*held))
     }
 
     /// The hooks table, shared by `settings.json` and the plugin's `hooks.json`.
@@ -1107,26 +1736,29 @@ impl Project {
                 );
             }
         }
-        // Execution-approval gate: a PreToolUse hook scoped (via `matcher`) to the
-        // tools that can perform or self-approve high-impact actions. Emitted
-        // whenever the gate is on, independent of the `hooks` toggle.
+        // Execution-approval gate: a PreToolUse hook with no matcher, so it sees
+        // every tool — any tool with a `command` (Bash, Monitor, PowerShell, MCP…)
+        // can run a high-impact action, and any file tool can touch the approval
+        // store. Emitted whenever the gate is on, independent of the `hooks` toggle.
         if self.claude.team.enabled && self.claude.team.approval_gate {
             hooks.insert(
                 "PreToolUse".into(),
                 json!([ {
-                    "matcher": "Bash|Write|Edit|MultiEdit|NotebookEdit",
                     "hooks": [ command_hook(hook_cmd(prefix, dir, "team-approval-gate.sh")) ]
                 } ]),
             );
         }
-        // Per-worker confidence gate: a SubagentStop hook that blocks a subagent
-        // which wrote files but isn't confident enough. Independent of teams —
-        // it pairs with worktree isolation for isolated writes + enforced confidence.
+        // Per-worker confidence gate: SubagentStart records the tree a subagent
+        // starts from; SubagentStop blocks one that changed it but isn't confident
+        // enough. Independent of teams — it pairs with worktree isolation for
+        // isolated writes + enforced confidence.
         if self.worker_gate() {
-            hooks.insert(
-                "SubagentStop".into(),
-                json!([ { "hooks": [ command_hook(hook_cmd(prefix, dir, "subagent-confidence-gate.sh")) ] } ]),
-            );
+            for event in ["SubagentStart", "SubagentStop"] {
+                hooks.insert(
+                    event.into(),
+                    json!([ { "hooks": [ command_hook(hook_cmd(prefix, dir, "subagent-confidence-gate.sh")) ] } ]),
+                );
+            }
         }
         // Optional quality-of-life hooks. SessionStart may already hold the tip,
         // so groups are appended rather than inserted.
@@ -1238,33 +1870,100 @@ impl Project {
     }
 
     /// Write the rendered files (plus a state file) under `target`.
-    /// Fails on any pre-existing output file unless `force` is set.
+    ///
+    /// Without `force`, fails on any pre-existing output file. With `force` (every
+    /// `ocgen add …` / `ocgen edit …`) it regenerates safely, as [`Project::apply`]
+    /// does, and prints what it adopted, removed and backed up.
     pub fn scaffold(&self, target: &Path, force: bool) -> Result<Vec<PathBuf>> {
+        if force {
+            let mut project = self.clone();
+            let applied = project.apply(target, &BTreeSet::new())?;
+            let notice = applied.notice(target);
+            if !notice.is_empty() {
+                println!();
+                for line in notice {
+                    println!("  {line}");
+                }
+            }
+            return Ok(applied.written);
+        }
         let files = self.render_all()?;
 
         // User-owned files (CLAUDE.md, the /intent templates) are created once and
-        // never overwritten, so they're exempt from the conflict check and the
-        // (forced) rewrite below.
-        if !force {
-            for (rel, _) in &files {
-                if user_owned(rel) {
-                    continue;
-                }
-                let p = target.join(rel);
-                if p.exists() {
-                    bail!(
-                        "{} already exists — re-run and choose to overwrite",
-                        p.display()
-                    );
-                }
+        // never overwritten, so they're exempt from the conflict check.
+        for (rel, _) in &files {
+            if user_owned(rel) {
+                continue;
+            }
+            let p = target.join(rel);
+            if p.exists() {
+                bail!(
+                    "{} already exists — re-run and choose to overwrite",
+                    p.display()
+                );
             }
         }
         self.write_files(target, &files, &BTreeSet::new())
     }
 
+    /// Regenerate the project under `target` without losing anything silently:
+    /// adopt the permission rules and MCP servers added by hand, back up every file
+    /// that will be overwritten or removed, write everything except the files in
+    /// `keep` (paths relative to `target`, with forward slashes), and remove the
+    /// files ocgen no longer generates.
+    pub fn apply(&mut self, target: &Path, keep: &BTreeSet<String>) -> Result<Applied> {
+        self.check_version()?;
+        // Also when this project was built afresh over one a newer ocgen wrote.
+        let on_disk = self.previous(target);
+        refuse_newer(self.target.state_file(), &on_disk.version, on_disk.schema)?;
+        let mut adopted = self.hand_added(target);
+        let problems = self.adopt(&adopted);
+        // Report as kept only what really was (a rule can't be in two lists).
+        let mine = &self.claude.permissions;
+        adopted.rules.allow.retain(|r| mine.allow.contains(r));
+        adopted.rules.ask.retain(|r| mine.ask.contains(r));
+        adopted.rules.deny.retain(|r| mine.deny.contains(r));
+        // A looser copy of a generated rule stays the user's, without effect.
+        let no_effect = adopted
+            .rules
+            .entries()
+            .into_iter()
+            .filter_map(|(list, r)| self.shadowing_rule(list, &r).map(|by| (list, r, by)))
+            .collect();
+        let plan: Vec<FileChange> = self
+            .plan_changes(target)?
+            .into_iter()
+            .filter(|c| !keep.contains(&c.rel))
+            .collect();
+        // A file still exactly as ocgen wrote it holds no work of the user's, so
+        // only hand edits (or files of unknown origin) take up a backup slot.
+        let at_risk: Vec<FileChange> = plan
+            .iter()
+            .filter(|c| c.hand_edited != Some(false))
+            .cloned()
+            .collect();
+        let backup = Self::backup(target, &at_risk)?;
+        let written = self.scaffold_keeping(target, keep)?;
+        let rels = |pick: &dyn Fn(&FileChange) -> bool| -> Vec<String> {
+            plan.iter()
+                .filter(|c| pick(c))
+                .map(|c| c.rel.clone())
+                .collect()
+        };
+        Ok(Applied {
+            written,
+            backup,
+            removed: rels(&|c| c.kind == ChangeKind::Removed),
+            hand_edited: rels(&|c| c.kind != ChangeKind::Added && c.hand_edited == Some(true)),
+            adopted,
+            no_effect,
+            problems,
+        })
+    }
+
     /// Like a forced [`Project::scaffold`], but leaves the files in `keep` (paths
-    /// relative to `target`, with forward slashes) exactly as they are on disk.
-    /// Used by `ocgen new` when the user chooses to keep an existing file.
+    /// relative to `target`, with forward slashes) exactly as they are on disk, and
+    /// adopts and backs up nothing — the caller decides that (`ocgen new`, `doctor`).
     pub fn scaffold_keeping(&self, target: &Path, keep: &BTreeSet<String>) -> Result<Vec<PathBuf>> {
         self.write_files(target, &self.render_all()?, keep)
     }
@@ -1275,23 +1974,67 @@ impl Project {
         files: &[(PathBuf, String)],
         keep: &BTreeSet<String>,
     ) -> Result<Vec<PathBuf>> {
-        let mut written = Vec::new();
+        self.check_version()?;
+        let fence = Fence::new(target);
+        // Every path is checked before anything is written — the state file too.
+        let state_path = fence.path(Path::new(self.target.state_file()))?;
+        let mut planned: Vec<(PathBuf, String)> = Vec::new();
         for (rel, contents) in files {
-            let path = target.join(rel);
-            if user_owned(rel) && path.exists() {
-                continue; // preserve the user's own file
+            if user_owned(rel) && fs::symlink_metadata(target.join(rel)).is_ok() {
+                continue; // preserve the user's own file (a link to anywhere, too)
             }
-            if keep.contains(&rel.to_string_lossy().replace('\\', "/")) {
+            let path = fence.path(rel)?;
+            if keep.contains(&rel_str(rel)) {
                 continue; // the user chose to keep their version
             }
+            planned.push((path, contents.clone()));
+        }
+        for (rel, block) in self.gitattributes() {
+            // The user's file: one linked in from elsewhere is left alone.
+            let Ok(path) = fence.path(Path::new(&rel)) else {
+                continue;
+            };
+            if keep.contains(&rel) {
+                continue;
+            }
+            let existing = match fs::read(&path) {
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+                // Not text: it's the user's, and left alone.
+                Ok(bytes) => match String::from_utf8(bytes) {
+                    Ok(s) => Some(s),
+                    Err(_) => continue,
+                },
+                Err(_) => continue,
+            };
+            if let Some(new) = with_gitattributes_block(existing.as_deref(), block) {
+                planned.push((path, new));
+            }
+        }
+        let previous = self.previous(target);
+        let (stale, renames) = self.stale_files(&fence, files, &previous.generated);
+
+        // A case-only rename on a case-insensitive file system: the old entry is the
+        // new file, so it gets the new spelling instead of being removed.
+        for (from, to) in renames {
+            let _ = fs::rename(from, to);
+        }
+        let mut written = Vec::new();
+        for (path, contents) in planned {
             if let Some(parent) = path.parent() {
                 fs::create_dir_all(parent)?;
             }
             fs::write(&path, contents).with_context(|| format!("writing {}", path.display()))?;
             written.push(path);
         }
+        // Then what ocgen no longer generates (`apply` and `doctor` back it up first).
+        for s in stale {
+            if keep.contains(&s.rel) {
+                continue;
+            }
+            fs::remove_file(&s.path).with_context(|| format!("removing {}", s.path.display()))?;
+            remove_empty_dirs(s.path.parent(), target);
+        }
         if self.target == Target::ClaudeCode {
-            self.remove_stale_generated(target)?;
             if let PrePush::Installed(p) = self.install_pre_push(target)? {
                 written.push(p);
             }
@@ -1300,40 +2043,204 @@ impl Project {
         // Persist project state so `add agent` can reload and re-render, with a
         // fingerprint of every generated file (lets `doctor` spot hand edits — a
         // kept file is recorded too, so it shows up there as differing).
-        let mut state = self.clone();
-        state.generated = files
-            .iter()
-            .filter(|(rel, _)| !user_owned(rel))
-            .map(|(rel, c)| (rel.to_string_lossy().replace('\\', "/"), fingerprint(c)))
-            .collect();
-        let state_path = target.join(self.target.state_file());
         if let Some(parent) = state_path.parent() {
             fs::create_dir_all(parent)?;
         }
-        fs::write(&state_path, serde_json::to_string_pretty(&state)?)
+        fs::write(&state_path, self.state_json(files)?)
             .with_context(|| format!("writing {}", state_path.display()))?;
 
         Ok(written)
     }
 
-    /// Delete files an older ocgen generated under a name it no longer uses — only
-    /// when their content is still ocgen's, so a user's own file is never touched.
-    fn remove_stale_generated(&self, target: &Path) -> Result<()> {
-        for p in self.stale_generated(target) {
-            fs::remove_file(&p).with_context(|| format!("removing {}", p.display()))?;
-            if let Some(dir) = p.parent() {
-                // Drop a legacy dir (e.g. `.claude/commands`) once it's empty.
-                if fs::read_dir(dir).is_ok_and(|mut d| d.next().is_none()) {
-                    let _ = fs::remove_dir(dir);
+    /// The state file a write of `files` records: this project, stamped with this
+    /// ocgen's version, plus what was generated.
+    fn state_json(&self, files: &[(PathBuf, String)]) -> Result<String> {
+        let mut state = self.clone();
+        state.ocgen_version = crate::VERSION.to_string();
+        state.schema = STATE_SCHEMA;
+        state.generated = files
+            .iter()
+            .filter(|(rel, _)| !user_owned(rel))
+            .map(|(rel, c)| (rel_str(rel), fingerprint(c)))
+            .collect();
+        state.generated_rules =
+            (self.target == Target::ClaudeCode).then(|| self.generated_permissions());
+        Ok(serde_json::to_string_pretty(&state)?)
+    }
+
+    /// The state file writing this project would leave (to compare with the one on
+    /// disk, e.g. before `ocgen new` replaces an existing project).
+    pub fn rendered_state(&self) -> Result<String> {
+        self.state_json(&self.render_all()?)
+    }
+
+    /// Refuse to write a project whose state a newer ocgen wrote: this one would
+    /// drop the settings it doesn't know and downgrade the generated files.
+    pub fn check_version(&self) -> Result<()> {
+        refuse_newer(self.target.state_file(), &self.ocgen_version, self.schema)
+    }
+
+    /// What the last write recorded, from the state file on disk (the project in
+    /// memory may already hold the user's changes). Without one, this project's.
+    fn previous(&self, target: &Path) -> Previous {
+        let disk = fs::read_to_string(target.join(self.target.state_file()))
+            .ok()
+            .and_then(|s| serde_json::from_str::<Value>(&s).ok());
+        let Some(v) = disk else {
+            return Previous {
+                version: self.ocgen_version.clone(),
+                schema: self.schema,
+                generated: self.generated.clone(),
+                rules: self.generated_rules.clone(),
+                user_rules: self.claude.permissions.clone(),
+                servers: self
+                    .claude
+                    .mcp_servers
+                    .iter()
+                    .map(|s| s.name.clone())
+                    .collect(),
+            };
+        };
+        let parse = |p: &str| {
+            v.pointer(p)
+                .filter(|x| !x.is_null())
+                .and_then(|x| serde_json::from_value::<PermissionRules>(x.clone()).ok())
+        };
+        let (version, schema) = written_by(&v);
+        Previous {
+            version,
+            schema,
+            generated: v
+                .get("generated")
+                .and_then(Value::as_object)
+                .into_iter()
+                .flatten()
+                .filter_map(|(k, h)| Some((k.clone(), h.as_str()?.to_string())))
+                .collect(),
+            // A state from before the rules were recorded: what its configuration
+            // generates (this ocgen's rules for it) is the closest record there is.
+            rules: parse("/generated_rules").or_else(|| {
+                let mut legacy = v.clone();
+                migrate_state(&mut legacy).ok()?;
+                serde_json::from_value::<Project>(legacy)
+                    .ok()
+                    .map(|p| p.generated_permissions())
+            }),
+            user_rules: parse("/claude/permissions").unwrap_or_default(),
+            servers: v
+                .pointer("/claude/mcp_servers")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|s| s.get("name")?.as_str().map(String::from))
+                .collect(),
+        }
+    }
+
+    /// Permission rules in `settings.json` and MCP servers in `.mcp.json` that
+    /// ocgen didn't write: neither generated nor the user's own, now or at the last
+    /// write (a rule ocgen stopped generating, or one the user removed, isn't one).
+    /// A regeneration drops them unless they're adopted ([`Project::adopt`]).
+    pub fn hand_added(&self, target: &Path) -> HandAdded {
+        let mut found = HandAdded::default();
+        let project_tree = self.claude.output.project || !self.claude.output.plugin;
+        if self.target != Target::ClaudeCode || !project_tree {
+            return found;
+        }
+        let prev = self.previous(target);
+        // A file still exactly as the last write left it holds nothing added by hand.
+        let untouched = |rel: &str| {
+            prev.generated.get(rel).is_some_and(|h| {
+                fs::read_to_string(target.join(rel)).is_ok_and(|s| fingerprint(&s) == *h)
+            })
+        };
+        // One linked in from elsewhere (a shared config) isn't read either: ocgen
+        // never writes through it, so it couldn't keep what it adopted from it.
+        let linked = |rel: &str| is_symlink(&target.join(rel));
+        found.linked = [".claude/settings.json", ".mcp.json"]
+            .into_iter()
+            .filter(|rel| linked(rel))
+            .map(String::from)
+            .collect();
+        if !linked(".claude/settings.json") && !untouched(".claude/settings.json") {
+            let raw = self.hand_added_permissions(target);
+            // In the same list only: a copy of a generated `ask` rule put under
+            // `deny` by hand is the user's own, stricter rule.
+            let known = |rules: &PermissionRules, list: RuleList, rule: &str| {
+                rules.list(list).iter().any(|r| r == rule)
+            };
+            for (list, rule) in raw.rules.entries() {
+                if prev.rules.as_ref().is_some_and(|r| known(r, list, &rule))
+                    || known(&prev.user_rules, list, &rule)
+                {
+                    continue;
                 }
+                let _ = found.rules.add(list, &rule);
+            }
+            found.invalid = raw.invalid;
+        }
+        if !linked(".mcp.json") && !untouched(".mcp.json") {
+            let read = |rel: &str| {
+                fs::read_to_string(target.join(rel))
+                    .ok()
+                    .filter(|_| !linked(rel))
+                    .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+            };
+            let approved: Vec<String> = read(".claude/settings.json")
+                .and_then(|s| s.get("enabledMcpjsonServers").cloned())
+                .and_then(|a| serde_json::from_value(a).ok())
+                .unwrap_or_default();
+            let mcp = read(".mcp.json");
+            let servers = mcp
+                .as_ref()
+                .and_then(|m| m.get("mcpServers"))
+                .and_then(Value::as_object);
+            for (name, v) in servers.into_iter().flatten() {
+                if self.claude.mcp_servers.iter().any(|s| s.name == *name)
+                    || prev.servers.contains(name)
+                {
+                    continue; // ocgen's now, or removed from the project on purpose
+                }
+                if crate::validate::ident(name).is_err() {
+                    found.invalid_servers.push(name.clone());
+                    continue;
+                }
+                let mut s = mcp_server_from_json(name, v);
+                s.pre_approve = approved.contains(name);
+                found.servers.push(s);
             }
         }
-        Ok(())
+        found
+    }
+
+    /// Make what [`Project::hand_added`] found the project's own, so every later
+    /// regeneration keeps it. Returns the rules that couldn't be adopted, and why.
+    pub fn adopt(&mut self, found: &HandAdded) -> Vec<String> {
+        let mut problems = Vec::new();
+        for (list, rule) in found.rules.entries() {
+            if let Err(e) = self.claude.permissions.add(list, &rule) {
+                problems.push(format!(
+                    "settings.json: {e} — the hand-added rule was dropped"
+                ));
+            }
+        }
+        for s in &found.servers {
+            if !self.claude.mcp_servers.iter().any(|m| m.name == s.name) {
+                self.claude.mcp_servers.push(s.clone());
+            }
+        }
+        problems
     }
 
     /// Install the git `pre-push` half of the approval gate into the repository's
     /// hooks — only when the gate is on, the target is a git repository, and no
     /// other pre-push hook exists. Never overwrites someone else's hook.
+    ///
+    /// The hook records every gated project root in the repository (one
+    /// `# ocgen:root <dir>` line each), so it also gates a project that isn't at
+    /// the repository root (a monorepo service). Roots recorded by other projects
+    /// are kept; ones whose folder is gone are dropped. An ocgen hook edited by
+    /// hand is copied to `pre-push.ocgen-bak` before it is rewritten.
     pub fn install_pre_push(&self, target: &Path) -> Result<PrePush> {
         let gated = self.target == Target::ClaudeCode
             && self.claude.team.enabled
@@ -1360,16 +2267,55 @@ impl Project {
         if git(&["config", "core.hooksPath"]).is_some_and(|p| !p.is_empty()) {
             return Ok(PrePush::Foreign(hook));
         }
-        if let Ok(existing) = fs::read_to_string(&hook) {
-            if !existing.contains("ocgen:pre-push") {
-                return Ok(PrePush::Foreign(hook));
+        // Only a missing file is "no hook": one we can't read, or that isn't
+        // text (a compiled hook), is someone else's.
+        let existing = match fs::read(&hook) {
+            Ok(bytes) => Some(String::from_utf8_lossy(&bytes).into_owned()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(_) => return Ok(PrePush::Foreign(hook)),
+        };
+        if existing
+            .as_deref()
+            .is_some_and(|e| !e.contains("ocgen:pre-push"))
+        {
+            return Ok(PrePush::Foreign(hook));
+        }
+        const ROOT: &str = "# ocgen:root ";
+        let me = crate::paths::for_shell(
+            &fs::canonicalize(target).unwrap_or_else(|_| target.to_path_buf()),
+        );
+        let mut roots: Vec<String> = Vec::new();
+        let recorded = existing
+            .iter()
+            .flat_map(|e| e.lines())
+            .filter_map(|l| l.strip_prefix(ROOT))
+            .filter(|r| Path::new(r).is_dir())
+            .map(str::to_string);
+        for r in recorded.chain([me]) {
+            if !roots.contains(&r) {
+                roots.push(r);
             }
+        }
+        let script = templates::load_embedded("claude/hooks/git-pre-push.sh")?;
+        let mut body = script.clone();
+        for r in &roots {
+            body.push_str(&format!("{ROOT}{r}\n"));
         }
         if let Some(dir) = hook.parent() {
             fs::create_dir_all(dir)?;
         }
-        fs::write(&hook, templates::load("claude/hooks/git-pre-push.sh")?)
-            .with_context(|| format!("writing {}", hook.display()))?;
+        if let Some(old) = &existing {
+            let unrooted: String = old
+                .lines()
+                .filter(|l| !l.starts_with(ROOT))
+                .map(|l| format!("{l}\n"))
+                .collect();
+            if unrooted != script {
+                let bak = hook.with_file_name("pre-push.ocgen-bak");
+                fs::write(&bak, old).with_context(|| format!("writing {}", bak.display()))?;
+            }
+        }
+        fs::write(&hook, body).with_context(|| format!("writing {}", hook.display()))?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -1378,58 +2324,233 @@ impl Project {
         Ok(PrePush::Installed(hook))
     }
 
-    /// Files an older ocgen generated under names it no longer uses — only those
-    /// whose content is still ocgen's, so a user's own file is never listed.
-    fn stale_generated(&self, target: &Path) -> Vec<PathBuf> {
+    /// The `.gitattributes` files ocgen adds its LF block to: (relative path, block).
+    fn gitattributes(&self) -> Vec<(String, &'static str)> {
         if self.target != Target::ClaudeCode {
             return Vec::new();
         }
-        let mut roots = vec![target.join(".claude")];
-        if self.claude.output.plugin {
-            roots.push(target.join(format!("plugin/{}", self.plugin_name())));
+        let plugin = self.claude.output.plugin;
+        let mut files = Vec::new();
+        if self.claude.output.project || !plugin {
+            files.push((".gitattributes".to_string(), GITATTRIBUTES_PROJECT));
         }
-        let mut stale = Vec::new();
-        for root in roots {
-            // Workflow commands moved to skills; old copies start with ocgen's
-            // `description:` frontmatter.
-            for name in crate::claude::WORKFLOW_SKILLS {
-                let p = root.join(format!("commands/{name}.md"));
-                if fs::read_to_string(&p).is_ok_and(|old| old.starts_with("---\ndescription:")) {
-                    stale.push(p);
+        if plugin {
+            files.push((
+                format!("plugin/{}/.gitattributes", self.plugin_name()),
+                GITATTRIBUTES_PLUGIN,
+            ));
+        }
+        files
+    }
+
+    /// Files to remove: the ones the last write generated that `files` (this
+    /// render) doesn't, and ones an older ocgen generated under names it no longer
+    /// uses — only while their content is still ocgen's. Also returns the files
+    /// the render now spells differently only in case where the file system sees
+    /// one file (old path, new path): those are renamed, never removed.
+    fn stale_files(
+        &self,
+        fence: &Fence,
+        files: &[(PathBuf, String)],
+        previous: &BTreeMap<String, String>,
+    ) -> (Vec<Stale>, Vec<(PathBuf, PathBuf)>) {
+        let target = fence.target;
+        let rendered: BTreeSet<String> = files.iter().map(|(rel, _)| rel_str(rel)).collect();
+        let mut stale: Vec<Stale> = Vec::new();
+        let mut renames = Vec::new();
+        let state_files = Target::state_files();
+        for (rel, recorded) in previous {
+            let rel_path = Path::new(rel);
+            if rendered.contains(rel)
+                || !plain_rel(rel_path)
+                || user_owned(rel_path)
+                || state_files.contains(&rel.as_str())
+                || rel.ends_with(".gitattributes")
+                || rel == PRE_PUSH_SCRIPT
+                || fence.path(rel_path).is_err()
+            {
+                continue;
+            }
+            let path = target.join(rel_path);
+            if !fs::symlink_metadata(&path).is_ok_and(|m| m.is_file()) {
+                continue;
+            }
+            if let Some(new) = rendered
+                .iter()
+                .find(|r| r.to_lowercase() == rel.to_lowercase())
+            {
+                let new = target.join(new);
+                if same_file(&path, &new) {
+                    renames.push((path, new));
+                    continue;
                 }
             }
+            let hand_edited = match fs::read(&path).map(String::from_utf8) {
+                Ok(Ok(s)) => fingerprint(&s) != *recorded,
+                _ => true,
+            };
+            stale.push(Stale {
+                path,
+                rel: rel.clone(),
+                hand_edited: Some(hand_edited),
+            });
+        }
+        for (rel, hand_edited) in self.legacy_generated(target, files) {
+            // E.g. a `.claude/commands` linked in from elsewhere isn't the project's.
+            let Ok(path) = fence.strict(Path::new(&rel)) else {
+                continue;
+            };
+            if !stale.iter().any(|s| s.rel == rel) {
+                stale.push(Stale {
+                    path,
+                    rel,
+                    hand_edited,
+                });
+            }
+        }
+        (stale, renames)
+    }
+
+    /// Files an older ocgen generated under names it no longer uses — only those
+    /// that open as ocgen's did, so a user's own file is never listed — as
+    /// relative paths, each with whether it was edited by hand: `Some(false)` only
+    /// when all of it is what ocgen renders now (`files`), else `None` (unknown).
+    fn legacy_generated(
+        &self,
+        target: &Path,
+        files: &[(PathBuf, String)],
+    ) -> Vec<(String, Option<bool>)> {
+        if self.target != Target::ClaudeCode {
+            return Vec::new();
+        }
+        let mut roots = vec![".claude".to_string()];
+        if self.claude.output.plugin {
+            roots.push(format!("plugin/{}", self.plugin_name()));
+        }
+        let rendered = |rel: &str| {
+            files
+                .iter()
+                .find(|(r, _)| rel_str(r) == rel)
+                .map(|(_, c)| c.as_str())
+        };
+        let mut stale = Vec::new();
+        for root in roots {
+            // Workflow commands moved to skills; an old copy opens with that
+            // command's own frontmatter description.
+            for name in crate::claude::WORKFLOW_SKILLS {
+                let rel = format!("{root}/commands/{name}.md");
+                let Ok(old) = fs::read_to_string(target.join(&rel)) else {
+                    continue;
+                };
+                if !self.legacy_command(name, &old) {
+                    continue;
+                }
+                // Untouched: it is the skill ocgen renders now, in command form.
+                let user_run = crate::claude::USER_RUN_WORKFLOWS.contains(&name);
+                let untouched =
+                    rendered(&format!("{root}/skills/{name}/SKILL.md")).is_some_and(|skill| {
+                        lf(&command_to_skill(name, &lf(&old), user_run)) == lf(skill)
+                    });
+                stale.push((rel, untouched.then_some(false)));
+            }
             // The old `Concise` style shadowed Claude Code's built-in style of that name.
-            let p = root.join("output-styles/concise.md");
-            if fs::read_to_string(&p).is_ok_and(|old| {
+            let rel = format!("{root}/output-styles/concise.md");
+            if fs::read_to_string(target.join(&rel)).is_ok_and(|old| {
                 old.contains("name: Concise")
                     && old.contains("Lead each answer with the result or recommendation")
             }) {
-                stale.push(p);
+                stale.push((rel, None));
             }
         }
         stale
     }
 
+    /// Whether `content` is the `/name` command an older ocgen wrote to
+    /// `.claude/commands/`: it opens with that command's description (as ocgen
+    /// renders it now, or did before), not just any frontmatter.
+    fn legacy_command(&self, name: &str, content: &str) -> bool {
+        /// Descriptions that changed after the commands moved to skills.
+        const FORMER: [(&str, &str); 1] = [(
+            "inquire",
+            "Understand a codebase by asking questions — sharpen each one, answer with evidence, get nudged to the next",
+        )];
+        let content = lf(content);
+        let Some(line) = content
+            .strip_prefix("---\ndescription: ")
+            .and_then(|rest| rest.lines().next())
+        else {
+            return false;
+        };
+        if FORMER.iter().any(|(n, d)| *n == name && *d == line) {
+            return true;
+        }
+        let Ok(source) = templates::load(&format!("claude/commands/{name}.md.j2")) else {
+            return false;
+        };
+        let Some(template) = source
+            .strip_prefix("---\ndescription: ")
+            .and_then(|rest| rest.lines().next())
+        else {
+            return false;
+        };
+        let env = Environment::new();
+        ["English", "Ukrainian", self.language.as_str()]
+            .iter()
+            .any(|lang| {
+                env.render_str(template, context! { language => lang })
+                    .is_ok_and(|d| d == line)
+            })
+    }
+
     /// What a forced re-scaffold (`doctor`) would do, file by file: add, modify,
-    /// remove (stale legacy files) or leave unchanged. User-owned files (`CLAUDE.md`,
-    /// the `/intent` templates) that already exist are never part of the plan.
+    /// remove (files ocgen no longer generates) or leave unchanged. User-owned files
+    /// (`CLAUDE.md`, the `/intent` templates) that already exist are never part of
+    /// the plan. Line endings don't count: a CRLF checkout is unchanged.
     pub fn plan_changes(&self, target: &Path) -> Result<Vec<FileChange>> {
+        use std::io::ErrorKind;
+        let previous = self.previous(target);
+        let files = self.render_all()?;
+        let fence = Fence::new(target);
+        // The state file isn't part of the plan, but is written with it.
+        fence.path(Path::new(self.target.state_file()))?;
         let mut plan = Vec::new();
-        for (rel, new) in self.render_all()? {
-            let rel_s = rel.to_string_lossy().replace('\\', "/");
-            let path = target.join(&rel);
-            if user_owned(&rel) && path.exists() {
+        for (rel, new) in &files {
+            let rel_s = rel_str(rel);
+            if user_owned(rel) && fs::symlink_metadata(target.join(rel)).is_ok() {
                 continue;
             }
-            let (kind, old, hand_edited) = match fs::read_to_string(&path) {
-                Err(_) => (ChangeKind::Added, None, None),
-                Ok(old) if old == new => (ChangeKind::Unchanged, None, None),
-                Ok(old) => {
-                    let edited = self.generated.get(&rel_s).map(|h| *h != fingerprint(&old));
-                    (ChangeKind::Modified, Some(old), edited)
-                }
+            let path = fence.path(rel)?;
+            // Unknown without fingerprints; with them, a file ocgen didn't write
+            // last time (e.g. a `.mcp.json` made by `claude mcp add`) is someone's.
+            let tracked = !previous.generated.is_empty();
+            // After a case-only rename the file on disk is the old spelling's.
+            let recorded = previous.generated.get(&rel_s).or_else(|| {
+                previous
+                    .generated
+                    .iter()
+                    .find(|(k, _)| k.eq_ignore_ascii_case(&rel_s))
+                    .map(|(_, h)| h)
+            });
+            let edited = |old: Option<&str>| match (recorded, old) {
+                (Some(h), Some(old)) => Some(*h != fingerprint(old)),
+                (Some(_), None) => Some(true),
+                (None, _) => tracked.then_some(true),
             };
-            let new = (kind != ChangeKind::Unchanged).then_some(new);
+            let (kind, old, hand_edited) = match fs::read(&path) {
+                Err(e) if e.kind() == ErrorKind::NotFound => (ChangeKind::Added, None, None),
+                // Unreadable, or not UTF-8 (e.g. UTF-16 from PowerShell): never
+                // treated as absent — it is overwritten only with a backup.
+                Err(_) => (ChangeKind::Modified, None, edited(None)),
+                Ok(bytes) => match String::from_utf8(bytes) {
+                    Err(_) => (ChangeKind::Modified, None, edited(None)),
+                    Ok(old) if lf(&old) == lf(new) => (ChangeKind::Unchanged, None, None),
+                    Ok(old) => {
+                        let hand = edited(Some(&old));
+                        (ChangeKind::Modified, Some(old), hand)
+                    }
+                },
+            };
+            let new = (kind != ChangeKind::Unchanged).then(|| new.clone());
             plan.push(FileChange {
                 path,
                 rel: rel_s,
@@ -1439,32 +2560,59 @@ impl Project {
                 hand_edited,
             });
         }
-        for path in self.stale_generated(target) {
-            let rel = path
-                .strip_prefix(target)
-                .unwrap_or(&path)
-                .to_string_lossy()
-                .replace('\\', "/");
-            let old = fs::read_to_string(&path).ok();
+        for (rel, block) in self.gitattributes() {
+            // The user's file: one linked in from elsewhere is left alone.
+            let Ok(path) = fence.path(Path::new(&rel)) else {
+                continue;
+            };
+            let (kind, old, new) = match fs::read(&path) {
+                Err(e) if e.kind() == ErrorKind::NotFound => {
+                    (ChangeKind::Added, None, Some(block.to_string()))
+                }
+                Ok(bytes) => match String::from_utf8(bytes) {
+                    Ok(old) => match with_gitattributes_block(Some(&old), block) {
+                        None => (ChangeKind::Unchanged, None, None),
+                        Some(new) => (ChangeKind::Modified, Some(old), Some(new)),
+                    },
+                    Err(_) => continue, // not text: the user's, left alone
+                },
+                Err(_) => continue,
+            };
+            // ocgen only ever appends its block to the user's file.
+            let hand_edited = (kind == ChangeKind::Modified).then_some(false);
             plan.push(FileChange {
                 path,
                 rel,
+                kind,
+                old,
+                new,
+                hand_edited,
+            });
+        }
+        let (stale, _) = self.stale_files(&fence, &files, &previous.generated);
+        for s in stale {
+            let old = fs::read_to_string(&s.path).ok();
+            plan.push(FileChange {
+                path: s.path,
+                rel: s.rel,
                 kind: ChangeKind::Removed,
                 old,
                 new: None,
-                hand_edited: None,
+                hand_edited: s.hand_edited,
             });
         }
         Ok(plan)
     }
 
     /// Copy the current version of every file the plan would modify or remove into
-    /// `<target>/.ocgen-backup/<UTC stamp>/` (the folder git-ignores itself). Returns
-    /// the backup folder, or `None` when nothing would be overwritten.
+    /// `<target>/.ocgen-backup/<UTC stamp>/` (the folder git-ignores itself), byte
+    /// for byte. Returns the backup folder, or `None` when nothing would be
+    /// overwritten.
     pub fn backup(target: &Path, plan: &[FileChange]) -> Result<Option<PathBuf>> {
         let at_risk: Vec<&FileChange> = plan
             .iter()
             .filter(|c| matches!(c.kind, ChangeKind::Modified | ChangeKind::Removed))
+            .filter(|c| plain_rel(Path::new(&c.rel)))
             .collect();
         if at_risk.is_empty() {
             return Ok(None);
@@ -1482,13 +2630,26 @@ impl Project {
             dir = root.join(format!("{}-{n}", utc_stamp()));
         }
         for c in at_risk {
-            if let Some(old) = &c.old {
-                let dest = dir.join(&c.rel);
-                if let Some(parent) = dest.parent() {
-                    fs::create_dir_all(parent)?;
-                }
-                fs::write(&dest, old).with_context(|| format!("backing up {}", c.rel))?;
+            let bytes = match fs::read(&c.path) {
+                Ok(b) => b,
+                Err(e) => match &c.old {
+                    Some(old) => old.clone().into_bytes(),
+                    None if e.kind() == std::io::ErrorKind::NotFound => continue,
+                    None => {
+                        return Err(e).with_context(|| {
+                            format!(
+                                "backing up {} (it can't be read, so it isn't overwritten)",
+                                c.rel
+                            )
+                        })
+                    }
+                },
+            };
+            let dest = dir.join(&c.rel);
+            if let Some(parent) = dest.parent() {
+                fs::create_dir_all(parent)?;
             }
+            fs::write(&dest, bytes).with_context(|| format!("backing up {}", c.rel))?;
         }
         Self::prune_backups(target, 5)?;
         Ok(Some(dir))
@@ -1724,10 +2885,18 @@ impl Project {
         warnings
     }
 
-    /// Delete a Claude subagent's generated file (used on rename).
+    /// Delete a Claude subagent's generated file (used on rename) — only the entry
+    /// spelled exactly so, and only while it still is that agent's file: on a
+    /// case-insensitive file system `Reviewer.md` also opens a renamed `reviewer.md`.
     pub fn remove_claude_agent_file(target: &Path, name: &str) -> Result<()> {
         let p = target.join(format!(".claude/agents/{name}.md"));
-        if p.exists() {
+        let declares = |md: &str| {
+            lf(md)
+                .strip_prefix("---\n")
+                .and_then(|rest| rest.split("\n---\n").next())
+                .is_some_and(|front| front.lines().any(|l| l.trim() == format!("name: {name}")))
+        };
+        if has_entry(&p) && fs::read_to_string(&p).is_ok_and(|md| declares(&md)) {
             fs::remove_file(&p).with_context(|| format!("removing {}", p.display()))?;
         }
         Ok(())
@@ -1785,6 +2954,11 @@ impl Project {
         if !from.exists() || from == to {
             return Ok(());
         }
+        if same_file(&from, &to) {
+            // Only the case differs and the file system sees one folder.
+            let _ = fs::rename(&from, &to);
+            return Ok(());
+        }
         fs::create_dir_all(&to)?;
         for entry in fs::read_dir(&from)? {
             let entry = entry?;
@@ -1802,7 +2976,7 @@ impl Project {
 
     pub fn remove_claude_skill_dir(target: &Path, name: &str) -> Result<()> {
         let p = target.join(format!(".claude/skills/{name}"));
-        if p.exists() {
+        if has_entry(&p) {
             fs::remove_dir_all(&p).with_context(|| format!("removing {}", p.display()))?;
         }
         Ok(())
@@ -1816,7 +2990,8 @@ impl Project {
             format!(".opencode/prompts/{name}.txt"),
         ] {
             let p = target.join(rel);
-            if p.exists() {
+            // The exact entry only (see `remove_claude_agent_file`).
+            if has_entry(&p) {
                 fs::remove_file(&p).with_context(|| format!("removing {}", p.display()))?;
             }
         }
@@ -1837,8 +3012,58 @@ impl Project {
             fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
         let mut value: Value =
             serde_json::from_str(&data).with_context(|| format!("parsing {}", path.display()))?;
-        migrate_state(&mut value)?;
-        serde_json::from_value(value).with_context(|| format!("loading {}", path.display()))
+        let (version, schema) = written_by(&value);
+        let loaded = migrate_state(&mut value)
+            .and_then(|()| Ok(serde_json::from_value::<Project>(value)?))
+            .with_context(|| format!("loading {}", path.display()));
+        let project = match loaded {
+            Ok(p) => p,
+            // A newer ocgen's state this one can't read: say which ocgen it needs.
+            Err(e) => {
+                let rel = rel_str(path.strip_prefix(target).unwrap_or(&path));
+                return Err(match refuse_newer(&rel, &version, schema) {
+                    Err(newer) => e.context(newer.to_string()),
+                    Ok(()) => e,
+                });
+            }
+        };
+        project.check_names().with_context(|| {
+            format!(
+                "{} holds a name ocgen can't use in a file path — fix it there",
+                path.display()
+            )
+        })?;
+        Ok(project)
+    }
+
+    /// Every name that becomes part of a file path — agents, skills, MCP servers,
+    /// provider keys and the plugin folder — must be a plain identifier, so a state
+    /// file can't make ocgen write (or remove) anything outside the project.
+    fn check_names(&self) -> Result<()> {
+        use crate::validate::ident;
+        for a in &self.agents {
+            ident(&a.name).map_err(|e| anyhow!("agent name '{}': {e}", a.name))?;
+        }
+        for s in &self.skills {
+            if !crate::claude::is_valid_skill_name(&s.name) {
+                bail!(
+                    "skill name '{}': use lowercase letters, digits and '-'",
+                    s.name
+                );
+            }
+        }
+        for m in &self.claude.mcp_servers {
+            ident(&m.name).map_err(|e| anyhow!("MCP server name '{}': {e}", m.name))?;
+        }
+        for p in &self.providers {
+            ident(&p.key).map_err(|e| anyhow!("provider key '{}': {e}", p.key))?;
+        }
+        if self.target == Target::ClaudeCode && self.claude.output.plugin {
+            let name = self.plugin_name();
+            crate::validate::folder_name(&name)
+                .map_err(|e| anyhow!("plugin folder '{name}': {e}"))?;
+        }
+        Ok(())
     }
 
     /// Repair a loaded project in place: reassign agents pointing at unknown
@@ -2002,6 +3227,10 @@ fn migrate_state(value: &mut Value) -> Result<()> {
                     "providers".into(),
                     json!([{ "key": key, "name": name, "npm": npm, "base_url": base_url, "models": models }]),
                 );
+                // Consumed: not unknown keys to carry forward.
+                for k in ["provider_key", "provider_name", "npm", "base_url", "models"] {
+                    obj.remove(k);
+                }
             }
         }
     }
@@ -2094,6 +3323,8 @@ fn migrate_agent(agent: &mut Value, language: &str, default_provider: &str) -> R
             }
         }
     }
+    // Consumed above (it lives on as `role`): not an unknown key to carry forward.
+    obj.remove("archetype");
     Ok(())
 }
 
@@ -2110,6 +3341,76 @@ fn find_root(start: &Path) -> Option<PathBuf> {
     }
     None
 }
+
+/// The ocgen version and state schema a state file (as JSON) records: empty and
+/// 0 for one from before they were recorded.
+fn written_by(state: &Value) -> (String, u32) {
+    let version = state
+        .get("ocgen_version")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let schema = state
+        .get("schema")
+        .and_then(Value::as_u64)
+        .map_or(0, |n| u32::try_from(n).unwrap_or(u32::MAX));
+    (version, schema)
+}
+
+/// Refuse to write over a state a newer ocgen wrote (`version`, `schema`): this
+/// one would drop the settings it doesn't know and downgrade the generated files.
+fn refuse_newer(state_file: &str, version: &str, schema: u32) -> Result<()> {
+    let newer = matches!(
+        (semver(version), semver(crate::VERSION)),
+        (Some(theirs), Some(ours)) if theirs > ours
+    );
+    if schema <= STATE_SCHEMA && !newer {
+        return Ok(());
+    }
+    let by = match version.trim() {
+        "" => "a newer ocgen".to_string(),
+        v => format!("ocgen {v}"),
+    };
+    let needed = if newer {
+        format!("ocgen {} or newer", version.trim())
+    } else {
+        format!("an ocgen that reads state schema {schema}")
+    };
+    bail!(
+        "{state_file} was last written by {by} (state schema {schema}), and this is ocgen {} (schema {STATE_SCHEMA}); upgrade to {needed} to change this project — an older ocgen would drop the settings it doesn't know",
+        crate::VERSION
+    )
+}
+
+/// An agent's prompt body rendered as a template (the archetype prompts loop over
+/// the subagents). A body that isn't one — e.g. a GitHub Actions `${{ … }}`, a
+/// Helm `{{ .Values }}` or a `{{ version }}` ocgen knows nothing about, in the
+/// user's own text — is used as written, with a warning (once per agent).
+fn body_as_template(env: &Environment, agent: &str, body: &str, ctx: minijinja::Value) -> String {
+    // An unknown value fails instead of printing as nothing, so no text is lost.
+    let mut env = env.clone();
+    env.set_undefined_behavior(minijinja::UndefinedBehavior::SemiStrict);
+    match env.render_str(body, ctx) {
+        Ok(text) => text,
+        Err(e) => {
+            static WARNED: std::sync::Mutex<BTreeSet<String>> =
+                std::sync::Mutex::new(BTreeSet::new());
+            if WARNED
+                .lock()
+                .map(|mut w| w.insert(agent.to_string()))
+                .unwrap_or(true)
+            {
+                eprintln!(
+                    "warning: agent '{agent}': its prompt isn't a template ocgen can render ({e}) — written as plain text"
+                );
+            }
+            body.to_string()
+        }
+    }
+}
+
+#[cfg(test)]
+mod write_tests;
 
 /// Turn a rendered command file (`---` frontmatter + body) into a skill: add its
 /// `name` and, for side-effecting workflows, `disable-model-invocation: true`.

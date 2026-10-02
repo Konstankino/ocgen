@@ -108,7 +108,7 @@ pub enum Command {
     Approve {
         /// Directory of the existing project (default: current dir).
         path: Option<String>,
-        /// How long the approval lasts.
+        /// How long the approval lasts, in minutes (1 to 1440, i.e. 24 hours).
         #[arg(long, default_value_t = 30)]
         minutes: u64,
         /// Re-lock now.
@@ -297,7 +297,8 @@ pub enum EditWhat {
     /// including the approval-gate guards, always stay; only your own can be removed.
     ///
     /// Claude Code checks deny, then ask, then allow: an allow rule that a generated
-    /// ask or deny rule also matches has no effect, and ocgen warns about it.
+    /// ask or deny rule also matches has no effect, and ocgen warns about it. A rule
+    /// stricter than ocgen's (a deny of a generated ask or allow) takes its place.
     ///
     /// With flags the changes apply directly (usable from scripts and from Claude
     /// itself); without flags the command is interactive.
@@ -477,7 +478,15 @@ impl PermissionsCli {
 #[derive(Subcommand)]
 pub enum TemplatesAction {
     /// Copy the embedded templates into ~/.config/ocgen/templates for editing.
-    Init,
+    ///
+    /// Existing copies are kept unless --force. Hook scripts and the
+    /// gate-protocol templates (team, team-plan, fanout, the team rule) are
+    /// never copied: they always come from the ocgen binary.
+    Init {
+        /// Overwrite existing copies with the built-in defaults.
+        #[arg(long)]
+        force: bool,
+    },
     /// Print the template override directory.
     Path,
     /// List resolved templates, marking overridden ones.

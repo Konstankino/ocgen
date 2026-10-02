@@ -30,7 +30,7 @@ list and direct messages.
 - 3–5 teammates is the sweet spot; teams use more tokens than a single session.
 - Experimental. `teammateMode` is set in this project's `settings.json`, but it's a
   user-level preference — move it to `~/.claude/settings.json` if it isn't honored here.
-{% if plan_gate or risk_rounds or confidence_threshold or approval_gate %}
+{% if plan_gate or risk_rounds or confidence_threshold or approval_gate or check_cmd %}
 ### Governed workflow
 
 This team runs under governance gates. The team keeps its working state under `.claude/team/`:
@@ -40,19 +40,33 @@ pre-author them.
 - **Plan approval first.** Run `/team-plan` before executing: interview, draft the shared task
   list, present it, and take questions and requested improvements until the user approves. The
   `TaskCreated` hook blocks execution tasks until `.claude/team/plan.md` contains `Status: APPROVED`.
+  An approval holds for that plan and that team run only: editing the plan, or a later session,
+  makes it stale until the user approves again.
 {%- endif %}
 {% if confidence_threshold %}
-- **Confidence gate.** State a `Confidence: NN%` in each task completion; the `TaskCompleted` hook
-  blocks completion below ≥ {{ confidence_threshold }}% (it reads the confidence from the completion,
-  or a `.claude/team/confidence/<task-id>.txt` marker). A teammate may not pick up the next task
-  until the current one clears the gate.
+- **Confidence gate.** Finish each task with a last message that ends in a line
+  `Confidence: NN%` (e.g. `Confidence: 97%`); the `TaskCompleted` hook blocks completion below
+  ≥ {{ confidence_threshold }}%. It reads the confidence from your last message — never from the
+  task's subject or description, which the lead wrote — or, if that has none, from
+  `.claude/team/confidence/<team-name>/<task-id>.txt` (a block names the exact path; the file is
+  removed once the task passes). A teammate may not pick up the next task until the current one
+  clears the gate.
+{%- endif %}
+{%- if check_cmd %}
+
+- **The task check.** The `TaskCompleted` hook runs `{{ check_cmd }}` in the shared directory,
+  one teammate at a time, so it can fail on another teammate's unfinished edit — if a failure
+  isn't yours, say so instead of editing their files. A task may narrow the check with a line
+  `Check: {{ check_cmd }} <arguments>` in its description; any other `Check:` line is ignored.
 {%- endif %}
 {% if risk_rounds %}
-- **Risk mitigation rounds.** Write each risk on one line with an `Owner: <role>` and a
-  `Mitigation: pending` status; leave it pending until addressed, then mark it `done` or
-  `accepted`. The `TeammateIdle` hook holds a teammate only while a risk **it owns** is still
-  pending — so a teammate that closed its own risks idles freely even while others' remain open,
-  and it is never pressured to fabricate closures for risks it doesn't own. Read-only roles (no
+- **Risk mitigation rounds.** Write each risk on one line with an `Owner: <teammate-name>` (the
+  name the teammate was spawned with, e.g. `implementer-2`) and a `Mitigation: pending` status;
+  leave it pending until addressed, then mark it `done` or `accepted`. The `TeammateIdle` hook
+  holds a teammate only while a risk **it owns** is still pending — so a teammate that closed its
+  own risks idles freely even while others' remain open, and it is never pressured to fabricate
+  closures for risks it doesn't own. A role as owner (`Owner: implementer`) holds no named
+  teammate, since several may share a role — the hook reports it instead. Read-only roles (no
   Write/Edit tool) are exempt.
 {%- endif %}
 {% if loop_guard_max %}
@@ -63,15 +77,17 @@ pre-author them.
   lead reports those as unresolved.
 {%- endif %}
 {% if approval_gate %}
-- **Execution-approval gate (hard line).** No agent may perform a high-impact external action —
-  `ssh`, cloud mutations (`aws`/`gcloud`/`az`), `git push`/`merge`, `gh pr merge`/`release`,
+- **Execution-approval gate.** No agent may perform a high-impact external action — `ssh`,
+  cloud mutations (`aws`/`gcloud`/`az`), `git push`/`merge`, `gh pr merge`/`release`,
   `terraform apply`, `kubectl`/`helm`, deploys, or publishes — until a **human** reviews and
-  approves. Only a human can approve, from their own terminal: `ocgen approve` (it lasts 30
-  minutes by default and re-locks by itself). Never try to approve, and never touch
-  `~/.claude/ocgen/` — a deterministic `PreToolUse` hook refuses both, a git `pre-push` hook
-  blocks any push made without approval however it is launched, and credentials may be withheld
-  entirely. Plan and local edits are allowed before the line; when you reach it, stop and ask
-  the human to review and approve.
+  approves. Approving is for a human, from their own terminal: `ocgen approve` (it lasts 30
+  minutes by default and re-locks by itself). Never try to approve, never touch
+  `~/.claude/ocgen/`, and never phrase a command to get past the gate. A `PreToolUse` hook
+  matches the command text and refuses these; with the sandbox on, sandboxed commands can't write
+  the approval store and run without the credentials ocgen withholds. A git `pre-push` hook is a
+  backstop (`--no-verify` skips it); branch protection on the server is what really stops a push.
+  Plan and local edits are allowed before the line; when you reach it, stop and ask the human to
+  review and approve.
 {%- endif %}
 {%- endif %}
 {% endif %}

@@ -21,8 +21,9 @@ lg_field() {
         sed -E 's/^.*:[[:space:]]*"([^"]*)"$/\1/'
 }
 
-# lg_safe <text> -> a filename- and JSON-safe token
-lg_safe() { printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_' | cut -c1-80; }
+# lg_safe <text> -> a filename- and JSON-safe token (byte by byte, in any locale,
+# as the Rust hook makes it)
+lg_safe() { printf '%s' "$1" | LC_ALL=C tr -c 'A-Za-z0-9._-' '_' | LC_ALL=C cut -c1-80; }
 
 # lg_key <payload> <gate> <subject> -> sets LG_GATE, LG_SUBJECT, LG_KEY
 lg_key() {

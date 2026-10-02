@@ -73,15 +73,78 @@ pub fn rev(bytes: &[u8]) -> String {
     format!("{h:016x}")
 }
 
+/// `p` made absolute against the current directory, without resolving links
+/// (`.` components dropped, `..` kept), so a relative path classifies the same
+/// as the absolute one.
+fn absolute(p: &Path) -> PathBuf {
+    let p = if p.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        p
+    };
+    std::path::absolute(p)
+        .unwrap_or_else(|_| p.to_path_buf())
+        .components()
+        .collect()
+}
+
+/// Whether absolute path `abs` ends in `.claude/notes`, by its components (on
+/// Unix a `\` is part of a name, not a separator).
+fn ends_in_notes(abs: &Path) -> bool {
+    let mut names = abs.components().rev().map(|c| match c {
+        std::path::Component::Normal(n) => n.to_str(),
+        _ => None,
+    });
+    names.next() == Some(Some("notes")) && names.next() == Some(Some(".claude"))
+}
+
+/// Whether `dir` is a project's `.claude/notes` directory — the only place
+/// ocgen writes pages, a `*` .gitignore and the viewer's `.viewer.json`.
+pub fn is_notes_dir(dir: &Path) -> bool {
+    ends_in_notes(&absolute(dir)) && dir.is_dir()
+}
+
+/// The slug of ledger `md` (any path that reaches `.claude/notes/<slug>.md`,
+/// relative or absolute), or why it isn't one.
+pub fn ledger_slug(md: &Path) -> Result<String> {
+    let abs = absolute(md);
+    let target = match abs.file_name().and_then(|n| n.to_str()) {
+        Some(name) if !name.contains('\\') && abs.parent().is_some_and(ends_in_notes) => {
+            ledger_target(&format!(".claude/notes/{name}"))
+        }
+        _ => Target::NotLedger,
+    };
+    match target {
+        Target::Ledger { slug } => Ok(slug),
+        Target::BadSlug => bail!(
+            "{} has no HTML view — name ledgers with a lowercase-hyphen slug (e.g. request-flow.md)",
+            md.display()
+        ),
+        Target::NotLedger => bail!(
+            "{} is not an /inquire ledger — only .claude/notes/<topic-slug>.md files are rendered",
+            md.display()
+        ),
+    }
+}
+
 /// Render ledger `md` to its sibling `.html` (written atomically, and only when
 /// it changed) and make sure the notes directory stays out of git. If the
-/// ledger changes while rendering, it is rendered again.
+/// ledger changes while rendering, it is rendered again. Anything but a ledger
+/// is refused (see [`ledger_slug`]): the sibling page would overwrite a real
+/// `.html`, and the `*` .gitignore would hide its directory from git.
 pub fn render_file(md: &Path) -> Result<PathBuf> {
-    let dir = md.parent().unwrap_or(Path::new("."));
-    let slug = md
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .context("ledger has no file name")?;
+    let slug = ledger_slug(md)?;
+    render_ledger(md, &slug)
+}
+
+/// [`render_file`] for ledger `md` of slug `slug`, already known to be one: the
+/// viewer serves the notes directory it checked at start by its canonical path,
+/// which need not end in `.claude/notes` (a linked `.claude`).
+fn render_ledger(md: &Path, slug: &str) -> Result<PathBuf> {
+    let dir = match md.parent() {
+        Some(d) if !d.as_os_str().is_empty() => d,
+        _ => Path::new("."),
+    };
     let out = dir.join(format!("{slug}.html"));
     for _ in 0..3 {
         let src = fs::read_to_string(md).with_context(|| format!("reading {}", md.display()))?;
@@ -93,7 +156,7 @@ pub fn render_file(md: &Path) -> Result<PathBuf> {
         }
     }
     let ignore = dir.join(".gitignore");
-    if !ignore.exists() {
+    if is_notes_dir(dir) && !ignore.exists() {
         let _ = fs::write(ignore, "*\n");
     }
     Ok(out)
@@ -103,8 +166,16 @@ fn write_if_changed(path: &Path, bytes: &[u8]) -> Result<()> {
     if fs::read(path).ok().as_deref() == Some(bytes) {
         return Ok(());
     }
+    // A temp file of this call's own: the viewer renders on one thread per
+    // connection, and a shared name would let one write truncate another's.
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("page");
-    let tmp = path.with_file_name(format!(".{name}.tmp-{}", std::process::id()));
+    let tmp = path.with_file_name(format!(".{name}.tmp-{}-{seq}-{nanos}", std::process::id()));
     fs::write(&tmp, bytes).with_context(|| format!("writing {}", tmp.display()))?;
     // Windows refuses to replace a file another process has open for a moment.
     let mut tries = 0;
@@ -265,5 +336,62 @@ pub fn find_ledger(dir: &Path, topic: Option<&str>) -> Result<PathBuf> {
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    /// The viewer renders on one thread per connection: concurrent writes of
+    /// one page must each go through their own temp file, so none fails and a
+    /// reader only ever sees a whole page.
+    #[test]
+    fn concurrent_writes_use_their_own_temp_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = Arc::new(dir.path().join("flow.html"));
+        let pages: Arc<[Vec<u8>; 2]> = Arc::new([vec![b'a'; 1 << 20], vec![b'b'; 1 << 20]]);
+        let writers: Vec<_> = (0..8)
+            .map(|t| {
+                let (path, pages) = (Arc::clone(&path), Arc::clone(&pages));
+                std::thread::spawn(move || {
+                    (0..40)
+                        .filter_map(|i| write_if_changed(&path, &pages[(t + i) % 2]).err())
+                        .map(|e| format!("{e:#}"))
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        let reader = {
+            let (path, pages) = (Arc::clone(&path), Arc::clone(&pages));
+            std::thread::spawn(move || {
+                let mut torn = 0;
+                for _ in 0..400 {
+                    if let Ok(b) = fs::read(&*path) {
+                        if b != pages[0] && b != pages[1] {
+                            torn += 1;
+                        }
+                    }
+                }
+                torn
+            })
+        };
+        let errors: Vec<String> = writers
+            .into_iter()
+            .flat_map(|h| h.join().unwrap())
+            .collect();
+        assert!(
+            errors.is_empty(),
+            "{} failed: {:?}",
+            errors.len(),
+            errors.first()
+        );
+        assert_eq!(reader.join().unwrap(), 0, "a reader saw a torn page");
+        let names: Vec<String> = fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, ["flow.html"]);
     }
 }

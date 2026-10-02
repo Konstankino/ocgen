@@ -118,6 +118,9 @@ pub struct ClaudeConfig {
     pub permissions: PermissionRules,
     /// How `/intent` numbers intent files and sizes the GitHub issue draft.
     pub intent: IntentSettings,
+    /// Keys this ocgen doesn't know (written by a newer one), kept as they are.
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
 /// Where the `/intent` templates live in a project. Written once with ocgen's
@@ -275,6 +278,17 @@ impl RuleList {
             RuleList::Deny => "deny",
         }
     }
+
+    /// Whether this list wins over `other` for the same rule: deny beats ask
+    /// beats allow, the order Claude Code checks them in.
+    pub fn stricter_than(self, other: RuleList) -> bool {
+        let rank = |l: RuleList| match l {
+            RuleList::Allow => 0,
+            RuleList::Ask => 1,
+            RuleList::Deny => 2,
+        };
+        rank(self) > rank(other)
+    }
 }
 
 /// Permission rules by list.
@@ -337,6 +351,29 @@ impl PermissionRules {
         Ok(true)
     }
 
+    /// The list that holds `rule`, if any (the strictest, should several).
+    pub fn list_of(&self, rule: &str) -> Option<RuleList> {
+        let rule = rule.trim();
+        [RuleList::Deny, RuleList::Ask, RuleList::Allow]
+            .into_iter()
+            .find(|l| self.list(*l).iter().any(|r| r == rule))
+    }
+
+    /// Put `rule` in list `l` unless a list at least as strict already holds it;
+    /// a looser copy moves out, so the rule still lives in one list. Returns the
+    /// list that holds it afterwards. Unlike [`Self::add`], never fails: this is
+    /// how settings.json combines ocgen's rules with the user's.
+    pub fn tighten(&mut self, l: RuleList, rule: &str) -> RuleList {
+        let rule = rule.trim();
+        match self.list_of(rule) {
+            Some(held) if !l.stricter_than(held) => return held,
+            Some(held) => self.list_mut(held).retain(|r| r != rule),
+            None => {}
+        }
+        self.list_mut(l).push(rule.to_string());
+        l
+    }
+
     /// Remove `rule` from whichever list holds it. `false` when none does.
     pub fn remove(&mut self, rule: &str) -> bool {
         let rule = rule.trim();
@@ -351,10 +388,13 @@ impl PermissionRules {
     }
 }
 
-/// Opt-in sandbox profile: OS-level containment of Bash (Seatbelt on macOS,
-/// bubblewrap on Linux/WSL2), a starter network allowlist, and no unsandboxed
-/// retries. Secret read-denies need no repeat here — permission rules feed the
-/// sandbox.
+/// Sandbox profile: OS-level containment of Bash (Seatbelt on macOS, bubblewrap
+/// on Linux/WSL2), a starter network allowlist, and no unsandboxed retries. The
+/// wizard turns it on by default with the approval gate, which is advisory
+/// without it. Secret read-denies need no repeat here — permission rules feed
+/// the sandbox. Claude Code runs hooks outside its sandbox, so the hooks run
+/// the project code they start themselves (the check, the formatter) in an OS
+/// sandbox of their own ([`HOOK_DENY_WRITE`]).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SandboxProfile {
@@ -362,13 +402,28 @@ pub struct SandboxProfile {
     /// Domains allowed on top of [`SANDBOX_DOMAINS`].
     pub extra_domains: Vec<String>,
     /// Let sandboxed commands use your push/deploy credentials. Off by default:
-    /// without credentials an agent cannot push or deploy at all, however the
-    /// command is phrased — you do those steps yourself.
+    /// the credentials ocgen knows about ([`CREDENTIAL_PATHS`],
+    /// [`CREDENTIAL_ENV`]) are withheld, so a push or publish that needs them
+    /// fails however the command is phrased. One kept elsewhere — an OS
+    /// keychain credential helper (osxkeychain, Git Credential Manager, gh's
+    /// keyring token) — may still be reachable.
     pub allow_credentials: bool,
+    /// The user was asked and said no, so "chose off" reads apart from "never
+    /// asked" (states written before ocgen asked load as `false`).
+    pub declined: bool,
 }
 
-/// Credential files withheld from sandboxed commands.
-pub const CREDENTIAL_PATHS: [&str; 7] = [
+/// Whether Claude Code can sandbox shell commands here: macOS (Seatbelt) and
+/// Linux/WSL2 (bubblewrap). Native Windows has no sandbox, so there the approval
+/// gate is advisory.
+pub fn sandbox_supported() -> bool {
+    cfg!(any(target_os = "macos", target_os = "linux"))
+}
+
+/// Credential files withheld from sandboxed commands: SSH keys, cloud and
+/// cluster logins, and the tokens git, GitHub and the package registries in
+/// [`SANDBOX_DOMAINS`] push and publish with.
+pub const CREDENTIAL_PATHS: [&str; 18] = [
     "~/.ssh",
     "~/.aws",
     "~/.config/gh",
@@ -376,24 +431,87 @@ pub const CREDENTIAL_PATHS: [&str; 7] = [
     "~/.docker/config.json",
     "~/.kube",
     "~/.config/gcloud",
+    "~/.azure",
+    "~/.git-credentials",
+    "~/.config/git/credentials",
+    "~/.npmrc",
+    "~/.yarnrc.yml",
+    "~/.cargo/credentials",
+    "~/.cargo/credentials.toml",
+    "~/.pypirc",
+    "~/.gem/credentials",
+    "~/.terraform.d/credentials.tfrc.json",
+    "~/.pulumi/credentials.json",
 ];
 
 /// Credential environment variables withheld from sandboxed commands.
-pub const CREDENTIAL_ENV: [&str; 9] = [
+pub const CREDENTIAL_ENV: [&str; 23] = [
     "GH_TOKEN",
     "GITHUB_TOKEN",
+    "GH_ENTERPRISE_TOKEN",
+    "GITHUB_ENTERPRISE_TOKEN",
+    "GITLAB_TOKEN",
     "AWS_ACCESS_KEY_ID",
     "AWS_SECRET_ACCESS_KEY",
     "AWS_SESSION_TOKEN",
+    "AZURE_CLIENT_SECRET",
+    "GOOGLE_APPLICATION_CREDENTIALS",
     "NPM_TOKEN",
+    "NODE_AUTH_TOKEN",
+    "YARN_NPM_AUTH_TOKEN",
     "CARGO_REGISTRY_TOKEN",
+    "TWINE_USERNAME",
+    "TWINE_PASSWORD",
+    "PYPI_TOKEN",
+    "UV_PUBLISH_TOKEN",
+    "POETRY_PYPI_TOKEN_PYPI",
+    "GEM_HOST_API_KEY",
     "DOCKER_PASSWORD",
     "KUBECONFIG",
+    "PULUMI_ACCESS_TOKEN",
+];
+
+/// What a hook's own sandbox write-protects when it runs project code (the
+/// check, the formatter) — Claude Code doesn't sandbox hooks. Written as the
+/// sandbox settings write paths: `~/` the home folder, `./` the project (and
+/// the folder the command runs in). The approval store and Claude Code's own
+/// settings; what the user's shell, git and ssh run by themselves; and in the
+/// project what Claude Code's sandbox protects there, plus the status line,
+/// ocgen's state and git's hooks and config. Rendered into the hook env, so the
+/// `sh` twin needs no copy.
+pub const HOOK_DENY_WRITE: [&str; 24] = [
+    "~/.claude",
+    "~/.claude.json",
+    "~/.bashrc",
+    "~/.bash_profile",
+    "~/.profile",
+    "~/.zshrc",
+    "~/.zshenv",
+    "~/.zprofile",
+    "~/.gitconfig",
+    "~/.config/git",
+    "~/.ssh",
+    "~/.local/bin",
+    "~/.cargo/bin",
+    "./.claude/settings.json",
+    "./.claude/settings.local.json",
+    "./.claude/hooks",
+    "./.claude/skills",
+    "./.claude/agents",
+    "./.claude/commands",
+    "./.claude/statusline.sh",
+    "./.claude/.ocgen-state.json",
+    "./.mcp.json",
+    "./.git/hooks",
+    "./.git/config",
 ];
 
 /// Denied everywhere (with the power-user permissions): reading credentials, and
-/// reading, editing or running anything that could self-approve execution.
-pub const GUARD_DENY: [&str; 10] = [
+/// editing or running anything that could self-approve execution. The approval
+/// store stays readable: an approval is only an expiry time, and the pre-push
+/// hook, which runs inside the sandbox, has to read it (Claude Code turns Read
+/// deny rules into sandbox read-denies).
+pub const GUARD_DENY: [&str; 9] = [
     "Read(~/.ssh/**)",
     "Read(~/.aws/**)",
     "Read(~/.config/gh/**)",
@@ -401,9 +519,34 @@ pub const GUARD_DENY: [&str; 10] = [
     "Read(~/.docker/config.json)",
     "Read(~/.kube/**)",
     "Read(~/.config/gcloud/**)",
-    "Read(~/.claude/ocgen/**)",
     "Edit(~/.claude/ocgen/**)",
     "Bash(ocgen approve*)",
+];
+
+/// Denied whenever the approval gate is on, with or without the permission
+/// defaults: the sandbox contains Bash, not the file tools, so file-tool access
+/// to the approval store needs rules of its own. An `Edit` rule covers every
+/// built-in tool that edits files (Write included; Claude Code never consults a
+/// `Write(path)` rule). `ocgen approve` is for a human in their own terminal.
+pub const GATE_DENY: [&str; 2] = ["Edit(~/.claude/ocgen/**)", "Bash(ocgen approve*)"];
+
+/// Asked whenever the approval gate is on: edits to what the gate trusts — its
+/// hook scripts, the settings that register them, ocgen's state file (which
+/// regenerates both), the status line Claude Code runs outside the sandbox, and
+/// git hooks. Claude Code protects `.claude` and `.git` on its own, but auto
+/// mode hands those writes to its classifier; an ask rule puts a human in front
+/// of them. `/path` is the project root and `//**/` any directory (a monorepo's
+/// `.git` sits above the project). The same goes for `ocgen edit …` and
+/// `ocgen doctor`, which rewrite all of these.
+pub const GATE_ASK: [&str; 8] = [
+    "Edit(/.claude/hooks/**)",
+    "Edit(/.claude/settings.json)",
+    "Edit(/.claude/settings.local.json)",
+    "Edit(/.claude/.ocgen-state.json)",
+    "Edit(/.claude/statusline.sh)",
+    "Edit(//**/.git/hooks/**)",
+    "Bash(ocgen edit*)",
+    "Bash(ocgen doctor*)",
 ];
 
 /// Starter network allowlist: source hosting and the common package registries.
@@ -435,22 +578,47 @@ pub const SECRET_READ_DENY: [&str; 6] = [
 ];
 
 /// High-impact commands Claude Code always asks about (even in auto mode) — a
-/// second line behind the approval gate's pattern match.
-pub const HIGH_IMPACT_ASK: [&str; 17] = [
+/// second line behind the approval gate's pattern match. A `*` before the
+/// subcommand also covers options there (`pnpm -r publish`, `cargo +nightly
+/// publish`, `docker image push`).
+pub const HIGH_IMPACT_ASK: [&str; 40] = [
     "Bash(git push:*)",
     "Bash(git commit:*)",
+    "Bash(git -c alias*)",
     "Bash(gh pr merge*)",
     "Bash(gh release*)",
+    "Bash(gh workflow run*)",
     "Bash(terraform apply*)",
     "Bash(terraform destroy*)",
+    "Bash(pulumi up*)",
+    "Bash(pulumi destroy*)",
     "Bash(kubectl apply*)",
     "Bash(kubectl delete*)",
+    "Bash(kubectl rollout restart*)",
+    "Bash(kubectl rollout undo*)",
+    "Bash(kubectl set *)",
     "Bash(helm install*)",
     "Bash(helm upgrade*)",
     "Bash(helm uninstall*)",
     "Bash(npm publish*)",
+    "Bash(npm * publish*)",
+    "Bash(pnpm publish*)",
+    "Bash(pnpm * publish*)",
+    "Bash(yarn publish*)",
+    "Bash(yarn * publish*)",
+    "Bash(bun publish*)",
     "Bash(cargo publish*)",
+    "Bash(cargo * publish*)",
     "Bash(docker push*)",
+    "Bash(docker * push*)",
+    "Bash(docker *--push*)",
+    "Bash(curl *--data*)",
+    "Bash(curl *--json*)",
+    "Bash(curl *--upload-file*)",
+    "Bash(curl *--form*)",
+    "Bash(curl *-T *)",
+    "Bash(curl *-F *)",
+    "Bash(curl *-d *)",
     "Bash(ssh *)",
     "Bash(scp *)",
     "Bash(rsync *)",
@@ -468,7 +636,7 @@ pub fn managed_settings_json() -> String {
         "permissions": {
             "disableBypassPermissionsMode": "disable",
             "deny": deny,
-            "ask": HIGH_IMPACT_ASK,
+            "ask": &HIGH_IMPACT_ASK[..],
         },
         "sandbox": {
             "enabled": true,
@@ -489,7 +657,8 @@ pub struct HooksExtra {
     pub notify: bool,
     /// Formatter command run after Claude edits a file (empty = off).
     pub format_cmd: String,
-    /// Log settings/skills changes made during a session.
+    /// Log settings/skills changes made during a session; while the approval gate
+    /// or the WebFetch guard is on, also block a change that would weaken it.
     pub config_audit: bool,
     /// Drop a leading `cd` into the folder Claude is already in, so a read-only
     /// command after it isn't asked about under `blockReadsOutsideWorkingDirectories`.
@@ -544,6 +713,12 @@ pub struct McpServer {
     /// Pre-approve for the team via `enabledMcpjsonServers` (applies once the
     /// workspace is trusted).
     pub pre_approve: bool,
+    /// `.mcp.json` fields ocgen doesn't model (e.g. on a server added by hand),
+    /// written back as they are. Kept under a key of their own in the state, not
+    /// flattened: a value ocgen can't read into one of its fields (an argument
+    /// that isn't a string) is kept here under that field's name.
+    #[serde(skip_serializing_if = "serde_json::Map::is_empty")]
+    pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
 impl McpServer {
@@ -564,6 +739,9 @@ impl McpServer {
             if !self.headers.is_empty() {
                 o.insert("headers".into(), serde_json::json!(self.headers));
             }
+        }
+        for (k, x) in &self.extra {
+            o.entry(k.clone()).or_insert_with(|| x.clone());
         }
         v
     }

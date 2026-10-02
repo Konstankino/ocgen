@@ -30,16 +30,24 @@ irm https://raw.githubusercontent.com/Konstankino/ocgen/main/install.ps1 | iex
 ```
 
 Prefer [Scoop](https://scoop.sh)? A manifest is in [`scoop/ocgen.json`](scoop/ocgen.json)
-to host in a bucket, after which `scoop install ocgen` / `scoop update ocgen` work.
+to host in a bucket, after which `scoop install ocgen` / `scoop update ocgen` work (its
+`autoupdate` takes each release's hash from `SHA256SUMS`).
 
-**macOS / Linux** — installs to `~/.local/bin`:
+**macOS / Linux** (x86_64 and arm64) — installs to `~/.local/bin`:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Konstankino/ocgen/main/install.sh | sh
 ```
 
+On Apple silicon it installs the native arm64 build, even from a shell running under Rosetta.
 Or download a prebuilt archive for your platform from the releases page and put the
 binary on your PATH.
+
+**Checksums.** Both installers check the downloaded archive against the release's
+`SHA256SUMS` and refuse a mismatch (`install.sh` needs `sha256sum` or `shasum`). Releases up
+to v0.4.6 predate `SHA256SUMS` and install with a warning. To skip the check — say, on a
+machine with no hash tool — set `OCGEN_INSTALL_SKIP_VERIFY=1` (either installer) or pass
+`-SkipVerify` to the PowerShell one.
 
 **From source** (any OS with [Rust](https://rustup.rs)):
 
@@ -51,16 +59,20 @@ cargo install --git https://github.com/Konstankino/ocgen ocgen
 
 New versions ship as GitHub Releases: pushing a version tag (`git tag v0.2.0 && git push
 --tags`) triggers [`.github/workflows/release.yml`](.github/workflows/release.yml), which
-builds and uploads binaries for Windows, macOS and Linux. The binaries report the tag's
-version (`ocgen --version` → `ocgen 0.2.0`), so a release needs no Cargo.toml edit; a tag that
-isn't `vX.Y.Z` fails the release. Local builds report Cargo.toml's version. To update:
+builds binaries for Windows, macOS (arm64, x86_64) and Linux (x86_64, arm64) and uploads them
+with a `SHA256SUMS` file. A release is all or nothing: if one target fails to build, nothing is
+published, and a manual run that isn't on a tag builds without publishing. The binaries report
+the tag's version (`ocgen --version` → `ocgen 0.2.0`), so a release needs no Cargo.toml edit; a
+tag that isn't `vX.Y.Z` fails the release. Local builds report Cargo.toml's version. To update:
 
 - **Windows:** re-run the PowerShell one-liner, or `scoop update ocgen`.
 - **macOS / Linux:** re-run the `install.sh` one-liner.
 - **From source:** `cargo install --git https://github.com/Konstankino/ocgen ocgen --force`.
 
 Every installer is idempotent — running it again just replaces the binary with the newest
-release.
+release. The binary is swapped in by a rename, so updating works while ocgen is running (the
+notes viewer, a hook); on Windows the running `ocgen.exe` is moved aside to `ocgen.exe.old`,
+which a later run deletes.
 
 ## Use
 
@@ -103,11 +115,15 @@ files), **Decide file by file** (Overwrite / Keep mine / Show full diff for each
 **Cancel**. Anything overwritten is first copied to `.ocgen-backup/<timestamp>/` (the
 folder git-ignores itself; the newest five are kept). Identical files and your own
 `CLAUDE.md` are not conflicts. A file you keep is left untouched; `ocgen doctor
---dry-run` shows later how it differs from the generated version.
+--dry-run` shows later how it differs from the generated version. If the directory already
+holds an ocgen project, `ocgen new` first asks **Replace its configuration?** (default *No*,
+which writes nothing and points you to `ocgen edit`, `add` or `doctor`); without a terminal it
+refuses. Re-running with identical answers changes nothing and doesn't ask.
 
 Input is validated as you type — the wizard re-prompts on bad values rather than
 writing them: identifiers (agent name, provider key, model id) must be safe for
-filenames and `@mentions` and unique; temperature must be 0–2 and top_p 0–1; steps
+filenames and `@mentions` and unique, ignoring case (names that differ only in case collide on
+macOS and Windows); temperature must be 0–2 and top_p 0–1; steps
 a positive integer; color a theme name or `#hex`; and a provider base URL must be a
 real `http(s)://` URL.
 
@@ -147,9 +163,9 @@ ocgen doctor ./my-project           # repair a project's config and rewrite its 
 ocgen doctor --dry-run ./my-project # show exactly what doctor would change; write nothing
 ocgen verify ./my-project           # check the project actually works (exit 1 on failure; CI-friendly)
 ocgen managed-settings              # print an organisation policy (managed-settings.json)
-ocgen approve ./my-project          # a human unlocks pushes/deploys for 30 min (human-only)
+ocgen approve ./my-project          # you unlock pushes/deploys for 30 min (refuses to run under Claude Code)
 ocgen fields                        # explain every configurable field (alias: reference)
-ocgen templates init                # copy the editable templates to ~/.config/ocgen/templates
+ocgen templates init                # copy the editable templates to ~/.config/ocgen/templates (--force overwrites your copies)
 ocgen templates path                # print that directory
 ocgen templates list                # show which templates are overridden vs built-in
 ocgen templates edit [path]         # edit a template in $EDITOR; saves to the override dir
@@ -161,7 +177,9 @@ result into `~/.config/ocgen/templates/` — so you can tweak an existing templa
 one you added yourself, like a new archetype) without running `templates init` or hunting
 for files. Pass a path (e.g. `ocgen templates edit seeds.toml` or
 `ocgen templates edit archetypes/reviewer.toml`) or omit it to pick from a list. Edits to
-a `.toml` template are checked for valid syntax, with a warning if they don't parse.
+a `.toml` template are checked for valid syntax, with a warning if they don't parse. Hook
+scripts and the gate-protocol templates can't be overridden (see
+[Customising the templates](#customising-the-templates)).
 
 `ocgen edit agent` reloads the saved project, lets you pick an agent (or names one
 directly), and walks every field seeded with its current value — press Enter to
@@ -210,43 +228,98 @@ delete as stale (`-`) is listed with a short diff.
   tell your edits apart from its own updates. For a hand-edited `settings.json` it points you
   to `.claude/settings.local.json`, which ocgen never touches. For permission rules the whole
   project should share, use `ocgen edit permissions` instead.
-- **Permission rules you added by hand are kept.** Rules in `settings.json` that ocgen didn't
-  generate are listed under "Permission rules added by hand", and doctor offers to keep them as
-  your rules (the same store as `ocgen edit permissions`), so this and every later regeneration
-  keeps them. `--yes` and non-interactive runs keep them without asking.
+- **What you added by hand is kept.** Permission rules in `settings.json` and MCP servers in
+  `.mcp.json` that ocgen didn't generate (say, from `claude mcp add --scope project`) are listed,
+  and one prompt, **Keep them as yours?**, adopts them into the state (the same store as
+  `ocgen edit permissions` / `ocgen add mcp`), so every later regeneration keeps them. Fields
+  ocgen doesn't model, such as a server's `timeout`, are kept too. `--yes` and non-interactive
+  runs keep them without asking. A rule ocgen generated last time, or one you removed, is never
+  re-adopted.
 - **You choose per file.** When files you changed would be overwritten, pick **Apply all**,
   **Keep all changed files** (only add new ones), **Decide file by file** (Overwrite / Keep mine /
-  Show full diff) or **Cancel**. A kept file stays as it is; the next `doctor` or `verify` reports
-  it again. `--yes` applies everything, and non-interactive runs such as CI apply directly.
+  Show full diff) or **Cancel**. Files ocgen no longer generates are part of the review: Remove /
+  Keep mine / Show it, and a kept one becomes yours. A kept file stays as it is; the next `doctor`
+  or `verify` reports it again. `--yes` applies everything, and non-interactive runs such as CI
+  apply directly.
 - **Backups:** before overwriting or deleting anything it copies the previous versions to
   `.ocgen-backup/<UTC timestamp>/`, which git-ignores itself and keeps the newest 5. Copy a
   file back to restore it.
 - **Preview:** `--dry-run` shows the plan and writes nothing.
 
+**`add` and `edit` regenerate just as safely**, without the review:
+- hand-added permission rules and MCP servers are adopted as yours (a server you removed with
+  ocgen stays removed);
+- files ocgen no longer generates are removed — an agent turned primary or renamed, a renamed
+  skill, the Agent Teams or `/intent` files once you turn them off, `.mcp.json` once its last
+  server goes;
+- a file edited by hand (or of unknown origin) is backed up to `.ocgen-backup/` before it is
+  overwritten or removed, and a short notice lists what was kept, removed and backed up.
+
+**Guard rails for every write:**
+- **Version:** the state records the ocgen that wrote it. An older ocgen refuses to change
+  (`add`, `edit`, `doctor`) a project a newer one wrote, and names the version you need;
+  `doctor --dry-run` only warns, and read-only commands still work. Keys it doesn't know are kept.
+- **Names:** agent, skill, MCP server and provider names in the state must be plain identifiers,
+  or loading fails and says which.
+- **Links:** ocgen never writes through a symbolic-link file. A linked folder you made yourself is
+  yours, and ocgen writes through it; one a repository tracks is refused if it leads out of that
+  repository.
+- **Line endings:** Claude projects get an ocgen-marked block in `.gitattributes` pinning LF for
+  `.claude/**`, `.mcp.json` and `.worktreeinclude` (appended once to an existing file; your lines
+  are never touched), so a Windows checkout can't break the `sh` hooks. A CRLF checkout doesn't
+  count as a hand edit.
+- **Odd files:** a file that isn't UTF-8 (a UTF-16 `.mcp.json` from PowerShell's `>`) counts as
+  changed and is backed up byte for byte, never silently replaced; one ocgen can't read at all
+  stops the write.
+
 **`ocgen verify [dir]`** checks that a generated project *works*, not just that it exists:
 - files are up to date (the same plan as `doctor`), and there are no consistency issues;
 - `settings.json` is valid JSON with known keys;
+- **effective settings:** it merges `~/.claude/settings.json`, the project's `settings.json` and
+  `settings.local.json` and any managed policy the way Claude Code does, and fails, naming the
+  file, when one turns the hooks off (`disableAllHooks`, a managed `allowManagedHooksOnly`) or
+  weakens a gate: a switch that isn't `1`, a lower confidence bar or looser loop budget, an
+  emptied check command, an added read-only role or trusted docs site, a shortened sandbox list.
+  Other changes to ocgen's settings warn;
 - it runs scripts and hook commands with the shell Claude Code uses: Git Bash on Windows (found
   even when only `Git\cmd` is on PATH), `sh` elsewhere. If no shell starts at all, it says so once
   and skips the checks that need one;
-- every hook script exists and parses, and the side-effect-free hook commands actually run;
+- every hook script exists and parses, and the side-effect-free hook commands ocgen generates
+  actually run;
 - every hook pins `"shell": "bash"`, and on Windows Git Bash is installed. The hook commands
   are POSIX sh; without Git Bash Claude Code runs them in PowerShell, where they fail to
   parse and **the gates let everything through** — install Git for Windows (or set
   `CLAUDE_CODE_GIT_BASH_PATH`);
-- the approval gate blocks `git push` and allows `git status`, using the real generated
-  command;
+- the approval gate blocks `git push`, deploys and self-approval, and allows `git status`;
+- every gate (approval, WebFetch, plan, task, worker, risk) is the one ocgen generates: a
+  hand-edited script or `settings.json` hook fails. So does one an older ocgen wrote — after
+  upgrading, run `ocgen doctor` before `verify` in CI;
 - with `/intent`, the WebFetch guard allows only `https://` fetches to trusted docs sites and
   blocks `http://`, other hosts and look-alikes;
 - the no-op `cd` hook drops `cd <project> &&` and leaves a `cd` into another folder alone;
+- **sandbox:** warns when the approval gate is on and the sandbox off (the gate is then advisory),
+  on native Windows (no sandbox there), and on Linux when `bwrap` is missing;
+- **git pre-push hook:** it runs the installed hook as git would — it must refuse a push made under
+  Claude Code and let yours through, and it fails if it isn't executable;
+- **line endings:** a generated script with CRLF endings fails, with the fix;
 - the statusline renders;
-- a compatible `ocgen` is on your `PATH`; a stale binary is flagged;
+- a compatible `ocgen` is on your `PATH`; a stale binary is flagged, and so are ignored template
+  overrides;
 - `.claude/` is tracked by git;
 - `claude plugin validate` accepts the agents, skills and plugin (skip with `--no-claude`).
 
-Hooks run with the loop guard off, so verification leaves no state behind, and hooks with
-side effects (notifications, the formatter, the audit log) aren't executed. It exits 1 on
-any failure, so it can gate CI.
+**What verify runs.** Only what ocgen generates: hook commands, hook scripts and the statusline
+are re-rendered from the state, and one that differs on disk is reported (`… differs from what
+ocgen generates — not running a hand-edited command`), never executed. Probes get only ocgen's
+gate settings (`OCGEN_*`, `TEAM_*`, `LOOP_GUARD_*`, `SUBAGENT_*`), never `PATH`, `BASH_ENV` or the
+check and formatter commands. It still runs `git` in the repository, the installed
+`.git/hooks/pre-push` when it is ocgen's, and `claude plugin validate` on the repository's
+agents, skills and plugin. `--run-check` also runs the project's committed check command, as
+you and unsandboxed — use it only on a repository you trust.
+
+Hooks run with the loop guard off and record nothing, so verification leaves no state behind,
+and hooks with side effects (notifications, the formatter, the audit log) aren't executed. It
+exits 1 on any failure, so it can gate CI.
 
 ### Backward compatibility
 
@@ -254,7 +327,8 @@ State files (`.opencode/.ocgen-state.json`) written by older versions of ocgen a
 migrated automatically on load: an old single-provider project is converted to the
 providers list, and agent fields added in later versions are backfilled from the
 agent's original role/archetype. So older projects keep working with `landscape`,
-`add`, `edit`, and `doctor` without manual edits.
+`add`, `edit`, and `doctor` without manual edits. The reverse doesn't hold: an older ocgen
+refuses to change a project a newer one wrote, so it can't drop settings it doesn't know.
 
 ## Claude Code target
 
@@ -299,17 +373,21 @@ repo used for a plugin's marketplace and release workflow; `--team` enables
 .claude/skills/fanout/SKILL.md       # /fanout — worktree-isolated parallel writers (you run it)
 .claude/skills/improve-prompt/SKILL.md
 .claude/skills/<name>/SKILL.md       # your own skills (`ocgen add skill`)
-.claude/settings.json                # $schema, model, permissions (+ secret read-denies), hooks, output style, statusline
+.claude/settings.json                # $schema, model, permissions (+ secret read-denies), sandbox, hooks, output style, statusline
 .claude/hooks/*.sh                   # gate scripts, loop guard, optional notify/format/audit hooks
 .claude/output-styles/ocgen-concise.md
 .mcp.json                            # project MCP servers (`ocgen add mcp`)
+.gitattributes                       # an ocgen block pinning LF line endings for the files above
 CLAUDE.md                      # project instructions + the roster; the coordinator lives here
 ```
 
 The **coordinator** (an agent whose mode is `primary`) is not written as an agent file —
 it becomes `CLAUDE.md` plus the `/multi` command, because Claude Code's main session *is*
 the coordinator. Every other agent becomes a subagent file. The wizard opens `CLAUDE.md`
-in your `$EDITOR` so you can shape the project instructions before anything is written.
+in your `$EDITOR` so you can shape the project instructions before anything is written. The
+coordinator's body is rendered as a template (it may loop over `{{ subagents }}`); text that
+isn't a valid template, or names a value ocgen doesn't know (`${{ secrets.X }}`,
+`{{ .Values }}`), is written exactly as typed, with a warning.
 
 **Workflow commands are skills.** Claude Code merged commands into skills, so ocgen renders
 its workflows as `.claude/skills/<name>/SKILL.md`. You still type `/deliver`, `/inquire` and so on.
@@ -321,7 +399,8 @@ its workflows as `.claude/skills/<name>/SKILL.md`. You still type `/deliver`, `/
   wrote yourself are kept.
 - **Reserved names:** a skill of your own can't take a workflow name.
 
-**Extra hooks** (offered with the power-user defaults; none of them ever block Claude):
+**Extra hooks** (offered with the power-user defaults; apart from the config audit's guard, none
+of them ever block Claude):
 - **`/inquire` HTML view** (on with `/inquire`): after each write to a ledger in
   `.claude/notes/`, ocgen renders its HTML page and refreshes the browser tab that shows it
   (see [The visual ledger](#the-visual-ledger)).
@@ -333,9 +412,17 @@ its workflows as `.claude/skills/<name>/SKILL.md`. You still type `/deliver`, `/
 - **Desktop notifications:** when Claude needs you, or a turn fails (`osascript` on macOS,
   `notify-send` on Linux, otherwise a terminal bell).
 - **Formatter after edits:** e.g. `cargo fmt` or `terraform fmt -recursive`. It runs after
-  every `Edit`/`Write`, and a failure is reported but never blocks.
+  every `Edit`/`Write`, in the project (or, for a `/fanout` worker's file, the same folder in
+  that worktree; never in an unrelated repository), and a failure is reported but never blocks.
+  With the sandbox on it runs sandboxed, like the check command.
 - **Config audit:** settings/skills changes made during a session are logged to the
-  git-ignored `.claude/audit/config-changes.log`.
+  git-ignored `.claude/audit/config-changes.log`. While the approval gate or the WebFetch guard
+  is on, a change that would weaken it is **blocked**: `disableAllHooks`, the gate switched off,
+  a WebFetch site added, or — in ocgen's own `settings.json` — the gate's env or hooks removed or
+  the file deleted. Claude Code keeps the settings it loaded; if you meant the change (an
+  `ocgen edit intent --trust-domain` mid-session, say), restart Claude Code. It reads the file's
+  text, so it stops the plain ways, not a determined rewrite. Policy settings and skills are only
+  logged.
 
 The plugin output carries the same hooks.
 
@@ -603,9 +690,9 @@ converted on their next update.
 | Command / variable | What it does |
 |---|---|
 | `ocgen notes open [topic] [-p dir]` | Render a ledger and show it: refresh its tab, or open one. Picks by file name, then by `Topic:` line; with no topic, the latest ledger. `/inquire` runs this when it resumes. |
-| `ocgen notes render <file.md>…` | Render pages without showing them. |
+| `ocgen notes render <file.md>…` | Render ledgers without showing them. Only `/inquire` ledgers (`.claude/notes/<topic-slug>.md`, by any path) are rendered; any other file is refused, and every argument is checked before anything is written. |
 | `OCGEN_NOTES_OPEN=0` | Never open a browser (pages are still rendered). `=1` always does. |
-| `OCGEN_NOTES_BROWSER` | Open pages with this command instead of the system default (`open`, `xdg-open`, `start`). |
+| `OCGEN_NOTES_BROWSER` | Open pages with this command instead of the system default (`open`, `xdg-open`, `start`). Like those, it runs detached: ocgen doesn't wait for it or check how it exits, so a plain `firefox` is fine. |
 
 **When nothing opens.** In CI (`CI` is set) and on Linux without a display, the hook only renders
 the pages; `ocgen notes open` still opens one when you ask. The page and the live view need the
@@ -614,7 +701,8 @@ when it is missing. If the viewer can't start (a sandbox, say), the page is open
 plain file and won't refresh by itself.
 
 **Privacy.** The viewer listens on loopback only, every URL carries a random token, and requests
-for any other host are refused, so other sites can't read your notes. The diagrams use Mermaid
+for any other host are refused, so other sites can't read your notes (and only requests that
+pass those checks keep its idle timer alive). The diagrams use Mermaid
 from `cdn.jsdelivr.net` (a pinned version with an integrity hash); no note content is sent
 anywhere, and without a network the diagram's source is shown instead. Browsers allow about six
 live connections per host, so keep fewer than six ledger pages open at once.
@@ -701,7 +789,7 @@ When enabled, ocgen adds to the generated project:
 ```
 .claude/settings.json          # env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS="1" + teammateMode
 .claude/skills/team/SKILL.md   # /team <task> — spawn a parallel team from your agent roles
-.claude/hooks/team-*.sh         # TeammateIdle / TaskCreated / TaskCompleted gate stubs (no-op)
+.claude/hooks/team-*.sh         # the TeammateIdle / TaskCreated / TaskCompleted gates and the approval gate
 CLAUDE.md                      # an "Agent Teams" section explaining how to spawn one
 ```
 
@@ -714,6 +802,27 @@ runtime team state (`~/.claude/teams/…` is generated by Claude Code at session
 teams for parallel research/review or independent modules; for sequential work, the
 `/multi` subagent flow (still generated) is cheaper.
 
+**What the gates read.** Agents can't argue with a hook, so each gate reads one precise thing:
+- **A confidence line.** Only a line that starts with `Confidence` and a percentage counts:
+  `Confidence: 97%`, or `**Confidence** — 97%`. The last one wins (a value over 100 counts as
+  none); an inline "Done. Confidence: 98%" or "low confidence in 3 cases" doesn't count.
+- **Worker gate** (`SubagentStop`): it reads the worker's final message, and only holds a worker
+  whose tree changed since it started (edits or commits; `SubagentStart` records the start in the
+  self-ignored `.claude/worker-baseline/`). Read-only roles — your agents without Write/Edit, plus
+  the built-in `Explore` and `Plan` (`SUBAGENT_READONLY_ROLES`) — are never held. With the team
+  hooks on, in-process teammates are left to the task gate.
+- **Task gate** (`TaskCompleted`): it reads the teammate's own last message from its transcript —
+  never the task's subject or description, never the lead's words. Failing that,
+  `.claude/team/confidence/<team-name>/<task-id>.txt` (its first number), removed once the task
+  passes.
+- **Risk gate** (`TeammateIdle`): risks are owned by teammate names (`Owner: implementer-1`; `/team`
+  names teammates after their role, numbered). An owner given as a role holds no one, and you get
+  a message saying so — as you do when an event names no teammate.
+- **Plan gate** (`TaskCreated`): `/team-plan` writes `Status: APPROVED session=<id>`, and the first
+  task stamps it with the run and a checksum of the plan. Editing the plan (ticking a task or
+  closing a risk isn't an edit), a later session or team run, or an approval line from another
+  session makes it stale: approve again, and a fresh `Status:` line is written.
+
 #### Hooks run in Rust (with a script fallback)
 
 Every gate and optional hook is implemented twice: as the POSIX `sh` script in `.claude/hooks/`
@@ -721,7 +830,7 @@ and inside the ocgen binary (`ocgen hook <name>`). The generated hook command us
 binary when a compatible ocgen is installed, and the script otherwise:
 
 ```sh
-if [ "$(ocgen hook --check 2>/dev/null)" = "ocgen-hooks 8" ]; then ocgen hook team-approval-gate; else sh ".../team-approval-gate.sh"; fi
+if [ "$(ocgen hook --check 2>/dev/null)" = "ocgen-hooks 9" ]; then ocgen hook team-approval-gate; else sh ".../team-approval-gate.sh"; fi
 ```
 
 - **The binary gives you** real JSON parsing instead of `grep`, and hooks that work on
@@ -730,11 +839,15 @@ if [ "$(ocgen hook --check 2>/dev/null)" = "ocgen-hooks 8" ]; then ocgen hook te
   The one exception is `inquire-notes`, which renders `/inquire`'s HTML view: its script does
   nothing, so without ocgen the ledgers stay Markdown only.
   They need only a POSIX `sh` (Git Bash on Windows): `jq` is used when present and is never
-  required, and Windows paths (`C:\Users\...`) are handled in both implementations.
+  required (without it, JSON escapes are decoded, and a command holding a `\b`, `\f` or `\u`
+  escape is treated as high-impact), and Windows paths (`C:\Users\...`) are handled in both
+  implementations.
 - **A stale binary can't weaken a gate.** The command uses the binary only when it reports
   *exactly* the hook protocol the project was generated with. The protocol number goes up
   whenever hook behaviour changes, so any other ocgen, older or newer, falls back to the
-  project's own scripts, which always match the project.
+  project's own scripts. Those always come from the ocgen that generated the project (template
+  overrides can't replace them), so they differ only where someone edited them by hand; `ocgen
+  verify` reports that, and fails a gate that isn't ocgen's.
 - **The two behave the same.** They share the same messages, exit codes and loop-guard
   state files, so machines with and without ocgen can work on one project. Parity tests
   (`tests/hooks.rs`) run every gate scenario through both implementations and require
@@ -742,33 +855,48 @@ if [ "$(ocgen hook --check 2>/dev/null)" = "ocgen-hooks 8" ]; then ocgen hook te
 
 #### The execution-approval line
 
-With Agent Teams' approval gate on, no agent can push, deploy, mutate cloud resources, publish
-or open a remote shell until **a human approves**, from their own terminal:
+With Agent Teams' approval gate on, pushes, deploys, cloud mutations, publishes and remote
+shells wait until **you approve them**, from your own terminal:
 
 ```bash
 ocgen approve              # unlock for 30 minutes (then it re-locks by itself)
-ocgen approve --minutes 10 # a shorter window
+ocgen approve --minutes 10 # any window from 1 minute to 1440 (24 hours)
 ocgen approve --status     # locked, or minutes left
 ocgen approve --revoke     # re-lock now
 ```
 
-- **Only a human can approve.** `ocgen approve` refuses to run under Claude Code or without a
-  terminal. The approval is stored outside the project (`~/.claude/ocgen/approvals/`, one per
-  repository, shared by its worktrees), so an agent can't create it as part of normal work.
-  The hook also blocks any tool call that runs `ocgen approve` or touches that folder, and
-  `permissions.deny` covers it too.
-- **It expires.** A forgotten approval is locked again when its time is up.
-- **Detection survives phrasing.** The gate matches through global flags and quoting
-  (`git -C . push`, `git "push"`, `terraform -chdir=infra apply`, `kubectl -n prod delete`),
-  and also catches deploy and publish scripts and make targets (`sh ./deploy.sh`,
-  `make deploy`). Reading or grepping those files is still allowed.
-- **A git `pre-push` hook stops what text matching can't see.** `doctor` installs it in
-  `.git/hooks/pre-push`, unless you already have a pre-push hook, in which case it tells you
-  the one line to add. It blocks any push made *under Claude Code* without approval, however
-  it's launched: a script, a Makefile, an interpreter. Your own pushes are never affected.
-- **Credentials are off limits.** Reading `~/.ssh`, `~/.aws`, the `gh` token, kube and gcloud
-  config is denied. With the sandbox on, they're withheld from shell commands too (unless you
-  opt in), so an agent can't push or deploy at all, and you do those steps yourself.
+- **The gate is a guard-rail; the sandbox is the boundary.** A `PreToolUse` hook checks every
+  tool call: any tool's `command` (Bash, Monitor, PowerShell, an MCP shell) and any tool's file
+  path. It matches through global flags, quoting and shell operators (`git -C . push`,
+  `git "push"`, `pnpm -r publish`, `docker buildx build --push`, `curl --json …`,
+  `git -c alias.p=push p`), and catches deploy and publish scripts and make targets
+  (`sh ./deploy.sh`, `make deploy`); reading or grepping those files is still allowed. It is
+  still a text match, so a variable, `$(…)`, a `cd` or a script from an earlier call can phrase
+  around it. **With the sandbox on** — the default with the gate on macOS, Linux and WSL2 —
+  shell commands can't write the approval store and, unless you opt in, run without the
+  credentials ocgen knows about, so a push or publish that needs those fails whatever its
+  phrasing (the gaps are under *Credentials* and *Defence in depth*).
+- **Approving is for you.** `ocgen approve` refuses to run under Claude Code or without a
+  terminal. The approval is only an expiry time, stored outside the project
+  (`~/.claude/ocgen/approvals/`, one per repository, shared by its worktrees). The gate blocks
+  a tool call that runs `ocgen approve` or names that folder — in any letter case, through
+  `.`, `..` or `//`, or by Windows short names — and `settings.json` denies
+  `Edit(~/.claude/ocgen/**)` and `Bash(ocgen approve*)`. A shell command that reaches the folder
+  indirectly is the sandbox's to stop.
+- **It expires.** A forgotten approval is locked again when its time is up, and an expiry
+  further out than `ocgen approve` can set (24 hours) is no approval at all.
+- **A git `pre-push` hook is a backstop.** `doctor` installs it in `.git/hooks/pre-push`, unless
+  you already have a pre-push hook, in which case it tells you the one line to add. It refuses a
+  push made *under Claude Code* without approval, also from a script, a Makefile or an
+  interpreter, for every gated project in the repository. Your own pushes are never affected.
+  git skips it on `--no-verify` or another `core.hooksPath`, and it knows Claude Code only by
+  `$CLAUDECODE`, so **branch protection on the server is what really stops a push**.
+- **Credentials.** With the power-user defaults, reading `~/.ssh`, `~/.aws`, the `gh` token, kube
+  and gcloud config is denied. With the sandbox on, shell commands also run without the
+  credential files and variables of ssh, git, GitHub, the clouds and clusters, Docker and the
+  package registries (npm, yarn, cargo, PyPI, gem, Terraform, Pulumi), unless you opt in. A
+  credential an OS keychain helper hands out (osxkeychain, Git Credential Manager, gh's keyring
+  token) may still be reachable.
 
 The old `touch .claude/team/execution-approved` file is no longer honoured, because an agent
 could create it. `ocgen verify` flags a leftover one.
@@ -784,11 +912,27 @@ the gates stop taking the agent's word alone:
 
 - **Workers:** a subagent that changed files can't finish until the check passes. It runs in
   the worker's own directory, which is its worktree for `/fanout`.
-- **Team tasks:** a task can't be completed until the check passes.
+- **Team tasks:** a task can't be completed until the check passes. Checks run one teammate at a
+  time in the shared directory (a lock in `.claude/team/`), so a failure may come from another
+  teammate's edit, and the block says so. A task may narrow the check with a line
+  `Check: <the project check> <args>` in its description (`Check: cargo test -p parser`); any
+  other `Check:` line is ignored, because the check runs outside the agent's permissions.
 - **When it fails:** the agent sees the last 15 lines of output and is sent back. A stated
   confidence doesn't override a failing check.
 - **Still bounded:** the loop guard releases a check that keeps failing as UNRESOLVED.
-- **Timeout:** the Rust hook kills a check after 5 minutes (`OCGEN_CHECK_TIMEOUT` seconds).
+- **Timeout:** after `OCGEN_CHECK_TIMEOUT` seconds (300 by default; time spent waiting for the
+  lock counts) the check and everything it started are stopped, by the Rust hook and the scripts
+  alike.
+- **Sandboxed:** Claude Code doesn't sandbox hooks, so with the sandbox on the hooks run the check
+  and the formatter in an OS sandbox of their own (Seatbelt on macOS, bubblewrap on Linux). They
+  can't write the approval store, `~/.claude`, your shell startup files, git config, `~/.ssh`,
+  `~/.local/bin` or `~/.cargo/bin`, nor the project's Claude settings, hooks, skills, agents,
+  commands, statusline, state file, `.mcp.json`, `.git/hooks` or `.git/config`; unless you allow
+  credentials, credential files are hidden and credential variables unset. Network and other
+  writes stay as they are (so keep `~/.claude` a real folder, see *Defence in depth*). A check
+  that writes one of those paths now fails (husky's `git config core.hooksPath`,
+  `git submodule update --init`, `pip install --user`). On Linux without `bwrap` the check isn't
+  run and counts as failed, and the formatter is skipped; native Windows runs both unsandboxed.
 
 The check runs first, then the confidence statement, and either can be off. `ocgen verify`
 warns when no check is set, and `ocgen verify --run-check` runs it.
@@ -796,16 +940,32 @@ warns when no check is set, and `ocgen verify --run-check` runs it.
 #### Defence in depth
 
 The approval gate matches command text, so it isn't the only safety line:
+- **The sandbox** runs shell commands with OS-level file and network limits (Seatbelt on macOS,
+  bubblewrap on Linux/WSL2). It comes with a starter network allowlist (GitHub, npm, crates.io,
+  PyPI, Go, Terraform) plus your own domains, and strict mode, so a sandboxed failure can't be
+  retried unsandboxed. The secret read-denies apply inside it too. Sandboxed commands can't
+  write the approval store, `.claude/statusline.sh`, the state file or `.git/hooks` (Claude Code
+  protects the rest of `.claude/` and `.git` itself), and by default they run without your push
+  and deploy credentials.
+  - **When it's on:** `ocgen new` asks after the Agent Teams questions. With the approval gate on
+    and a platform that has a sandbox, the default is yes; otherwise no. A no is remembered, the
+    summary shows `sandbox: off — the approval gate is advisory`, `ocgen edit team` offers it
+    again (Enter keeps your no), and `ocgen verify` warns.
+  - **Where it stops:** it contains shell commands, not the file tools — so with the gate on,
+    `settings.json` always asks before edits to the gate's hook scripts, `settings*.json`, the
+    state file, the statusline and any `.git/hooks/**`, and before `ocgen edit` and
+    `ocgen doctor`, which rewrite them. Hooks and MCP servers run outside it. A protected path
+    reached through a symbolic link is protected where the link points, not by its name, and
+    the hooks' sandboxed check may write your home folder, so it could replace a linked
+    `~/.claude`: keep `~/.claude` a real folder. Native Windows has no sandbox, so there the
+    gate is advisory.
 - **`permissions.ask`** (with the power-user defaults): Claude Code itself asks before high-impact
-  commands (`git push`, `terraform apply/destroy`, `kubectl apply/delete`, `helm`,
-  `gh pr merge`/`release`, npm/cargo publish, `docker push`, `ssh`/`scp`/`rsync`), **even in
+  commands (`git push`, `terraform apply/destroy`, `pulumi up/destroy`,
+  `kubectl apply/delete/set/rollout`, `helm`, `gh pr merge`/`release`/`workflow run`, publishes
+  from npm/pnpm/yarn/bun/cargo, `docker push`, curl uploads, `ssh`/`scp`/`rsync`), **even in
   auto mode**.
-- **Sandbox (opt-in):** the wizard's "Enable the sandbox?" runs shell commands with OS-level
-  file and network limits (Seatbelt on macOS, bubblewrap on Linux/WSL2). It comes with a
-  starter network allowlist (GitHub, npm, crates.io, PyPI, Go, Terraform) plus your own
-  domains, and strict mode, so a sandboxed failure can't be retried unsandboxed. The secret
-  read-denies apply inside the sandbox too. By default it also withholds your push and deploy
-  credentials, and makes the approval store unwritable.
+- **Config audit:** a settings change in the session that would weaken the gate is blocked (see
+  *Extra hooks*).
 - **Organisation policy:** `ocgen managed-settings > managed-settings.json` gives an admin a
   policy that projects can't override: no bypass mode, secrets unreadable, the ask rules,
   and a strict sandbox. It prints where to deploy it on each OS.
@@ -825,7 +985,7 @@ with a shared `.claude/hooks/loop-guard.sh`:
   warning, and an entry is written to `.claude/loop-guard/escalations.md`.
 - **Approval gates never release.** The plan gate keeps blocking but tells the agent to stop
   retrying and go idle. The execution-approval gate denies the command **and halts the agent**
-  (`continue: false`). An unapproved plan or a `git push` never gets through.
+  (`continue: false`). The loop guard never lets an unapproved plan or a gated `git push` through.
 - **Turn ceilings.** Each subagent gets a `maxTurns` limit (explorer 40, implementer 60, reviewer
   30, verifier 40). At the limit its output comes back marked partial and can be resumed once.
 - **Loop discipline.** The workflow rule tells agents to change approach after two failures,
@@ -890,7 +1050,8 @@ defaults to `.`.
 | `ocgen new [dir] --target claude` | Scaffold a new Claude project (agents, `/multi` `/intake` `/refine` `/deliver` `/inquire` `/intent`, `CLAUDE.md`, `settings.json`). |
 | `ocgen new [dir] --target claude --output plugin` | Emit a distributable plugin instead of the project tree. |
 | `ocgen new [dir] --target claude --output both --repo <owner/repo>` | Emit both the project **and** a plugin (marketplace + release workflow). |
-| `ocgen new [dir] --target claude --team` | Also enable Agent Teams (env flag + `/team` + hooks + guidance). |
+| `ocgen new [dir] --target claude --team` | Also enable Agent Teams (env flag + `/team` + hooks + guidance). With the approval gate on, the sandbox question defaults to yes (macOS, Linux/WSL2). |
+| `ocgen edit team -p <dir>` | Turn Agent Teams and its gates on, off or retune them later. With the approval gate on and the sandbox off, it offers the sandbox (on native Windows it warns instead). |
 
 `--output` is `project` (default) / `plugin` / `both`; `--repo` is the GitHub `owner/repo`
 for a plugin; `--team` is off by default. (The `--base-url` flag is OpenCode-only.)
@@ -909,8 +1070,8 @@ for a plugin; `--team` is off by default. (The `--base-url` flag is OpenCode-onl
 |---|---|
 | `ocgen add skill [dir]` | Author a new skill → `.claude/skills/<name>/SKILL.md` (name, description, allowed-tools, body). |
 | `ocgen edit intent -p <dir> [--prefix --digits --dir --max-words --branch --trust-domain/--untrust-domain --enable/--disable --issue-template --intent-template --reset-…-template --show]` | Configure `/intent`: intent-file prefix, number width and directory, the issue word limit, the branch checked for taken numbers, the documentation sites it may read without asking, and the project's issue / intent-file templates. No flags = interactive. |
-| `ocgen edit permissions -p <dir> --list` | Every permission rule at a glance — ocgen's and yours, list by list in the order Claude Code checks them; flags your rules that have no effect. Writes nothing. |
-| `ocgen edit permissions -p <dir> [--allow/--ask/--deny/--remove <RULE>]…` | Add or remove your own permission rules. They are saved in the state file and appended to ocgen's generated `allow`/`ask`/`deny` lists in `settings.json`, so regeneration keeps them. Generated rules (including the approval-gate guards) can't be removed. Warns when a generated `deny`/`ask` rule overrides yours. No flags = interactive. |
+| `ocgen edit permissions -p <dir> --list` | What `settings.json` actually holds, list by list in the order Claude Code checks them, each rule marked ocgen's or yours; flags yours that have no effect (`no effect: ocgen's ask rule wins`) or replace a generated one. Writes nothing. |
+| `ocgen edit permissions -p <dir> [--allow/--ask/--deny/--remove <RULE>]…` | Add or remove your own permission rules. They are saved in the state file and merged with ocgen's in `settings.json` by strictness, deny > ask > allow, so each rule sits in one list: a rule stricter than a generated one takes its place (`--deny "Bash(git push:*)"` moves it from ask to deny), a looser one has no effect, and both are warned about. Generated rules (including the approval-gate guards) can't be removed; removing your stricter rule restores ocgen's. No flags = interactive. |
 | `ocgen edit skill [name] -p <dir>` | Edit an existing skill; renaming cleans up the old skill directory. Omit `[name]` to pick from a list. |
 
 **Review, repair, reference**
@@ -918,12 +1079,12 @@ for a plugin; `--team` is off by default. (The `--base-url` flag is OpenCode-onl
 | Command | What it does |
 |---|---|
 | `ocgen landscape [dir]` (alias `horizon`) | Read-only overview: agents (alias/tools/colour), skills, workflow/output/team setup, delegation topology, and a **Checks** section. |
-| `ocgen doctor [dir] [--dry-run] [--yes]` | Repair the project and rewrite files (invalid models, colours, empty roles, bad enum values, older state files). Shows a per-file plan with diffs, flags hand edits, asks first, and backs up to `.ocgen-backup/`. |
-| `ocgen verify [dir] [--no-claude]` | Check the project works: up to date, settings valid, hooks run (in bash; Git Bash present on Windows), the approval gate blocks, http:// WebFetch is blocked, a no-op `cd` is dropped, `/inquire` ledgers get their HTML view, the statusline renders, ocgen on PATH is current, Claude Code validation passes. Exits 1 on failure. |
-| `ocgen approve [dir] [--minutes N] [--status] [--revoke]` | A human approves high-impact actions for a limited time. Refuses to run under Claude Code or without a terminal. |
-| `ocgen verify [dir] --run-check` | Also run the project's check command. |
+| `ocgen doctor [dir] [--dry-run] [--yes]` | Repair the project and rewrite files (invalid models, colours, empty roles, bad enum values, older state files). Shows a per-file plan with diffs, flags hand edits, offers to keep hand-added permission rules and MCP servers, removes files ocgen no longer generates, asks first, and backs up to `.ocgen-backup/`. |
+| `ocgen verify [dir] [--no-claude]` | Check the project works: up to date, settings valid, no local/user/managed setting turns hooks off or weakens a gate, hooks run (in bash; Git Bash present on Windows), every gate is ocgen's own and the approval gate blocks, http:// WebFetch is blocked, a no-op `cd` is dropped, `/inquire` ledgers get their HTML view, the sandbox is on behind the gate, the pre-push hook blocks Claude and lets you through, scripts use LF, the statusline renders, ocgen on PATH is current, Claude Code validation passes. Runs only what ocgen generates. Exits 1 on failure. |
+| `ocgen approve [dir] [--minutes N] [--status] [--revoke]` | You approve high-impact actions for 1–1440 minutes (default 30). Refuses to run under Claude Code or without a terminal. |
+| `ocgen verify [dir] --run-check` | Also run the project's committed check command, as you and unsandboxed (only on a repository you trust). |
 | `ocgen notes open [topic]` | Show an `/inquire` ledger's HTML page: refresh the tab that shows it, or open one ([details](#the-visual-ledger)). |
-| `ocgen notes render <file.md>…` | Render ledgers to their HTML pages without opening them. |
+| `ocgen notes render <file.md>…` | Render `/inquire` ledgers (`.claude/notes/<topic-slug>.md`) to their HTML pages without opening them; any other file is refused. |
 | `ocgen managed-settings` | Print a recommended organisation policy (`managed-settings.json`): no bypass mode, secrets unreadable, high-impact commands always ask, strict sandbox. |
 | `ocgen fields` (alias `reference`) | Explain every configurable field, including the Claude-specific ones (alias, tools, skills, output/plugin, agent teams). |
 
@@ -931,10 +1092,10 @@ for a plugin; `--team` is off by default. (The `--base-url` flag is OpenCode-onl
 
 | Command | What it does |
 |---|---|
-| `ocgen templates init` | Copy the editable templates to `~/.config/ocgen/templates/` (your copies win). |
+| `ocgen templates init [--force]` | Copy the overridable templates to `~/.config/ocgen/templates/` (your copies win). Keeps copies you already have unless `--force`, and lists them; never copies hook scripts or the gate-protocol templates. |
 | `ocgen templates path` | Print the override directory. |
-| `ocgen templates list` | List resolved templates, marking overridden vs embedded. |
-| `ocgen templates edit [path]` | Edit one template in `$EDITOR` (e.g. `claude/agent.md.j2`, `claude/CLAUDE.md.j2`, `archetypes/reviewer.toml`); omit the path to pick from a list. |
+| `ocgen templates list` | List resolved templates: `[override]`, `[embedded]`, or `[embedded; override ignored]` for a copy of one that can't be overridden. |
+| `ocgen templates edit [path]` | Edit one template in `$EDITOR` (e.g. `claude/agent.md.j2`, `claude/CLAUDE.md.j2`, `archetypes/reviewer.toml`); omit the path to pick from a list. Refuses hook scripts and the gate-protocol templates. |
 
 > `ocgen add provider` / `ocgen edit provider` apply to the **OpenCode** target only —
 > Claude Code has no per-agent providers, so they aren't used for a Claude project.
@@ -953,11 +1114,21 @@ never overwrites them:
 
 ## Customising the templates
 
-`ocgen templates init` copies the whole template set into
+`ocgen templates init` copies the template set into
 `~/.config/ocgen/templates/`. Anything you put there wins over the built-in
-defaults. To change just one template without copying everything, use
+defaults. It keeps copies you already have (and lists them) unless you pass `--force`. To
+change just one template without copying everything, use
 `ocgen templates edit <path>`, which opens it in your `$EDITOR` (seeded with its
-current content) and writes only that file to the override dir. The layout:
+current content) and writes only that file to the override dir.
+
+**What can't be overridden.** Hook scripts, the statusline script (`claude/statusline.sh`) and
+the gate-protocol templates (`claude/commands/team.md.j2`, `team-plan.md.j2`, `fanout.md.j2` and
+`claude/rules/ocgen-team.md.j2`, which teach the plan, owner, check and confidence lines the
+hooks parse) always come from the ocgen binary. Each hook has a Rust twin stamped with the
+hook protocol, so an override would either bring a fixed bug back after an upgrade or take
+effect only on machines without ocgen. `templates init` doesn't copy them, `templates edit`
+refuses them, and a copy left by an older ocgen is marked `[embedded; override ignored]` in
+`templates list` and flagged by `ocgen verify` — delete it. The layout of the rest:
 
 ```
 manifest.toml            # wizard questions (with help text) + default provider(s)
@@ -968,12 +1139,11 @@ opencode/commands/multi.md.j2     # a command that fans out to the subagents
 seeds.toml               # blank-agent seed text (body + external prompt)
 claude/agent.md.j2              # one generic Claude subagent
 claude/CLAUDE.md.j2             # project instructions + roster
-claude/commands/*.md.j2         # multi / intake / refine / deliver / inquire / intent / team… (rendered as skills)
+claude/commands/*.md.j2         # multi / intake / refine / deliver / inquire / intent… (rendered as skills)
 claude/intent/*.md              # default /intent issue and intent-file templates (copied into new projects)
 claude/notes/ledger.html.j2     # the /inquire ledger's HTML page
 claude/skill/SKILL.md.j2        # one generic skill
 claude/skill-presets.toml       # add-skill presets (command / knowledge / forked-research)
-claude/hooks/team-*.sh          # Agent Teams quality-gate hook stubs
 claude/output-styles/ocgen-concise.md.j2
 claude/plugin/*.j2              # plugin.json, marketplace.json, README, release.yml
 ```

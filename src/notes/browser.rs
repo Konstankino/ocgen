@@ -41,29 +41,40 @@ pub fn is_viewer_url(url: &str) -> bool {
         .is_match(url)
 }
 
-/// Open `target` (a viewer URL or a file path) in the default browser.
-/// `OCGEN_NOTES_BROWSER` replaces the system opener (`sh -c "$CMD \"$1\""`, like
-/// `OCGEN_FORMAT_CMD`); it is waited for, the system opener is not.
+/// Open `target` (a viewer URL or a file path) in the default browser, without
+/// waiting for it. `OCGEN_NOTES_BROWSER` replaces the system opener (`sh -c
+/// "$CMD \"$1\""`, like `OCGEN_FORMAT_CMD`) and runs detached like it: a browser
+/// command such as `firefox` may not return until the browser quits, which
+/// would stall the hook and `ocgen notes open`.
+///
+/// `OCGEN_NOTES_BROWSER_WAIT=1` is for tests only: it waits for the override and
+/// reports its failure, so a fake browser's log is complete when this returns.
 pub fn open(target: &str, env: &HashMap<String, String>) -> std::io::Result<()> {
     if let Some(cmd) = env
         .get("OCGEN_NOTES_BROWSER")
         .map(|c| c.trim())
         .filter(|c| !c.is_empty())
     {
-        let status = Command::new("sh")
-            .arg("-c")
+        let mut c = Command::new("sh");
+        c.arg("-c")
             .arg(format!("{cmd} \"$1\""))
             .arg("ocgen-open")
             .arg(target)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()?;
-        return if status.success() {
-            Ok(())
-        } else {
-            Err(std::io::Error::other(format!("'{cmd}' failed")))
-        };
+            .stderr(Stdio::null());
+        if env
+            .get("OCGEN_NOTES_BROWSER_WAIT")
+            .is_some_and(|v| v.trim() == "1")
+        {
+            return if c.status()?.success() {
+                Ok(())
+            } else {
+                Err(std::io::Error::other(format!("'{cmd}' failed")))
+            };
+        }
+        super::viewer::detach(&mut c);
+        return c.spawn().map(|_| ());
     }
     let mut c = system_opener(target)?;
     c.stdin(Stdio::null())

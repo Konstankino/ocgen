@@ -65,6 +65,8 @@ impl Project {
             )
             .env("OCGEN_NOTES_OPEN", "1")
             .env("OCGEN_NOTES_BROWSER", &self.browser)
+            // The override runs detached; wait for it so the log is complete.
+            .env("OCGEN_NOTES_BROWSER_WAIT", "1")
             .env("OCGEN_NOTES_GRACE_MS", "5000")
             .env("OCGEN_NOTES_IDLE_SECS", "60")
             .stdin(Stdio::piped())

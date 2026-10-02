@@ -355,9 +355,14 @@ fn close_inherited_fds() {
 }
 
 /// Run the viewer for notes directory `dir` until it is idle or superseded.
+/// Only a `.claude/notes` directory: the server writes `.viewer.json` there and
+/// renders pages next to their ledgers.
 pub fn serve(dir: &Path) -> Result<()> {
     #[cfg(unix)]
     close_inherited_fds();
+    if !super::is_notes_dir(dir) {
+        anyhow::bail!("{} is not a .claude/notes directory", dir.display());
+    }
     let dir = dir.canonicalize()?;
     let listener = TcpListener::bind(("127.0.0.1", 0))?;
     let port = listener.local_addr()?.port();
@@ -580,7 +585,6 @@ impl Server {
         let Some(req) = read_request(&s) else {
             return;
         };
-        self.touch();
         let port = self.port;
         if req.host != format!("127.0.0.1:{port}") && req.host != format!("localhost:{port}") {
             return plain(&mut s, 403, "forbidden");
@@ -596,6 +600,9 @@ impl Server {
         else {
             return plain(&mut s, 404, "not found");
         };
+        // Only requests that passed the Host and token checks count as use:
+        // anything probing the port must not keep an idle viewer alive.
+        self.touch();
         let q = query(q);
         let topic = q.get("topic").copied().filter(|t| is_slug(t));
         match (req.method.as_str(), rest) {
@@ -635,9 +642,10 @@ impl Server {
     fn page(&self, mut s: TcpStream, slug: &str) {
         let html = self.dir.join(format!("{slug}.html"));
         let md = self.dir.join(format!("{slug}.md"));
-        // Keep the page in step even with edits the hook didn't see.
+        // Keep the page in step even with edits the hook didn't see. `serve`
+        // checked this is a notes directory; `slug` is a checked slug.
         if newer(&md, &html) {
-            let _ = super::render_file(&md);
+            let _ = super::render_ledger(&md, slug);
         }
         let Ok(bytes) = fs::read(&html) else {
             return plain(&mut s, 404, "not found");

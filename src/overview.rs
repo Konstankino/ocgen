@@ -737,6 +737,7 @@ pub fn run_verify(path: String, run_claude: bool, run_check: bool) -> Result<boo
         &Options {
             run_claude,
             run_check,
+            user_settings: None,
         },
     );
     for c in &checks {
@@ -815,6 +816,12 @@ pub fn run_approve(path: String, minutes: u64, revoke: bool, status: bool) -> Re
             println!("{} was already locked.", project.project_name);
         }
         return Ok(());
+    }
+    if !(1..=approval::MAX_MINUTES).contains(&minutes) {
+        bail!(
+            "--minutes must be 1 to {} (24 hours); a longer approval would not be honored",
+            approval::MAX_MINUTES
+        );
     }
     approval::grant(&home, &root, minutes)?;
     show(approval::remaining(&home, &root));

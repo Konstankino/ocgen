@@ -83,7 +83,10 @@ pub fn owner_repo(s: &str) -> Result<(), String> {
     let parts: Vec<&str> = t.split('/').collect();
     let ok = parts.len() == 2
         && parts.iter().all(|p| {
+            // `.`/`..` would make the plugin folder (named after the repo) a path.
             !p.is_empty()
+                && *p != "."
+                && *p != ".."
                 && p.chars()
                     .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
         });
@@ -92,6 +95,22 @@ pub fn owner_repo(s: &str) -> Result<(), String> {
     } else {
         Err("must be <owner>/<repo>".into())
     }
+}
+
+/// A single folder name ocgen writes under (the plugin's): not empty, not `.` or
+/// `..`, and no path separators.
+pub fn folder_name(s: &str) -> Result<(), String> {
+    let t = s.trim();
+    if t.is_empty() {
+        return Err("cannot be empty".into());
+    }
+    if t == "." || t == ".." {
+        return Err("can't be '.' or '..'".into());
+    }
+    if t.chars().any(|c| matches!(c, '/' | '\\' | ':' | '\0')) {
+        return Err("can't contain '/', '\\' or ':'".into());
+    }
+    Ok(())
 }
 
 /// A Claude Code Agent Teams display mode.
@@ -330,14 +349,18 @@ pub fn permission_rule(s: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Build a validator that enforces [`ident`] and rejects anything already in `taken`.
+/// Build a validator that enforces [`ident`] and rejects anything already in `taken`
+/// — ignoring case, since names become file names and the default file systems on
+/// macOS and Windows see `Reviewer.md` and `reviewer.md` as one file.
 pub fn unique_ident(taken: Vec<String>, noun: &'static str) -> impl Fn(&str) -> Result<(), String> {
     move |s: &str| {
         ident(s)?;
-        if taken.iter().any(|t| t == s) {
-            Err(format!("{noun} '{s}' is already used"))
-        } else {
-            Ok(())
+        match taken.iter().find(|t| t.eq_ignore_ascii_case(s)) {
+            Some(t) if t == s => Err(format!("{noun} '{s}' is already used")),
+            Some(t) => Err(format!(
+                "{noun} '{s}' is already used as '{t}' (names differing only in case collide on macOS and Windows)"
+            )),
+            None => Ok(()),
         }
     }
 }
@@ -425,6 +448,18 @@ mod tests {
         assert!(owner_repo("/repo").is_err());
         assert!(owner_repo("owner/").is_err());
         assert!(owner_repo("own er/repo").is_err());
+        // The repo names the plugin folder: no `.`/`..`.
+        assert!(owner_repo("me/..").is_err());
+        assert!(owner_repo("./repo").is_err());
+    }
+
+    #[test]
+    fn folder_names() {
+        assert!(folder_name("my-plugin").is_ok());
+        assert!(folder_name("my plugin!").is_ok());
+        for bad in ["", " ", ".", "..", "a/b", "a\\b", "c:x"] {
+            assert!(folder_name(bad).is_err(), "{bad:?}");
+        }
     }
 
     #[test]
@@ -473,5 +508,9 @@ mod tests {
         assert!(v("cloud").is_ok());
         assert!(v("mac").is_err()); // duplicate
         assert!(v("bad key").is_err()); // also fails ident rules
+
+        // Names become file names, and macOS/Windows see `Mac.md` as `mac.md`.
+        assert!(v("Mac").is_err());
+        assert!(v("OpenAI").is_err());
     }
 }

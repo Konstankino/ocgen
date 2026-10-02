@@ -3,11 +3,20 @@
 //! is settings.json sane, do the hook commands run and does the approval gate
 //! block, does the statusline render, is a compatible ocgen on PATH, and does
 //! Claude Code's own validator accept the agents, skills and plugin.
+//!
+//! A repository's `.claude/` files are the repository's, not ocgen's, so verify
+//! runs only what ocgen itself generates for the project: hook commands and
+//! scripts are re-rendered from the state and compared with the files, and one
+//! that differs is reported, never run. Only `--run-check` runs the project's
+//! own check command, on request.
 
-use std::collections::HashMap;
-use std::io::Write as _;
+use std::collections::{BTreeMap, HashMap};
+use std::ffi::OsStr;
+use std::io::{Read, Write as _};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
@@ -36,6 +45,10 @@ pub struct Options {
     pub run_claude: bool,
     /// Also run the project's check command (may be slow: it is usually the tests).
     pub run_check: bool,
+    /// The user's Claude Code settings file, merged under the project's. `None`:
+    /// the one Claude Code reads (`$CLAUDE_CONFIG_DIR/settings.json`, else
+    /// `~/.claude/settings.json`).
+    pub user_settings: Option<PathBuf>,
 }
 
 fn check(name: &str, status: Status, detail: impl Into<String>) -> Check {
@@ -133,6 +146,11 @@ const SETTINGS_KEYS: &[&str] = &[
     "showTurnDuration",
 ];
 
+/// The project's settings file, relative to its root.
+const SETTINGS: &str = ".claude/settings.json";
+/// The git-ignored per-user override Claude Code merges over it.
+const LOCAL: &str = ".claude/settings.local.json";
+
 /// Run every check. Hook commands are executed with the loop guard switched off
 /// (`LOOP_GUARD_MAX_BLOCKS=0`), so verification leaves no state behind.
 pub fn verify(project: &Project, root: &Path, opts: &Options) -> Vec<Check> {
@@ -140,11 +158,30 @@ pub fn verify(project: &Project, root: &Path, opts: &Options) -> Vec<Check> {
     if project.target != Target::ClaudeCode {
         return out;
     }
-    let settings: Option<Value> = std::fs::read_to_string(root.join(".claude/settings.json"))
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok());
+    // ocgen's own render of the project: the only commands and scripts verify
+    // runs. The repository's files are compared with it, never run as found.
+    let rendered: HashMap<String, String> = project
+        .render_all()
+        .map(|files| {
+            files
+                .into_iter()
+                .map(|(rel, c)| (rel.to_string_lossy().replace('\\', "/"), c))
+                .collect()
+        })
+        .unwrap_or_default();
+    let expected: Value = rendered
+        .get(SETTINGS)
+        .and_then(|s| serde_json::from_str(s).ok())
+        .unwrap_or(Value::Null);
+    let user_file = match &opts.user_settings {
+        Some(p) => Some((p.clone(), crate::paths::for_shell(p))),
+        None => user_settings(),
+    };
+    let layers = Layers::load(root, user_file);
+    let settings = layers.of(Scope::Project).cloned();
     out.push(settings_check(root, settings.as_ref()));
-    let sh = shell(settings.as_ref().unwrap_or(&Value::Null));
+    let user = layers.of(Scope::User).cloned().unwrap_or(Value::Null);
+    let sh = shell(&user);
     let shell_ok = match shell_check(&sh) {
         Ok(c) => {
             out.push(c);
@@ -155,21 +192,36 @@ pub fn verify(project: &Project, root: &Path, opts: &Options) -> Vec<Check> {
             false
         }
     };
+    out.push(line_endings(root, &rendered));
     if let Some(s) = &settings {
+        let probe = Probe {
+            sh: &sh,
+            root,
+            rendered: &rendered,
+            expected: &expected,
+            disk: s,
+            env: layers.hook_env(root),
+        };
         if shell_ok {
             out.push(hook_scripts(&sh, root, s));
-            out.push(hook_commands(&sh, root, s));
+            out.push(hook_commands(&probe));
         }
-        out.push(hook_shell(s, cfg!(windows), find_git_bash(s).as_deref()));
+        out.push(hook_shell(
+            s,
+            cfg!(windows),
+            find_git_bash(&user).as_deref(),
+        ));
+        out.push(effective(&layers, &expected));
         if shell_ok {
-            out.push(approval_gate(&sh, root, s));
-            out.push(https_only_fetch(&sh, root, s));
-            out.push(noop_cd(&sh, root, s));
-            out.push(notes_view(&sh, root, s));
+            out.push(approval_gate(&probe, layers.gate_off()));
+            out.push(https_only_fetch(&probe));
+            out.push(noop_cd(&probe));
+            out.push(notes_view(&probe));
         }
-        out.push(pre_push(project, root));
+        out.push(sandbox(project, &layers));
+        out.push(pre_push(shell_ok.then_some(sh.as_path()), project, root));
         if shell_ok {
-            out.push(statusline(&sh, root, s));
+            out.push(statusline(&probe, &layers));
         }
     }
     if shell_ok {
@@ -177,9 +229,10 @@ pub fn verify(project: &Project, root: &Path, opts: &Options) -> Vec<Check> {
     }
     out.push(mcp_json(root));
     out.push(ocgen_on_path());
+    out.extend(ignored_overrides());
     out.push(git_tracking(root));
-    if opts.run_claude && shell_ok {
-        out.push(claude_validate(&sh, project, root));
+    if opts.run_claude {
+        out.push(claude_validate(project, root));
     }
     out
 }
@@ -187,14 +240,308 @@ pub fn verify(project: &Project, root: &Path, opts: &Options) -> Vec<Check> {
 /// The shell verify runs scripts and hook commands with — the one Claude Code
 /// uses. On Windows that is Git Bash: a per-user Git install puts only
 /// `Git\cmd` on PATH, so a bare `sh` is often missing outside Git Bash.
-/// Elsewhere, `sh` from PATH.
-fn shell(settings: &Value) -> PathBuf {
+/// Elsewhere, `sh` from PATH. `user` is the user's own settings.
+fn shell(user: &Value) -> PathBuf {
     if cfg!(windows) {
-        if let Some(bash) = find_git_bash(settings) {
+        if let Some(bash) = find_git_bash(user) {
             return bash;
         }
     }
     PathBuf::from("sh")
+}
+
+/// Where a settings file comes from, least specific first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Scope {
+    User,
+    Project,
+    Local,
+    Managed,
+}
+
+/// The settings files Claude Code merges — the user's, the project's, the
+/// git-ignored local one and the organisation's managed policy — least specific
+/// first, each with the name to report it by. The more specific file wins key
+/// by key (`env` too), so any of them can switch off what settings.json turns on.
+struct Layers(Vec<(Scope, String, Value)>);
+
+impl Layers {
+    /// The layers for the project at `root`, with the user's settings file (and
+    /// the name to report it by) from `user`.
+    fn load(root: &Path, user: Option<(PathBuf, String)>) -> Self {
+        let read = |p: &Path| {
+            std::fs::read_to_string(p)
+                .ok()
+                .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+        };
+        let mut files = Vec::new();
+        if let Some((path, label)) = user {
+            if let Some(v) = read(&path) {
+                files.push((Scope::User, label, v));
+            }
+        }
+        for (scope, rel) in [(Scope::Project, SETTINGS), (Scope::Local, LOCAL)] {
+            if let Some(v) = read(&root.join(rel)) {
+                files.push((scope, rel.to_string(), v));
+            }
+        }
+        let managed = managed_settings();
+        if let Some(v) = read(&managed) {
+            let label = format!("the managed policy ({})", managed.display());
+            files.push((Scope::Managed, label, v));
+        }
+        Layers(files)
+    }
+
+    fn of(&self, scope: Scope) -> Option<&Value> {
+        self.0.iter().find(|(s, ..)| *s == scope).map(|(.., v)| v)
+    }
+
+    /// The value at `pointer` that wins, and the file it comes from.
+    fn get(&self, pointer: &str) -> Option<(&Value, &str)> {
+        self.0
+            .iter()
+            .rev()
+            .find_map(|(_, label, v)| v.pointer(pointer).map(|x| (x, label.as_str())))
+    }
+
+    /// Why no project hook runs at all, if none does, and the file that says so.
+    fn hooks_off(&self) -> Option<(String, &str)> {
+        if let Some((v, from)) = self.get("/disableAllHooks") {
+            if v.as_bool() == Some(true) {
+                return Some((format!("{from} sets disableAllHooks"), from));
+            }
+        }
+        // Only a managed policy can limit hooks to its own.
+        self.0
+            .iter()
+            .find(|(s, _, v)| {
+                *s == Scope::Managed && v.get("allowManagedHooksOnly") == Some(&Value::Bool(true))
+            })
+            .map(|(_, label, _)| {
+                (
+                    format!("{label} sets allowManagedHooksOnly"),
+                    label.as_str(),
+                )
+            })
+    }
+
+    /// Why the approval gate doesn't run in Claude Code, if it doesn't, and the
+    /// file that says so.
+    fn gate_off(&self) -> Option<(String, &str)> {
+        self.hooks_off()
+            .or_else(|| match self.get("/env/TEAM_APPROVAL_GATE") {
+                Some((v, _)) if text(v) == "1" => None,
+                Some((v, from)) => {
+                    Some((format!("{from} sets TEAM_APPROVAL_GATE={}", text(v)), from))
+                }
+                None => Some((
+                    format!("TEAM_APPROVAL_GATE is missing from {SETTINGS}"),
+                    SETTINGS,
+                )),
+            })
+    }
+
+    /// The env a hook probe gets: ocgen's gate settings from every file, the
+    /// most specific winning as in Claude Code, plus the project dir, and no loop
+    /// guard or check command. Nothing else from a settings file reaches a probe:
+    /// PATH, BASH_ENV or a browser command there would run the repository's code.
+    fn hook_env(&self, root: &Path) -> HashMap<String, String> {
+        let mut env = HashMap::new();
+        for (_, _, v) in &self.0 {
+            for (k, val) in v
+                .get("env")
+                .and_then(Value::as_object)
+                .into_iter()
+                .flatten()
+            {
+                if probe_env_key(k) {
+                    env.insert(k.clone(), text(val));
+                }
+            }
+        }
+        env.insert("CLAUDE_PROJECT_DIR".into(), crate::paths::for_shell(root));
+        env.insert("LOOP_GUARD_MAX_BLOCKS".into(), "0".into());
+        // Probing the gates must not run the project's test suite.
+        env.insert("OCGEN_CHECK_CMD".into(), String::new());
+        // …nor change state: the gates decide but write nothing (no plan stamp).
+        env.insert("OCGEN_HOOK_PROBE".into(), "1".into());
+        env
+    }
+}
+
+/// How to undo a setting that weakens the gates, given the file it is in:
+/// ocgen restores its own settings.json; the other files are the user's.
+fn undo(from: &str) -> String {
+    if from == SETTINGS {
+        "`ocgen doctor` restores the generated settings.json".into()
+    } else {
+        format!("remove it from {from}")
+    }
+}
+
+/// Env keys a hook probe may take from the settings files: ocgen's gate
+/// settings, minus the keys that name a command to run.
+fn probe_env_key(key: &str) -> bool {
+    const PREFIXES: [&str; 4] = ["OCGEN_", "TEAM_", "LOOP_GUARD_", "SUBAGENT_"];
+    const COMMANDS: [&str; 3] = ["OCGEN_CHECK_CMD", "OCGEN_FORMAT_CMD", "OCGEN_NOTES_BROWSER"];
+    (PREFIXES.iter().any(|p| key.starts_with(p)) || key == "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS")
+        && !COMMANDS.contains(&key)
+}
+
+/// A settings value as the text a hook sees in its env.
+fn text(v: &Value) -> String {
+    v.as_str().map_or_else(|| v.to_string(), str::to_string)
+}
+
+/// The user's own settings file — `$CLAUDE_CONFIG_DIR/settings.json`, else
+/// `~/.claude/settings.json` — and the name to report it by.
+fn user_settings() -> Option<(PathBuf, String)> {
+    if let Some(dir) = std::env::var_os("CLAUDE_CONFIG_DIR").filter(|d| !d.is_empty()) {
+        let path = PathBuf::from(dir).join("settings.json");
+        let label = crate::paths::for_shell(&path);
+        return Some((path, label));
+    }
+    // Claude Code's home (node's os.homedir): USERPROFILE on Windows, else HOME.
+    let var = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+    let home = std::env::var_os(var)
+        .filter(|h| !h.is_empty())
+        .map(PathBuf::from)
+        .or_else(dirs::home_dir)?;
+    Some((
+        home.join(".claude/settings.json"),
+        "~/.claude/settings.json".into(),
+    ))
+}
+
+/// Where Claude Code reads an organisation's managed policy.
+fn managed_settings() -> PathBuf {
+    if cfg!(windows) {
+        std::env::var_os("ProgramFiles")
+            .map_or_else(|| PathBuf::from(r"C:\Program Files"), PathBuf::from)
+            .join(r"ClaudeCode\managed-settings.json")
+    } else if cfg!(target_os = "macos") {
+        PathBuf::from("/Library/Application Support/ClaudeCode/managed-settings.json")
+    } else {
+        PathBuf::from("/etc/claude-code/managed-settings.json")
+    }
+}
+
+/// What the hook probes run: the hooks ocgen generates for the project — never
+/// a command or script as found in the repository, which may not be ocgen's.
+struct Probe<'a> {
+    sh: &'a Path,
+    root: &'a Path,
+    /// Every file ocgen generates for the project, by relative path.
+    rendered: &'a HashMap<String, String>,
+    /// The settings.json ocgen generates.
+    expected: &'a Value,
+    /// The project's settings.json as found.
+    disk: &'a Value,
+    /// The env the hooks get (see [`Layers::hook_env`]).
+    env: HashMap<String, String>,
+}
+
+impl Probe<'_> {
+    /// Every generated `(event, group, command)`, in table order.
+    fn generated(&self) -> Vec<(String, Value, String)> {
+        let mut v = Vec::new();
+        for (event, groups) in self
+            .expected
+            .get("hooks")
+            .and_then(Value::as_object)
+            .into_iter()
+            .flatten()
+        {
+            for g in groups.as_array().into_iter().flatten() {
+                for h in g
+                    .get("hooks")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                {
+                    if let Some(c) = h.get("command").and_then(Value::as_str) {
+                        v.push((event.clone(), g.clone(), c.to_string()));
+                    }
+                }
+            }
+        }
+        v
+    }
+
+    /// The generated hook for `event` that runs `.claude/hooks/<script>.sh` and
+    /// no other script. Mentioning the name isn't enough: the formatter hook
+    /// carries the state's own command, which may name any hook.
+    fn find(&self, event: &str, script: &str) -> Option<(String, Value, String)> {
+        let want = format!(".claude/hooks/{script}.sh");
+        self.generated().into_iter().find(|(e, _, c)| {
+            let mut runs = scripts_in(c);
+            runs.dedup();
+            e == event && runs == [want.as_str()]
+        })
+    }
+
+    /// The file that keeps a generated hook from being run here, if one does:
+    /// settings.json when it no longer holds the hook exactly as generated, else
+    /// the first script it runs that was edited.
+    fn hand_edited(&self, event: &str, group: &Value, cmd: &str) -> Option<String> {
+        let kept = self
+            .disk
+            .pointer(&format!("/hooks/{event}"))
+            .and_then(Value::as_array)
+            .is_some_and(|groups| groups.contains(group));
+        if !kept {
+            return Some("settings.json".into());
+        }
+        self.edited_script(cmd)
+    }
+
+    /// The first script `cmd` runs (with the loop guard the gates source) that
+    /// exists but isn't what ocgen generates. A missing one is fine: nothing of
+    /// it runs, and the probe reports the failure.
+    fn edited_script(&self, cmd: &str) -> Option<String> {
+        let mut scripts: Vec<String> = scripts_in(cmd).into_iter().map(String::from).collect();
+        let guard = ".claude/hooks/loop-guard.sh";
+        if scripts.iter().any(|s| s.starts_with(".claude/hooks/"))
+            && self.rendered.contains_key(guard)
+        {
+            scripts.push(guard.into());
+        }
+        scripts.into_iter().find(|rel| {
+            std::fs::read(self.root.join(rel)).is_ok_and(|found| {
+                self.rendered
+                    .get(rel)
+                    .is_none_or(|want| want.as_bytes() != found.as_slice())
+            })
+        })
+    }
+}
+
+/// The project scripts `cmd` names (`.claude/hooks/x.sh`, `.claude/statusline.sh`),
+/// in order, relative to the project root.
+fn scripts_in(cmd: &str) -> Vec<&str> {
+    let re =
+        regex::Regex::new(r"/(\.claude/(?:hooks/[A-Za-z0-9_.-]+\.sh|statusline\.sh))").unwrap();
+    re.captures_iter(cmd)
+        .filter_map(|m| m.get(1))
+        .map(|m| m.as_str())
+        .collect()
+}
+
+/// Why verify leaves a hook alone: `what` isn't what ocgen generates.
+fn not_run(what: &str) -> String {
+    format!(
+        "{what} differs from what ocgen generates — not running a hand-edited command; run `ocgen doctor`"
+    )
+}
+
+/// Why a security `gate` (the approval gate, the WebFetch guard, a team gate)
+/// fails unrun: `what` isn't what ocgen generates, so nothing shows it still
+/// blocks — the one that let everything through would look the same.
+fn unverified(gate: &str, what: &str) -> String {
+    format!(
+        "not the {gate} ocgen generates — unverified: {what} differs from what ocgen generates (not running a hand-edited command); `ocgen doctor` restores it"
+    )
 }
 
 /// Whether `sh` starts at all. Without it every script- and hook-running check
@@ -227,7 +574,7 @@ fn shell_check(sh: &Path) -> Result<Check, Check> {
                 name,
                 Status::Fail,
                 format!(
-                    "can't start {} ({why}) — {fix}. The hook script, hook command, approval gate, WebFetch guard, notes view, statusline and check command checks were skipped",
+                    "can't start {} ({why}) — {fix}. The hook script, hook command, approval gate, WebFetch guard, no-op cd, notes view, pre-push, statusline and check command checks were skipped",
                     sh.display()
                 ),
             ))
@@ -238,6 +585,8 @@ fn shell_check(sh: &Path) -> Result<Check, Check> {
 fn up_to_date(project: &Project, root: &Path) -> Check {
     let name = "files up to date";
     match project.plan_changes(root) {
+        // A path ocgen won't write: the message says what to change.
+        Err(e) if e.is::<crate::render::Refused>() => check(name, Status::Fail, e.to_string()),
         Err(e) => check(
             name,
             Status::Fail,
@@ -360,17 +709,20 @@ fn hook_shells_pinned(settings: &Value) -> Vec<bool> {
 }
 
 /// Git Bash on Windows, the way Claude Code looks for it: the
-/// `CLAUDE_CODE_GIT_BASH_PATH` override (environment or settings `env`), the
-/// usual install locations, then PATH (skipping the WSL launcher in System32).
-fn find_git_bash(settings: &Value) -> Option<PathBuf> {
+/// `CLAUDE_CODE_GIT_BASH_PATH` override, the usual install locations, then PATH
+/// (skipping the WSL launcher in System32). The override comes from the
+/// environment or the user's own settings (`user`) — never the project's, which
+/// would let a repository choose the program verify runs.
+fn find_git_bash(user: &Value) -> Option<PathBuf> {
     let configured = std::env::var_os("CLAUDE_CODE_GIT_BASH_PATH")
         .map(PathBuf::from)
         .or_else(|| {
-            settings
-                .pointer("/env/CLAUDE_CODE_GIT_BASH_PATH")
+            user.pointer("/env/CLAUDE_CODE_GIT_BASH_PATH")
                 .and_then(Value::as_str)
                 .map(PathBuf::from)
-        });
+        })
+        // A relative path would resolve against wherever verify runs.
+        .filter(|p| p.is_absolute());
     let installs = ["ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"]
         .into_iter()
         .filter_map(std::env::var_os)
@@ -428,6 +780,277 @@ pub fn hook_shell(settings: &Value, windows: bool, bash: Option<&Path>) -> Check
         name,
         Status::Pass,
         format!("{} hook(s) run in bash ({via})", pinned.len()),
+    )
+}
+
+/// The sandbox behind the approval gate. Without it the gate is a text match an
+/// agent can phrase around — advisory; with it, sandboxed commands can't reach
+/// the approval store or (by default) push and deploy credentials. `on` is
+/// whether it is on in the settings Claude Code merges, `off_by` the file that
+/// turns it off, `os` is `std::env::consts::OS` and `bwrap` whether bubblewrap
+/// is on PATH.
+pub fn sandbox_check(gate: bool, on: bool, off_by: Option<&str>, os: &str, bwrap: bool) -> Check {
+    let name = "sandbox";
+    if os == "windows" && gate {
+        return check(
+            name,
+            Status::Warn,
+            "Claude Code's sandbox isn't available on native Windows, so the approval gate is advisory here — a guard-rail, not a boundary (WSL2 has the sandbox)",
+        );
+    }
+    if os == "windows" && on {
+        return check(
+            name,
+            Status::Warn,
+            "on, but Claude Code's sandbox isn't available on native Windows — commands run unsandboxed here (WSL2 has it)",
+        );
+    }
+    if on && os == "linux" && !bwrap {
+        return check(
+            name,
+            Status::Warn,
+            "on, but `bwrap` isn't on PATH — Claude Code's Linux sandbox needs bubblewrap (e.g. `sudo apt install bubblewrap`)",
+        );
+    }
+    match (on, gate, off_by) {
+        (true, true, _) => check(
+            name,
+            Status::Pass,
+            "on — sandboxed commands, and the check and formatter the hooks run, can't write the approval store",
+        ),
+        (true, false, _) => check(name, Status::Pass, "on"),
+        (false, true, Some(file)) => check(
+            name,
+            Status::Warn,
+            format!("{file} turns the sandbox off, so the approval gate is advisory — remove that, or enable it with `ocgen edit team`"),
+        ),
+        (false, true, None) => check(
+            name,
+            Status::Warn,
+            "the approval gate is advisory without the sandbox — enable it with `ocgen edit team`",
+        ),
+        (false, false, _) => check(name, Status::Skip, "off"),
+    }
+}
+
+/// [`sandbox_check`] for this project, on this machine.
+fn sandbox(project: &Project, layers: &Layers) -> Check {
+    let gate = project.claude.team.enabled && project.claude.team.approval_gate;
+    let (on, off_by) = match layers.get("/sandbox/enabled") {
+        Some((v, from)) => {
+            let on = v.as_bool() == Some(true);
+            (on, (!on).then_some(from))
+        }
+        None => (false, None),
+    };
+    sandbox_check(
+        gate,
+        on,
+        off_by,
+        std::env::consts::OS,
+        find_on_path("bwrap").is_some(),
+    )
+}
+
+/// Claude Code merges the user's settings, the project's, a git-ignored
+/// settings.local.json and any managed policy, the most specific winning key by
+/// key. Any of them can switch the hooks off or loosen a gate — also with a
+/// key ocgen doesn't set — while the generated settings.json looks fine, and
+/// the probes alone wouldn't show it.
+fn effective(layers: &Layers, expected: &Value) -> Check {
+    let name = "effective settings";
+    let want_env: Vec<(&String, &Value)> = expected
+        .get("env")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flatten()
+        .collect();
+    let has_hooks = expected
+        .get("hooks")
+        .and_then(Value::as_object)
+        .is_some_and(|h| !h.is_empty());
+    if !has_hooks && want_env.is_empty() {
+        return check(name, Status::Skip, "no hooks or gate settings to override");
+    }
+    let mut weaker = Vec::new();
+    // The files the weakening settings are in, for how to undo them.
+    let mut culprits: Vec<&str> = Vec::new();
+    let mut changed = Vec::new();
+    if has_hooks {
+        if let Some((why, from)) = layers.hooks_off() {
+            weaker.push(format!(
+                "{why}, so no hook runs and the gates let everything through"
+            ));
+            culprits.push(from);
+        }
+    }
+    let short = |s: &str| match s.char_indices().nth(40) {
+        Some((i, _)) => format!("{}…", &s[..i]),
+        None => s.to_string(),
+    };
+    // Every key ocgen sets, then every other key any file sets: a gate switch
+    // ocgen leaves out can loosen a gate as well.
+    let mut keys: Vec<(&str, Option<String>)> = want_env
+        .iter()
+        .map(|(k, v)| (k.as_str(), Some(text(v))))
+        .collect();
+    let mut extra: Vec<&str> = layers
+        .0
+        .iter()
+        .filter_map(|(.., v)| v.get("env").and_then(Value::as_object))
+        .flat_map(|env| env.keys().map(String::as_str))
+        .filter(|k| !want_env.iter().any(|(w, _)| w == k))
+        .collect();
+    extra.sort_unstable();
+    extra.dedup();
+    keys.extend(extra.into_iter().map(|k| (k, None)));
+    for (key, want) in keys {
+        // `/` and `~` are escaped in a JSON pointer.
+        let pointer = format!("/env/{}", key.replace('~', "~0").replace('/', "~1"));
+        let (got, from) = match layers.get(&pointer) {
+            Some((v, from)) => (Some(text(v)), from),
+            None => (None, SETTINGS),
+        };
+        if got == want {
+            continue;
+        }
+        let weak = weakens(key, want.as_deref(), got.as_deref(), expected);
+        let line = match (&got, &want) {
+            (Some(g), Some(w)) => format!("{from} sets {key}={} (ocgen: {})", short(g), short(w)),
+            (Some(g), None) => format!("{from} sets {key}={} (not set by ocgen)", short(g)),
+            (None, Some(w)) => format!("{key} is missing from {from} (ocgen: {})", short(w)),
+            (None, None) => continue,
+        };
+        if weak {
+            weaker.push(line);
+            culprits.push(from);
+        } else if want.is_some() {
+            // A key ocgen doesn't set is worth a word only when it loosens a gate.
+            changed.push(line);
+        }
+    }
+    if !weaker.is_empty() {
+        weaker.extend(changed);
+        culprits.sort_unstable();
+        culprits.dedup();
+        let fixes: Vec<String> = culprits.into_iter().map(undo).collect();
+        check(
+            name,
+            Status::Fail,
+            format!("{} — {}", weaker.join("; "), fixes.join("; ")),
+        )
+    } else if !changed.is_empty() {
+        check(name, Status::Warn, changed.join("; "))
+    } else {
+        check(
+            name,
+            Status::Pass,
+            "no settings.local.json, user or managed setting turns the hooks off or overrides the gate settings",
+        )
+    }
+}
+
+/// Whether `got` in place of ocgen's `want` (`None`: ocgen doesn't set it) for
+/// `key` loosens a gate ocgen generates (`ocgen`: its settings.json): a switch
+/// turned off, a confidence bar lowered, the objective check dropped, a role
+/// exempted that the gate holds, a loop budget that releases the quality gates
+/// sooner, the team task gate added where no task gate judges teammates, a
+/// documentation site trusted (as the ConfigChange audit judges it), the
+/// hooks' sandbox off or protecting less, or verify's own probe switch (the
+/// gates then decide but record nothing). A key that no generated gate reads
+/// loosens nothing.
+///
+/// Values are read as the hooks read them — roles and sites in any letter case,
+/// a number as either twin reads it, the weaker reading counting: the sh
+/// scripts take plain digits only, the Rust hook a u32 (a leading `+` too),
+/// and each reads anything else as 0.
+fn weakens(key: &str, want: Option<&str>, got: Option<&str>, ocgen: &Value) -> bool {
+    let hook = |event: &str| ocgen.pointer(&format!("/hooks/{event}")).is_some();
+    let on = |k: &str| ocgen.pointer(&format!("/env/{k}")).and_then(Value::as_str) == Some("1");
+    // [the sh scripts' reading, the Rust hook's]; sh's `[ -gt ]` can't hold more
+    // than an i64.
+    let reads = |v: Option<&str>| {
+        let v = v.unwrap_or("");
+        let sh = if !v.is_empty() && v.bytes().all(|b| b.is_ascii_digit()) {
+            v.parse::<u64>()
+                .ok()
+                .filter(|n| i64::try_from(*n).is_ok())
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        [sh, v.parse::<u32>().map_or(0, u64::from)]
+    };
+    // Whether the list `got` names an entry ocgen's `want` doesn't.
+    let adds = || {
+        let ours: Vec<&str> = want.unwrap_or("").split_whitespace().collect();
+        got.unwrap_or("")
+            .split_whitespace()
+            .any(|x| !ours.iter().any(|o| o.eq_ignore_ascii_case(x)))
+    };
+    match key {
+        "TEAM_APPROVAL_GATE" | "TEAM_PLAN_GATE" | "TEAM_RISK_ROUNDS" | "OCGEN_SANDBOX" => {
+            want == Some("1") && got != Some("1")
+        }
+        "OCGEN_SANDBOX_DENY_WRITE" | "OCGEN_SANDBOX_DENY_READ" | "OCGEN_SANDBOX_DENY_ENV" => {
+            let have: Vec<&str> = got.unwrap_or_default().split_whitespace().collect();
+            want.is_some_and(|w| w.split_whitespace().any(|x| !have.contains(&x)))
+        }
+        "TEAM_CONFIDENCE_THRESHOLD" | "SUBAGENT_CONFIDENCE_THRESHOLD" => {
+            let w = reads(want)[0];
+            w > 0 && reads(got).iter().any(|&g| g < w)
+        }
+        "OCGEN_CHECK_CMD" => {
+            want.is_some_and(|w| !w.trim().is_empty()) && got.is_none_or(|g| g.trim().is_empty())
+        }
+        "SUBAGENT_READONLY_ROLES" => hook("SubagentStop") && adds(),
+        "TEAM_READONLY_ROLES" => hook("TeammateIdle") && on("TEAM_RISK_ROUNDS") && adds(),
+        "OCGEN_WEBFETCH_DOMAINS" => want.is_some() && adds(),
+        // 0 (or unreadable) never releases a gate; with ocgen's 0, any budget does.
+        "LOOP_GUARD_MAX_BLOCKS" => {
+            let w = reads(want)[0];
+            want.is_some() && reads(got).iter().any(|&g| g > 0 && (w == 0 || g < w))
+        }
+        "TEAM_TASK_GATE" => hook("SubagentStop") && got == Some("1") && want != Some("1"),
+        "OCGEN_HOOK_PROBE" => got.is_some(),
+        _ => false,
+    }
+}
+
+/// Generated scripts must keep LF line endings. A CRLF checkout (Windows,
+/// `core.autocrlf` without a `.gitattributes`) makes sh fail on them, so the
+/// hooks break — and a gate that errors can block every call.
+fn line_endings(root: &Path, rendered: &HashMap<String, String>) -> Check {
+    let name = "line endings";
+    let mut scripts: Vec<&str> = rendered
+        .keys()
+        .map(String::as_str)
+        .filter(|r| r.ends_with(".sh"))
+        .collect();
+    if scripts.is_empty() {
+        return check(name, Status::Skip, "no generated scripts");
+    }
+    scripts.sort_unstable();
+    let crlf: Vec<&str> = scripts
+        .iter()
+        .copied()
+        .filter(|r| std::fs::read(root.join(r)).is_ok_and(|b| b.contains(&b'\r')))
+        .collect();
+    if crlf.is_empty() {
+        return check(
+            name,
+            Status::Pass,
+            format!("{} script(s) use LF", scripts.len()),
+        );
+    }
+    check(
+        name,
+        Status::Fail,
+        format!(
+            "{} {} CRLF line endings — sh can't run them, so the hooks break. Pin LF in .gitattributes (`*.sh text eol=lf`, `.claude/** text eol=lf`), run `git add --renormalize .`, then `ocgen doctor`",
+            crlf.join(", "),
+            if crlf.len() == 1 { "has" } else { "have" }
+        ),
     )
 }
 
@@ -491,22 +1114,171 @@ fn hook_scripts(sh: &Path, root: &Path, settings: &Value) -> Check {
     }
 }
 
-/// The env a hook sees: settings `env`, the project dir, and no loop guard.
-fn hook_env(root: &Path, settings: &Value) -> HashMap<String, String> {
-    let mut env: HashMap<String, String> = settings
-        .get("env")
-        .and_then(Value::as_object)
-        .map(|m| {
-            m.iter()
-                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
-                .collect()
-        })
-        .unwrap_or_default();
-    env.insert("CLAUDE_PROJECT_DIR".into(), crate::paths::for_shell(root));
-    env.insert("LOOP_GUARD_MAX_BLOCKS".into(), "0".into());
-    // Probing the gates must not run the project's test suite.
-    env.insert("OCGEN_CHECK_CMD".into(), String::new());
-    env
+/// A fresh path in the temp dir for one of verify's scratch files or folders.
+fn scratch_path(kind: &str) -> PathBuf {
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
+    std::env::temp_dir().join(format!(
+        "ocgen-verify-{}-{}-{kind}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ))
+}
+
+/// Read all of `r` on a thread, so the child writing it never waits for us.
+fn drain<R: Read + Send + 'static>(mut r: R) -> JoinHandle<Vec<u8>> {
+    std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = r.read_to_end(&mut buf);
+        buf
+    })
+}
+
+/// Run `cmd` with `stdin`, up to `limit`: `(exit code, stdout, stderr)`, or why
+/// it didn't finish. Both outputs are read while it runs — a pipe nobody reads
+/// fills up (about 64 KiB) and stalls the child until the limit. A timeout
+/// stops everything the command started, not just the shell.
+fn run(mut cmd: Command, stdin: &str, limit: Duration) -> Result<(i32, String, String), String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        // Its own process group, so a timeout can stop the whole tree.
+        cmd.process_group(0);
+    }
+    let mut child = cmd
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("could not start it ({e})"))?;
+    #[cfg(unix)]
+    let _watch = Watch::start(child.id());
+    let readers = [
+        child.stdout.take().map(drain),
+        child.stderr.take().map(drain),
+    ];
+    if let Some(mut pipe) = child.stdin.take() {
+        if !stdin.is_empty() {
+            let data = stdin.as_bytes().to_vec();
+            // From a thread too: a child that never reads its input can't stall us.
+            std::thread::spawn(move || {
+                let _ = pipe.write_all(&data);
+            });
+        }
+    }
+    let start = Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if start.elapsed() > limit => {
+                kill_tree(&mut child);
+                return Err("timed out".to_string());
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(20)),
+            Err(e) => {
+                kill_tree(&mut child);
+                return Err(e.to_string());
+            }
+        }
+    };
+    // A background process it left behind keeps the pipes open: give the
+    // output a moment, then stop the stragglers and keep what arrived.
+    let settled = |within: Duration| {
+        let t = Instant::now();
+        while !readers.iter().flatten().all(JoinHandle::is_finished) {
+            if t.elapsed() > within {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        true
+    };
+    if !settled(Duration::from_secs(2)) {
+        #[cfg(unix)]
+        signal_group(child.id(), "-KILL");
+        settled(Duration::from_secs(1));
+    }
+    let [out, err] = readers.map(|r| {
+        r.filter(JoinHandle::is_finished)
+            .and_then(|h| h.join().ok())
+            .map(|b| String::from_utf8_lossy(&b).into_owned())
+            .unwrap_or_default()
+    });
+    Ok((status.code().unwrap_or(-1), out, err))
+}
+
+/// Passes Ctrl-C on to a command [`run`] started. Its process group isn't the
+/// terminal's foreground group, so Ctrl-C would stop only verify and leave the
+/// command running. This watcher stays in verify's group and hands an
+/// interrupt (or a hangup or TERM) on to the command's group. Its stdin is a
+/// pipe from verify: if verify goes away any other way, the pipe closes and the
+/// watcher stops the command's group. Dropping it ends it quietly.
+#[cfg(unix)]
+struct Watch(Option<Child>);
+
+#[cfg(unix)]
+impl Watch {
+    const SCRIPT: &'static str = r#"trap 'kill -s INT -- "-$1" 2>/dev/null; exit 0' INT
+trap 'kill -s TERM -- "-$1" 2>/dev/null; exit 0' HUP TERM
+read -r line || kill -s TERM -- "-$1" 2>/dev/null
+"#;
+
+    fn start(group: u32) -> Self {
+        let watcher = Command::new("sh")
+            .args(["-c", Self::SCRIPT, "ocgen-verify-watch"])
+            .arg(group.to_string())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
+        Watch(watcher.ok())
+    }
+}
+
+#[cfg(unix)]
+impl Drop for Watch {
+    fn drop(&mut self) {
+        // Killed before its stdin closes, so it never signals the group.
+        if let Some(w) = &mut self.0 {
+            let _ = w.kill();
+            let _ = w.wait();
+        }
+    }
+}
+
+/// Send `signal` (`-TERM`, `-KILL`) to the process group led by `pid`.
+#[cfg(unix)]
+fn signal_group(pid: u32, signal: &str) {
+    let _ = Command::new("kill")
+        .args([signal, "--", &format!("-{pid}")])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+}
+
+/// Stop `child` and everything it started: on Unix its process group (TERM, a
+/// moment to exit, then KILL), on Windows its process tree.
+fn kill_tree(child: &mut Child) {
+    #[cfg(unix)]
+    {
+        signal_group(child.id(), "-TERM");
+        let start = Instant::now();
+        while start.elapsed() < Duration::from_secs(1) && matches!(child.try_wait(), Ok(None)) {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        signal_group(child.id(), "-KILL");
+    }
+    #[cfg(windows)]
+    {
+        let _ = Command::new("taskkill")
+            .args(["/T", "/F", "/PID", &child.id().to_string()])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 /// Run `sh -c cmd` with `stdin` and `env` from `cwd`, up to `limit`.
@@ -518,47 +1290,38 @@ fn run_sh(
     cwd: &Path,
     limit: Duration,
 ) -> Option<(i32, String, String)> {
-    let mut child = Command::new(sh)
-        .arg("-c")
-        .arg(cmd)
-        .current_dir(cwd)
-        .envs(env)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .ok()?;
-    let _ = child.stdin.take()?.write_all(stdin.as_bytes());
-    let start = Instant::now();
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => break,
-            Ok(None) if start.elapsed() > limit => {
-                let _ = child.kill();
-                return None;
-            }
-            Ok(None) => std::thread::sleep(Duration::from_millis(20)),
-            Err(_) => return None,
-        }
-    }
-    let out = child.wait_with_output().ok()?;
-    Some((
-        out.status.code().unwrap_or(-1),
-        String::from_utf8_lossy(&out.stdout).into_owned(),
-        String::from_utf8_lossy(&out.stderr).into_owned(),
-    ))
+    let mut c = Command::new(sh);
+    c.arg("-c").arg(cmd).current_dir(cwd).envs(env);
+    run(c, stdin, limit).ok()
 }
 
 /// Run the side-effect-free hook commands with a harmless event and check they
-/// exit as expected (a missing script or interpreter shows up as 126/127).
-fn hook_commands(sh: &Path, root: &Path, settings: &Value) -> Check {
+/// exit as expected (a missing script or interpreter shows up as 126/127). A
+/// team gate that isn't ocgen's fails unverified; any other hook isn't run.
+fn hook_commands(p: &Probe) -> Check {
     let name = "hook commands run";
-    let env = hook_env(root, settings);
+    let env = &p.env;
     let not_git = std::env::temp_dir();
     let plan_gate = env.get("TEAM_PLAN_GATE").is_some_and(|v| v == "1");
+    // The task gate reads the teammate's words from its transcript.
+    let transcript = scratch_path("transcript.jsonl");
+    let _ = std::fs::write(
+        &transcript,
+        "{\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Confidence: 100%\"}]},\"type\":\"assistant\"}\n",
+    );
     let mut ran = 0;
     let mut problems = Vec::new();
-    for (event, cmd) in hook_entries(settings) {
+    // The file that differs → the events not run for it: the team gates, which
+    // fail unverified, and the rest, which only aren't run.
+    let mut gates: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut edited: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    const GATES: [&str; 4] = [
+        "TaskCreated",
+        "TaskCompleted",
+        "SubagentStop",
+        "TeammateIdle",
+    ];
+    for (event, group, cmd) in p.generated() {
         // Notification/format/audit hooks have real side effects; skip them here.
         let (payload, expect) = match event.as_str() {
             "SessionStart" => ("{}".to_string(), 0),
@@ -567,12 +1330,12 @@ fn hook_commands(sh: &Path, root: &Path, settings: &Value) -> Check {
                 0,
             ),
             "TaskCompleted" => (
-                r#"{"session_id":"ocgen-verify","task_id":"ocgen-verify","summary":"Confidence: 100%"}"#.into(),
+                serde_json::json!({ "session_id": "ocgen-verify", "task_id": "ocgen-verify", "transcript_path": crate::paths::for_shell(&transcript) }).to_string(),
                 0,
             ),
             "TeammateIdle" => (r#"{"session_id":"ocgen-verify","agent_type":"ocgen-verify-probe"}"#.into(), 0),
             "TaskCreated" => {
-                let approved = std::fs::read_to_string(root.join(".claude/team/plan.md"))
+                let approved = std::fs::read_to_string(p.root.join(".claude/team/plan.md"))
                     .is_ok_and(|p| p.lines().any(|l| l.starts_with("Status: APPROVED")));
                 (
                     r#"{"session_id":"ocgen-verify","agent_type":"ocgen-verify-probe"}"#.into(),
@@ -581,50 +1344,78 @@ fn hook_commands(sh: &Path, root: &Path, settings: &Value) -> Check {
             }
             _ => continue,
         };
+        if let Some(what) = p.hand_edited(&event, &group, &cmd) {
+            let into = if GATES.contains(&event.as_str()) {
+                &mut gates
+            } else {
+                &mut edited
+            };
+            into.entry(what).or_default().push(event);
+            continue;
+        }
         ran += 1;
-        match run_sh(sh, &cmd, &payload, &env, root, Duration::from_secs(20)) {
+        // An approval belongs to its own team run, so the plan gate may refuse
+        // the probe's own task as stale even under an approved plan — but only
+        // that refusal is fine: a script that can't run exits 2 too.
+        let stale = |err: &str| {
+            event == "TaskCreated" && plan_gate && err.starts_with("Plan approval is stale")
+        };
+        match run_sh(p.sh, &cmd, &payload, env, p.root, Duration::from_secs(20)) {
             None => problems.push(format!("{event}: did not finish")),
-            Some((code, _, err)) if code != expect => problems.push(format!(
-                "{event}: exit {code}, expected {expect} ({})",
-                err.lines().next().unwrap_or("").trim()
-            )),
+            Some((code, _, err)) if code != expect && !(code == 2 && stale(&err)) => {
+                problems.push(format!(
+                    "{event}: exit {code}, expected {expect} ({})",
+                    err.lines().next().unwrap_or("").trim()
+                ))
+            }
             Some(_) => {}
         }
     }
-    if ran == 0 {
+    let _ = std::fs::remove_file(&transcript);
+    let lines = |by_file: BTreeMap<String, Vec<String>>, why: fn(&str) -> String| {
+        by_file
+            .into_iter()
+            .map(|(what, mut events)| {
+                events.dedup();
+                format!("{}: {}", events.join(", "), why(&what))
+            })
+            .collect::<Vec<String>>()
+    };
+    let gates = lines(gates, |what| unverified("gate", what));
+    let edited = lines(edited, not_run);
+    if !problems.is_empty() || !gates.is_empty() {
+        problems.extend(gates);
+        problems.extend(edited);
+        check(name, Status::Fail, problems.join("; "))
+    } else if !edited.is_empty() {
+        check(name, Status::Warn, edited.join("; "))
+    } else if ran == 0 {
         check(name, Status::Skip, "no side-effect-free hooks to run")
-    } else if problems.is_empty() {
+    } else {
         check(
             name,
             Status::Pass,
             format!("{ran} hook command(s) ran as expected"),
         )
-    } else {
-        check(name, Status::Fail, problems.join("; "))
     }
 }
 
-/// The approval gate must block pushes — including phrasings with flags and via
-/// a deploy script — and allow ordinary work. Tested with an empty HOME so a
-/// current approval can't hide a broken gate.
 /// The WebFetch guard must allow only https:// fetches to trusted documentation
-/// sites: plain http://, untrusted hosts and look-alikes are blocked.
-fn https_only_fetch(sh: &Path, root: &Path, settings: &Value) -> Check {
+/// sites: plain http://, untrusted hosts and look-alikes are blocked. One that
+/// isn't ocgen's fails unverified.
+fn https_only_fetch(p: &Probe) -> Check {
     let name = "WebFetch guard";
-    let Some((_, cmd)) = hook_entries(settings)
-        .into_iter()
-        .find(|(e, c)| e == "PreToolUse" && c.contains("https-only-fetch"))
-    else {
+    let Some((event, group, cmd)) = p.find("PreToolUse", "https-only-fetch") else {
         return check(name, Status::Skip, "/intent not enabled");
     };
-    let env = hook_env(root, settings);
+    let env = &p.env;
     let run = |url: &str| {
         let ev = serde_json::json!({
             "session_id": "ocgen-verify", "tool_name": "WebFetch",
             "tool_input": { "url": url, "prompt": "verify" }
         })
         .to_string();
-        run_sh(sh, &cmd, &ev, &env, root, Duration::from_secs(20)).map(|x| x.0)
+        run_sh(p.sh, &cmd, &ev, env, p.root, Duration::from_secs(20)).map(|x| x.0)
     };
     // A trusted host to probe with: the first entry (a `*.` entry → a subdomain).
     let trusted: Option<String> = env
@@ -653,6 +1444,9 @@ fn https_only_fetch(sh: &Path, root: &Path, settings: &Value) -> Check {
                 shared.join(", ")
             ),
         );
+    }
+    if let Some(what) = p.hand_edited(&event, &group, &cmd) {
+        return check(name, Status::Fail, unverified("guard", &what));
     }
     let mut must_block = vec![
         "http://example.com/".to_string(),
@@ -698,27 +1492,52 @@ fn https_only_fetch(sh: &Path, root: &Path, settings: &Value) -> Check {
     }
 }
 
+/// `dir` as one `cd` target, spelled the way the no-op cd hook reads it (and
+/// Claude writes it): bare when it can be, else quoted. `None` when no simple
+/// spelling carries it.
+fn cd_target(dir: &str) -> Option<String> {
+    let bare = |c: char| !(c.is_whitespace() || "\"'$`\\;&|<>()*?[]~{}#".contains(c));
+    if !dir.is_empty() && dir.chars().all(bare) {
+        Some(dir.to_string())
+    } else if !dir.contains(['\'', '\r', '\n']) {
+        Some(format!("'{dir}'"))
+    } else if !dir.contains(['"', '$', '`', '\r', '\n']) {
+        Some(format!("\"{dir}\""))
+    } else {
+        None
+    }
+}
+
 /// The no-op `cd` hook must drop `cd <project> &&` (keeping the other input
 /// fields) and leave a `cd` into any other folder alone — never deciding.
-fn noop_cd(sh: &Path, root: &Path, settings: &Value) -> Check {
+fn noop_cd(p: &Probe) -> Check {
     let name = "no-op cd";
-    let Some((_, cmd)) = hook_entries(settings)
-        .into_iter()
-        .find(|(e, c)| e == "PreToolUse" && c.contains("drop-noop-cd"))
-    else {
+    let Some((event, group, cmd)) = p.find("PreToolUse", "drop-noop-cd") else {
         return check(name, Status::Skip, "hook not enabled");
     };
-    let env = hook_env(root, settings);
-    let dir = crate::paths::for_shell(root);
+    if let Some(what) = p.hand_edited(&event, &group, &cmd) {
+        return check(name, Status::Warn, not_run(&what));
+    }
+    let dir = crate::paths::for_shell(p.root);
+    let (Some(here), Some(there)) = (
+        cd_target(&dir),
+        cd_target(&format!("{dir}/ocgen-verify-elsewhere")),
+    ) else {
+        return check(
+            name,
+            Status::Skip,
+            "the project path can't be written as a plain or quoted cd target",
+        );
+    };
     let run = |command: String| {
         let ev = serde_json::json!({
             "session_id": "ocgen-verify", "tool_name": "Bash", "cwd": dir,
             "tool_input": { "command": command, "description": "verify" }
         })
         .to_string();
-        run_sh(sh, &cmd, &ev, &env, root, Duration::from_secs(20))
+        run_sh(p.sh, &cmd, &ev, &p.env, p.root, Duration::from_secs(20))
     };
-    let elsewhere = run(format!("cd {dir}/ocgen-verify-elsewhere && echo ok"));
+    let elsewhere = run(format!("cd {there} && echo ok"));
     if !matches!(&elsewhere, Some((0, out, _)) if out.trim().is_empty()) {
         return check(
             name,
@@ -726,7 +1545,7 @@ fn noop_cd(sh: &Path, root: &Path, settings: &Value) -> Check {
             format!("touched a cd into another folder ({elsewhere:?}) — run `ocgen doctor`"),
         );
     }
-    let Some((0, out, _)) = run(format!("cd {dir} && echo ok")) else {
+    let Some((0, out, _)) = run(format!("cd {here} && echo ok")) else {
         return check(name, Status::Fail, "the hook failed — run `ocgen doctor`");
     };
     if out.trim().is_empty() {
@@ -758,20 +1577,15 @@ fn noop_cd(sh: &Path, root: &Path, settings: &Value) -> Check {
 
 /// The /inquire notes view: after a ledger is written, the hook renders its
 /// HTML page. Probed on a scratch ledger with the browser switched off.
-fn notes_view(sh: &Path, root: &Path, settings: &Value) -> Check {
+fn notes_view(p: &Probe) -> Check {
     let name = "/inquire notes view";
-    let Some((_, cmd)) = hook_entries(settings)
-        .into_iter()
-        .find(|(e, c)| e == "PostToolUse" && c.contains("inquire-notes"))
-    else {
+    let Some((event, group, cmd)) = p.find("PostToolUse", "inquire-notes") else {
         return check(name, Status::Skip, "/inquire not enabled");
     };
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let scratch =
-        std::env::temp_dir().join(format!("ocgen-verify-notes-{}-{nanos}", std::process::id()));
+    if let Some(what) = p.hand_edited(&event, &group, &cmd) {
+        return check(name, Status::Warn, not_run(&what));
+    }
+    let scratch = scratch_path("notes");
     let notes = scratch.join(".claude/notes");
     let md = notes.join("verify.md");
     if std::fs::create_dir_all(&notes).is_err()
@@ -784,14 +1598,14 @@ fn notes_view(sh: &Path, root: &Path, settings: &Value) -> Check {
         let _ = std::fs::remove_dir_all(&scratch);
         return check(name, Status::Warn, "could not create a scratch ledger to probe with");
     }
-    let mut env = hook_env(root, settings);
+    let mut env = p.env.clone();
     env.insert("OCGEN_NOTES_OPEN".into(), "0".into());
     let ev = serde_json::json!({
         "session_id": "ocgen-verify", "tool_name": "Write",
         "tool_input": { "file_path": crate::paths::for_shell(&md) }
     })
     .to_string();
-    let ran = run_sh(sh, &cmd, &ev, &env, root, Duration::from_secs(20));
+    let ran = run_sh(p.sh, &cmd, &ev, &env, p.root, Duration::from_secs(20));
     let rendered = std::fs::read_to_string(notes.join("verify.html"))
         .is_ok_and(|h| h.contains("ocgen verify ledger"));
     let _ = std::fs::remove_dir_all(&scratch);
@@ -826,16 +1640,32 @@ fn notes_view(sh: &Path, root: &Path, settings: &Value) -> Check {
     }
 }
 
-fn approval_gate(sh: &Path, root: &Path, settings: &Value) -> Check {
+/// The approval gate must block pushes — including phrasings with flags and via
+/// a deploy script — and allow ordinary work. Tested with an empty HOME so a
+/// current approval can't hide a broken gate. `off` is why the settings Claude
+/// Code merges keep the gate from running at all (and the file that does it).
+/// A gate that isn't ocgen's fails unverified.
+fn approval_gate(p: &Probe, off: Option<(String, &str)>) -> Check {
     let name = "approval gate blocks git push";
-    let Some((_, cmd)) = hook_entries(settings)
-        .into_iter()
-        .find(|(e, c)| e == "PreToolUse" && c.contains("team-approval-gate"))
-    else {
+    let Some((event, group, cmd)) = p.find("PreToolUse", "team-approval-gate") else {
         return check(name, Status::Skip, "approval gate not enabled");
     };
-    let mut env = hook_env(root, settings);
-    let empty_home = std::env::temp_dir().join(format!("ocgen-verify-home-{}", std::process::id()));
+    if let Some((why, from)) = off {
+        return check(
+            name,
+            Status::Fail,
+            format!(
+                "off in Claude Code — {why}, so the gate lets everything through; {}",
+                undo(from)
+            ),
+        );
+    }
+    if let Some(what) = p.hand_edited(&event, &group, &cmd) {
+        return check(name, Status::Fail, unverified("gate", &what));
+    }
+    let mut env = p.env.clone();
+    let empty_home = scratch_path("home");
+    let _ = std::fs::remove_dir_all(&empty_home);
     let _ = std::fs::create_dir_all(&empty_home);
     env.insert("HOME".into(), crate::paths::for_shell(&empty_home));
     let run = |c: &str| {
@@ -843,7 +1673,7 @@ fn approval_gate(sh: &Path, root: &Path, settings: &Value) -> Check {
             "session_id": "ocgen-verify", "tool_name": "Bash", "tool_input": { "command": c }
         })
         .to_string();
-        run_sh(sh, &cmd, &ev, &env, root, Duration::from_secs(20)).map(|x| x.0)
+        run_sh(p.sh, &cmd, &ev, &env, p.root, Duration::from_secs(20)).map(|x| x.0)
     };
     let must_block = [
         "git push origin main",
@@ -879,7 +1709,7 @@ fn approval_gate(sh: &Path, root: &Path, settings: &Value) -> Check {
             ),
         );
     }
-    if root.join(".claude/team/execution-approved").exists() {
+    if p.root.join(".claude/team/execution-approved").exists() {
         return check(
             name,
             Status::Warn,
@@ -889,7 +1719,7 @@ fn approval_gate(sh: &Path, root: &Path, settings: &Value) -> Check {
     let home = std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
         .map(PathBuf::from);
-    match home.and_then(|h| crate::approval::remaining(&h, root)) {
+    match home.and_then(|h| crate::approval::remaining(&h, p.root)) {
         Some(left) => check(
             name,
             Status::Warn,
@@ -899,9 +1729,13 @@ fn approval_gate(sh: &Path, root: &Path, settings: &Value) -> Check {
     }
 }
 
-/// The git half of the gate: a pre-push hook that stops unapproved pushes however
-/// they are launched.
-fn pre_push(project: &Project, root: &Path) -> Check {
+/// The git half of the gate: the installed pre-push hook must refuse a push made
+/// under Claude Code without an approval, and let the user's own through. It is
+/// run the way git runs it, with HOME pointed at an empty folder so no real
+/// approval counts and nothing real is touched (git still trusts the
+/// repository as it does for verify): with CLAUDECODE set, then without. Only
+/// ocgen's own hook is run; `sh` is `None` when no shell starts.
+fn pre_push(sh: Option<&Path>, project: &Project, root: &Path) -> Check {
     let name = "git pre-push hook";
     if !(project.claude.team.enabled && project.claude.team.approval_gate) {
         return check(name, Status::Skip, "approval gate not enabled");
@@ -920,36 +1754,197 @@ fn pre_push(project: &Project, root: &Path) -> Check {
         return check(name, Status::Skip, "not a git repository");
     };
     if git(&["config", "core.hooksPath"]).is_some_and(|p| !p.is_empty()) {
-        return check(name, Status::Warn, "this repo uses core.hooksPath — add `sh .claude/hooks/git-pre-push.sh || exit 1` to its pre-push hook");
-    }
-    match std::fs::read_to_string(PathBuf::from(common).join("hooks/pre-push")) {
-        Ok(h) if h.contains("ocgen:pre-push") => check(
-            name,
-            Status::Pass,
-            "installed — unapproved pushes are blocked even from scripts",
-        ),
-        Ok(_) => check(
+        return check(
             name,
             Status::Warn,
-            "another pre-push hook exists — add `sh .claude/hooks/git-pre-push.sh || exit 1` to it",
+            format!(
+                "this repo uses core.hooksPath — add `{}` to its pre-push hook",
+                crate::render::pre_push_chain(root)
+            ),
+        );
+    }
+    let hook = PathBuf::from(common).join("hooks/pre-push");
+    match std::fs::read_to_string(&hook) {
+        Ok(h) if h.contains("ocgen:pre-push") => {}
+        Ok(_) => {
+            return check(
+                name,
+                Status::Warn,
+                format!(
+                    "another pre-push hook exists — add `{}` to it",
+                    crate::render::pre_push_chain(root)
+                ),
+            )
+        }
+        Err(_) => return check(name, Status::Warn, "not installed — run `ocgen doctor`"),
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let runnable = std::fs::metadata(&hook).is_ok_and(|m| m.permissions().mode() & 0o111 != 0);
+        if !runnable {
+            return check(
+                name,
+                Status::Fail,
+                "installed, but not executable — git skips it, so pushes go through. Run `ocgen doctor`",
+            );
+        }
+    }
+    let Some(sh) = sh else {
+        return check(
+            name,
+            Status::Skip,
+            "installed, but not run: no shell to run it with",
+        );
+    };
+    // git runs hooks from the top of the work tree.
+    let top_dir = git(&["rev-parse", "--show-toplevel"]);
+    let top = top_dir
+        .as_deref()
+        .map_or_else(|| root.to_path_buf(), PathBuf::from);
+    let home = scratch_path("home");
+    let _ = std::fs::remove_dir_all(&home);
+    let _ = std::fs::create_dir_all(&home);
+    // The scratch HOME hides the real approvals, but also git's global config,
+    // and with it a `safe.directory` that trusts this repository (common in
+    // containers and CI): carry that trust, as verify's own git calls had it,
+    // after any config the environment already passes this way.
+    let trust = top_dir.unwrap_or_else(|| crate::paths::for_shell(root));
+    let passed = std::env::var("GIT_CONFIG_COUNT")
+        .ok()
+        .and_then(|c| c.parse::<usize>().ok())
+        .unwrap_or(0);
+    let isolate = |cmd: &mut Command| {
+        cmd.current_dir(&top)
+            .env("HOME", crate::paths::for_shell(&home))
+            .env("GIT_CONFIG_COUNT", (passed + 1).to_string())
+            .env(format!("GIT_CONFIG_KEY_{passed}"), "safe.directory")
+            .env(format!("GIT_CONFIG_VALUE_{passed}"), &trust);
+    };
+    // A push the way git makes it, under Claude Code or not.
+    let push = |claude: bool| {
+        let mut cmd = Command::new(sh);
+        cmd.arg(crate::paths::for_shell(&hook))
+            .args(["origin", "https://ocgen-verify.invalid/repo.git"]);
+        isolate(&mut cmd);
+        if claude {
+            cmd.env("CLAUDECODE", "1");
+        } else {
+            cmd.env_remove("CLAUDECODE");
+        }
+        // What git feeds a pre-push hook: one line per ref being pushed.
+        let refs = format!(
+            "refs/heads/ocgen-verify {} refs/heads/ocgen-verify {}\n",
+            "1".repeat(40),
+            "0".repeat(40)
+        );
+        run(cmd, &refs, Duration::from_secs(20))
+    };
+    let ran = push(true);
+    // Only a hook that blocks just Claude Code's push is doing its job.
+    let yours = match ran {
+        Ok((code, ..)) if code != 0 => Some(push(false)),
+        _ => None,
+    };
+    // The hook lets a push through when its git can't find the repository:
+    // with this probe's HOME, not as git runs it. Asked the way the hook asks.
+    let unreadable = match ran {
+        Ok((0, ..)) => {
+            let mut cmd = Command::new(sh);
+            cmd.args([
+                "-c",
+                "git rev-parse --path-format=absolute --git-common-dir",
+            ]);
+            isolate(&mut cmd);
+            match run(cmd, "", Duration::from_secs(20)) {
+                Ok((0, out, _)) if !out.trim().is_empty() => None,
+                Ok((code, _, err)) => Some(match err.lines().next().map(str::trim) {
+                    Some(l) if !l.is_empty() => l.to_string(),
+                    _ => format!("git exited {code}"),
+                }),
+                Err(e) => Some(format!("git {e}")),
+            }
+        }
+        _ => None,
+    };
+    let _ = std::fs::remove_dir_all(&home);
+    if let Some(why) = unreadable {
+        return check(
+            name,
+            Status::Warn,
+            format!("installed, but not checked: git couldn't read the repository with verify's scratch HOME ({why}), so the hook let the probe's push through without deciding"),
+        );
+    }
+    if let Some(r) = yours.filter(|r| !matches!(r, Ok((0, ..)))) {
+        let why = match r {
+            Ok((code, _, err)) => {
+                format!("exit {code}: {}", err.lines().next().unwrap_or("").trim())
+            }
+            Err(e) => e,
+        };
+        return check(
+            name,
+            Status::Fail,
+            format!("installed, but it fails every push, yours too ({why}) — run `ocgen doctor`"),
+        );
+    }
+    match ran {
+        Ok((0, _, _)) => {
+            let same = |p: &Path| std::fs::canonicalize(p).ok();
+            let nested = same(&top) != same(root);
+            check(
+                name,
+                Status::Fail,
+                format!(
+                    "installed, but it let a push made under Claude Code through without an approval{} — run `ocgen doctor`",
+                    if nested {
+                        " (the project isn't at the repository root)"
+                    } else {
+                        ""
+                    }
+                ),
+            )
+        }
+        Ok((code, _, _)) => check(
+            name,
+            Status::Pass,
+            format!("installed — it blocked a push made under Claude Code without an approval (exit {code})"),
         ),
-        Err(_) => check(name, Status::Warn, "not installed — run `ocgen doctor`"),
+        Err(e) => check(name, Status::Fail, format!("installed, but it didn't run: {e}")),
     }
 }
 
-fn statusline(sh: &Path, root: &Path, settings: &Value) -> Check {
+/// The statusline ocgen generates must print something. One replaced in a more
+/// specific settings file, or edited by hand, is not run.
+fn statusline(p: &Probe, layers: &Layers) -> Check {
     let name = "statusline renders";
-    let Some(cmd) = settings
-        .pointer("/statusLine/command")
-        .and_then(Value::as_str)
-    else {
-        return check(name, Status::Skip, "no statusLine configured");
+    let Some(want) = p.expected.get("statusLine") else {
+        let why = if p.disk.get("statusLine").is_some() {
+            "not one ocgen generates — not run"
+        } else {
+            "no statusLine configured"
+        };
+        return check(name, Status::Skip, why);
     };
+    if p.disk.get("statusLine") != Some(want) {
+        return check(name, Status::Warn, not_run("settings.json"));
+    }
+    if let Some((_, from)) = layers.get("/statusLine").filter(|(_, f)| *f != SETTINGS) {
+        return check(
+            name,
+            Status::Skip,
+            format!("{from} replaces it — verify runs only the statusline ocgen generates"),
+        );
+    }
+    let cmd = want.get("command").and_then(Value::as_str).unwrap_or("");
+    if let Some(rel) = p.edited_script(cmd) {
+        return check(name, Status::Warn, not_run(&rel));
+    }
     let payload = serde_json::json!({
         "model": { "display_name": "ocgen verify" },
         "workspace": {
-            "current_dir": crate::paths::for_shell(root),
-            "project_dir": crate::paths::for_shell(root)
+            "current_dir": crate::paths::for_shell(p.root),
+            "project_dir": crate::paths::for_shell(p.root)
         },
         "context_window": { "remaining_percentage": 50 },
     })
@@ -957,9 +1952,9 @@ fn statusline(sh: &Path, root: &Path, settings: &Value) -> Check {
     let mut env = HashMap::new();
     env.insert(
         "CLAUDE_PROJECT_DIR".to_string(),
-        crate::paths::for_shell(root),
+        crate::paths::for_shell(p.root),
     );
-    match run_sh(sh, cmd, &payload, &env, root, Duration::from_secs(10)) {
+    match run_sh(p.sh, cmd, &payload, &env, p.root, Duration::from_secs(10)) {
         Some((0, out, _)) if !out.trim().is_empty() => {
             let plain = regex::Regex::new(r"\x1b\[[0-9;]*m")
                 .unwrap()
@@ -1077,6 +2072,28 @@ fn ocgen_on_path() -> Check {
     }
 }
 
+/// Hook scripts and gate-protocol templates in the template override dir (left
+/// by an older `ocgen templates init`): ocgen ignores them, so a tweak there
+/// silently does nothing. Shown only when there are some.
+fn ignored_overrides() -> Option<Check> {
+    let ignored = crate::templates::ignored_overrides();
+    if ignored.is_empty() {
+        return None;
+    }
+    let dir = crate::templates::override_dir()
+        .map(|d| crate::paths::for_shell(&d))
+        .unwrap_or_default();
+    Some(check(
+        "template overrides",
+        Status::Warn,
+        format!(
+            "{} in {dir} ignored — hook scripts and the gate-protocol templates always come from ocgen; delete {}",
+            ignored.join(", "),
+            if ignored.len() == 1 { "it" } else { "them" }
+        ),
+    ))
+}
+
 fn git_tracking(root: &Path) -> Check {
     let name = ".claude/ tracked by git";
     match crate::gitcheck::claude_config_ignored(root) {
@@ -1090,13 +2107,42 @@ fn git_tracking(root: &Path) -> Check {
     }
 }
 
-fn claude_validate(sh: &Path, project: &Project, root: &Path) -> Check {
+/// The first `name` on PATH that runs as a program — on Windows with one of the
+/// `PATHEXT` extensions (`claude.exe`, `claude.cmd`), the way a shell finds it.
+fn find_on_path(name: &str) -> Option<PathBuf> {
+    let exts = if cfg!(windows) {
+        std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into())
+    } else {
+        String::new()
+    };
+    find_in(&std::env::var_os("PATH")?, name, &exts)
+}
+
+/// [`find_on_path`] with PATH and PATHEXT given; empty `exts` means the bare
+/// name. Only extensions `Command` can start (batch files via cmd) count.
+fn find_in(path: &OsStr, name: &str, exts: &str) -> Option<PathBuf> {
+    let exts: Vec<String> = if exts.is_empty() {
+        vec![String::new()]
+    } else {
+        exts.split(';')
+            .map(|e| e.trim().to_ascii_lowercase())
+            .filter(|e| [".com", ".exe", ".bat", ".cmd"].contains(&e.as_str()))
+            .collect()
+    };
+    std::env::split_paths(path)
+        .flat_map(|d| {
+            exts.iter()
+                .map(|e| d.join(format!("{name}{e}")))
+                .collect::<Vec<_>>()
+        })
+        .find(|p| p.is_file())
+}
+
+fn claude_validate(project: &Project, root: &Path) -> Check {
     let name = "Claude Code validation";
-    let has_claude = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
-        .any(|d| d.join("claude").is_file());
-    if !has_claude {
+    let Some(claude) = find_on_path("claude") else {
         return check(name, Status::Skip, "claude CLI not found");
-    }
+    };
     let mut targets: Vec<PathBuf> = [".claude/agents", ".claude/skills"]
         .iter()
         .map(|d| root.join(d))
@@ -1114,15 +2160,17 @@ fn claude_validate(sh: &Path, project: &Project, root: &Path) -> Check {
     }
     let mut failed = Vec::new();
     for t in &targets {
-        let cmd = format!(
-            "claude plugin validate \"{}\" </dev/null",
-            crate::paths::for_shell(t)
-        );
-        match run_sh(sh, &cmd, "", &HashMap::new(), root, Duration::from_secs(90)) {
-            Some((0, out, _)) if out.contains("Validation passed") => {}
-            Some((_, out, err)) => failed.push(format!(
-                "{}: {}",
-                t.strip_prefix(root).unwrap_or(t).display(),
+        let rel = t.strip_prefix(root).unwrap_or(t).display().to_string();
+        let mut cmd = Command::new(&claude);
+        // The folder as an argument, never inside a shell string: a plugin
+        // folder's name is the repository's to choose.
+        cmd.args(["plugin", "validate"])
+            .arg(crate::paths::for_shell(t))
+            .current_dir(root);
+        match run(cmd, "", Duration::from_secs(90)) {
+            Ok((0, out, _)) if out.contains("Validation passed") => {}
+            Ok((_, out, err)) => failed.push(format!(
+                "{rel}: {}",
                 format!("{out}{err}")
                     .lines()
                     .rev()
@@ -1130,7 +2178,7 @@ fn claude_validate(sh: &Path, project: &Project, root: &Path) -> Check {
                     .unwrap_or("")
                     .trim()
             )),
-            None => failed.push(format!("{}: timed out", t.display())),
+            Err(e) => failed.push(format!("{rel}: {e}")),
         }
     }
     if failed.is_empty() {
@@ -1141,5 +2189,377 @@ fn claude_validate(sh: &Path, project: &Project, root: &Path) -> Check {
         )
     } else {
         check(name, Status::Fail, failed.join("; "))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A probe of `settings` as both what ocgen generates and what is on disk,
+    /// with `scripts` written under `root` and counted as ocgen's own.
+    fn probe<'a>(
+        sh: &'a Path,
+        root: &'a Path,
+        settings: &'a Value,
+        rendered: &'a mut HashMap<String, String>,
+        scripts: &[(&str, &str)],
+        env: &[(&str, &str)],
+    ) -> Probe<'a> {
+        for (rel, body) in scripts {
+            let p = root.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(&p, body).unwrap();
+            rendered.insert(rel.to_string(), body.to_string());
+        }
+        let mut vars: HashMap<String, String> = env
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        vars.insert("CLAUDE_PROJECT_DIR".into(), crate::paths::for_shell(root));
+        Probe {
+            sh,
+            root,
+            rendered,
+            expected: settings,
+            disk: settings,
+            env: vars,
+        }
+    }
+
+    fn pre_tool_use(matcher: &str, script: &str) -> Value {
+        serde_json::json!({ "hooks": { "PreToolUse": [ { "matcher": matcher, "hooks": [ {
+            "type": "command", "shell": "bash",
+            "command": format!("sh \"${{CLAUDE_PROJECT_DIR}}/.claude/hooks/{script}\"")
+        } ] } ] } })
+    }
+
+    #[test]
+    fn output_beyond_a_pipe_buffer_does_not_stall_a_command() {
+        let dir = tempfile::tempdir().unwrap();
+        let sh = shell(&Value::Null);
+        let start = Instant::now();
+        let (code, out, err) = run_sh(
+            &sh,
+            "head -c 300000 /dev/zero; head -c 300000 /dev/zero >&2",
+            "",
+            &HashMap::new(),
+            dir.path(),
+            Duration::from_secs(60),
+        )
+        .expect("finishes");
+        assert_eq!((code, out.len(), err.len()), (0, 300000, 300000));
+        assert!(start.elapsed() < Duration::from_secs(30));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_timeout_stops_everything_the_command_started() {
+        let dir = tempfile::tempdir().unwrap();
+        let pid_file = dir.path().join("pid");
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg(format!(
+            "sleep 60 & echo $! > '{}'; wait",
+            pid_file.display()
+        ));
+        let start = Instant::now();
+        assert_eq!(
+            run(cmd, "", Duration::from_millis(500)),
+            Err("timed out".to_string())
+        );
+        assert!(start.elapsed() < Duration::from_secs(10));
+        let pid = std::fs::read_to_string(&pid_file)
+            .unwrap()
+            .trim()
+            .to_string();
+        let alive = || {
+            Command::new("kill")
+                .args(["-0", &pid])
+                .stderr(Stdio::null())
+                .status()
+                .is_ok_and(|s| s.success())
+        };
+        let start = Instant::now();
+        while alive() && start.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert!(!alive(), "the background sleep {pid} outlived the timeout");
+    }
+
+    /// A background process left holding the output pipes doesn't keep verify
+    /// waiting: it is stopped, and the output so far is kept.
+    #[cfg(unix)]
+    #[test]
+    fn a_left_behind_process_does_not_hold_up_the_result() {
+        let dir = tempfile::tempdir().unwrap();
+        let start = Instant::now();
+        let (code, out, _) = run_sh(
+            Path::new("sh"),
+            "sleep 60 & echo hi",
+            "",
+            &HashMap::new(),
+            dir.path(),
+            Duration::from_secs(30),
+        )
+        .expect("finishes");
+        assert_eq!((code, out.trim()), (0, "hi"));
+        assert!(start.elapsed() < Duration::from_secs(10));
+    }
+
+    #[test]
+    fn the_claude_cli_is_found_by_its_windows_extensions() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = std::env::join_paths([dir.path()]).unwrap();
+        std::fs::write(dir.path().join("claude.cmd"), "@echo off\n").unwrap();
+        assert_eq!(
+            find_in(&path, "claude", ".COM;.EXE;.BAT;.CMD;.VBS"),
+            Some(dir.path().join("claude.cmd"))
+        );
+        // A script `Command` can't start doesn't count.
+        assert_eq!(find_in(&path, "claude", ".VBS;.JS"), None);
+        // Elsewhere, the bare name.
+        assert_eq!(find_in(&path, "claude", ""), None);
+        std::fs::write(dir.path().join("claude"), "#!/bin/sh\n").unwrap();
+        assert_eq!(
+            find_in(&path, "claude", ""),
+            Some(dir.path().join("claude"))
+        );
+    }
+
+    #[test]
+    fn cd_targets_are_quoted_when_they_must_be() {
+        assert_eq!(cd_target("/home/x/proj").as_deref(), Some("/home/x/proj"));
+        assert_eq!(
+            cd_target("C:/Users/John Smith/proj").as_deref(),
+            Some("'C:/Users/John Smith/proj'")
+        );
+        assert_eq!(
+            cd_target("/w/proj (old)").as_deref(),
+            Some("'/w/proj (old)'")
+        );
+        assert_eq!(cd_target("/w/it's").as_deref(), Some("\"/w/it's\""));
+        assert_eq!(cd_target("/w/it's $x"), None);
+    }
+
+    #[test]
+    fn only_gate_settings_reach_a_probe() {
+        for key in [
+            "TEAM_APPROVAL_GATE",
+            "OCGEN_WEBFETCH_DOMAINS",
+            "LOOP_GUARD_MAX_BLOCKS",
+            "SUBAGENT_CONFIDENCE_THRESHOLD",
+            "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS",
+        ] {
+            assert!(probe_env_key(key), "{key}");
+        }
+        for key in [
+            "PATH",
+            "BASH_ENV",
+            "ENV",
+            "SHELLOPTS",
+            "CLAUDE_CODE_GIT_BASH_PATH",
+            "OCGEN_NOTES_BROWSER",
+            "OCGEN_FORMAT_CMD",
+            "OCGEN_CHECK_CMD",
+        ] {
+            assert!(!probe_env_key(key), "{key}");
+        }
+    }
+
+    /// The env a probe gets is merged like Claude Code merges it: the more
+    /// specific file wins, and keys outside the gate settings never pass.
+    #[test]
+    fn hook_env_merges_settings_files_most_specific_last() {
+        let layers = Layers(vec![
+            (
+                Scope::User,
+                "user".into(),
+                serde_json::json!({ "env": { "TEAM_PLAN_GATE": "1", "OCGEN_NO_JQ": "1" } }),
+            ),
+            (
+                Scope::Project,
+                SETTINGS.into(),
+                serde_json::json!({ "env": { "TEAM_PLAN_GATE": "1", "PATH": "/evil" } }),
+            ),
+            (
+                Scope::Local,
+                LOCAL.into(),
+                serde_json::json!({ "env": { "TEAM_PLAN_GATE": "0" } }),
+            ),
+        ]);
+        let env = layers.hook_env(Path::new("/p"));
+        assert_eq!(env["TEAM_PLAN_GATE"], "0");
+        assert_eq!(env["OCGEN_NO_JQ"], "1");
+        assert!(!env.contains_key("PATH"));
+        assert_eq!(env["LOOP_GUARD_MAX_BLOCKS"], "0");
+        assert_eq!(env["OCGEN_CHECK_CMD"], "");
+        assert_eq!(
+            layers.get("/env/TEAM_PLAN_GATE").map(|(_, from)| from),
+            Some(LOCAL)
+        );
+    }
+
+    /// Values are judged the way the hooks read them: a number either twin
+    /// can't parse is 0 for it (a bar off, a loop guard that never releases),
+    /// roles and sites match in any letter case, and a key only a gate ocgen
+    /// doesn't generate reads loosens nothing.
+    #[test]
+    fn weakening_is_judged_as_the_hooks_read_the_values() {
+        let gates = serde_json::json!({
+            "hooks": { "SubagentStop": [], "TeammateIdle": [] },
+            "env": { "TEAM_RISK_ROUNDS": "1" },
+        });
+        let w = |key, want, got| weakens(key, want, got, &gates);
+        // A bar a twin can't read is off: sh reads plain digits only, the Rust
+        // hook a u32 with an optional `+`.
+        for got in [" 99", "+99", "5000000000", "99999999999999999999", "x", ""] {
+            assert!(
+                w("SUBAGENT_CONFIDENCE_THRESHOLD", Some("96"), Some(got)),
+                "{got}"
+            );
+        }
+        assert!(w("TEAM_CONFIDENCE_THRESHOLD", Some("96"), None));
+        for got in ["99", "096", "96"] {
+            assert!(
+                !w("SUBAGENT_CONFIDENCE_THRESHOLD", Some("96"), Some(got)),
+                "{got}"
+            );
+        }
+        // No bar from ocgen: any is stricter.
+        assert!(!w("TEAM_CONFIDENCE_THRESHOLD", None, Some("10")));
+        // A switch ocgen doesn't turn on can't be turned off.
+        assert!(!w("TEAM_PLAN_GATE", None, Some("0")));
+        assert!(w("TEAM_PLAN_GATE", Some("1"), None));
+        // Loop budget: lower releases sooner (by either reading); 0 or
+        // unreadable never releases; with ocgen's 0, any budget releases.
+        for got in ["2", "+2", "1"] {
+            assert!(w("LOOP_GUARD_MAX_BLOCKS", Some("3"), Some(got)), "{got}");
+        }
+        for got in ["0", "3", "+3", "9", "x", "", " 2", "5000000000"] {
+            assert!(!w("LOOP_GUARD_MAX_BLOCKS", Some("3"), Some(got)), "{got}");
+        }
+        assert!(w("LOOP_GUARD_MAX_BLOCKS", Some("0"), Some("5")));
+        assert!(!w("LOOP_GUARD_MAX_BLOCKS", None, Some("1")));
+        // Read-only lists: a role the gate holds, in any spacing; a role ocgen
+        // lists, in any letter case, adds nothing.
+        assert!(w("TEAM_READONLY_ROLES", Some("a b"), Some("b\ta  c")));
+        assert!(!w("TEAM_READONLY_ROLES", Some("a b"), Some(" b ")));
+        assert!(!w(
+            "SUBAGENT_READONLY_ROLES",
+            Some("Explore Plan"),
+            Some("explore PLAN")
+        ));
+        assert!(w("SUBAGENT_READONLY_ROLES", None, Some("x")));
+        // The team task gate leaves in-process teammates to the worker gate.
+        assert!(w("TEAM_TASK_GATE", None, Some("1")));
+        assert!(!w("TEAM_TASK_GATE", None, Some("0")));
+        // A site the guard doesn't trust, in any letter case.
+        assert!(w(
+            "OCGEN_WEBFETCH_DOMAINS",
+            Some("docs.rs"),
+            Some("docs.rs evil.example")
+        ));
+        assert!(!w(
+            "OCGEN_WEBFETCH_DOMAINS",
+            Some("docs.rs go.dev"),
+            Some("GO.DEV")
+        ));
+        assert!(!w("OCGEN_WEBFETCH_DOMAINS", None, Some("evil.example")));
+        // Only verify sets the probe switch.
+        assert!(w("OCGEN_HOOK_PROBE", None, Some("")));
+        assert!(!w("OCGEN_NO_JQ", None, Some("1")));
+
+        // No worker gate, no risk gate: their lists and switches loosen nothing.
+        let none = serde_json::json!({ "hooks": { "TeammateIdle": [] }, "env": {} });
+        let w = |key, want, got| weakens(key, want, got, &none);
+        assert!(!w("SUBAGENT_READONLY_ROLES", None, Some("x")));
+        assert!(!w("TEAM_TASK_GATE", None, Some("1")));
+        assert!(!w("TEAM_READONLY_ROLES", None, Some("x")));
+    }
+
+    /// The probes still catch a guard that lets traffic through when the guard
+    /// is ocgen's own (here: a stand-in counted as generated).
+    #[test]
+    fn the_webfetch_probe_catches_a_leaky_guard() {
+        let sh = shell(&Value::Null);
+        let settings = pre_tool_use("WebFetch", "https-only-fetch.sh");
+        let env = [("OCGEN_WEBFETCH_DOMAINS", "docs.rs")];
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut rendered = HashMap::new();
+        let script = [(".claude/hooks/https-only-fetch.sh", "#!/bin/sh\nexit 0\n")];
+        let p = probe(&sh, dir.path(), &settings, &mut rendered, &script, &env);
+        assert_eq!(https_only_fetch(&p).status, Status::Fail);
+
+        // The old guard dropped backslashes and took the host after the last
+        // `@`, so `https://evil\@docs.rs/` passed (it goes to evil).
+        let old = "#!/bin/sh\nurl=$(cat | sed -n 's/.*\"url\":\"\\([^\"]*\\)\".*/\\1/p' | tr -d '\\\\')\n\
+                   case \"$url\" in https://*) ;; *) exit 2 ;; esac\n\
+                   h=${url#https://}; h=${h%%/*}; h=${h##*@}; h=${h%%:*}\n\
+                   for d in $OCGEN_WEBFETCH_DOMAINS; do [ \"$h\" = \"$d\" ] && exit 0; done\nexit 2\n";
+        let dir = tempfile::tempdir().unwrap();
+        let mut rendered = HashMap::new();
+        let script = [(".claude/hooks/https-only-fetch.sh", old)];
+        let p = probe(&sh, dir.path(), &settings, &mut rendered, &script, &env);
+        let c = https_only_fetch(&p);
+        assert_eq!(c.status, Status::Fail, "{c:#?}");
+        assert!(c.detail.contains("ocgen-verify.invalid\\@"), "{c:#?}");
+    }
+
+    /// A gate of ocgen's own that lets pushes through fails (a hand-edited one
+    /// isn't run at all: tests/verify_hardening.rs).
+    #[test]
+    fn the_gate_probe_catches_a_gate_that_lets_pushes_through() {
+        let sh = shell(&Value::Null);
+        let settings = pre_tool_use(
+            "Bash|Write|Edit|MultiEdit|NotebookEdit",
+            "team-approval-gate.sh",
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let mut rendered = HashMap::new();
+        let open = [(
+            ".claude/hooks/team-approval-gate.sh",
+            "#!/bin/sh\ncat >/dev/null\nexit 0\n",
+        )];
+        let p = probe(&sh, dir.path(), &settings, &mut rendered, &open, &[]);
+        let c = approval_gate(&p, None);
+        assert_eq!(c.status, Status::Fail, "{c:#?}");
+        assert!(
+            c.detail.contains("not blocked: [git push origin main"),
+            "{c:#?}"
+        );
+    }
+
+    /// A notes hook of ocgen's own that writes no page is never a pass.
+    #[test]
+    fn the_notes_probe_reports_a_hook_that_renders_nothing() {
+        let sh = shell(&Value::Null);
+        let settings = serde_json::json!({ "hooks": { "PostToolUse": [ {
+            "matcher": "Write|Edit|MultiEdit", "hooks": [ { "type": "command", "shell": "bash",
+            "command": "sh \"${CLAUDE_PROJECT_DIR}/.claude/hooks/inquire-notes.sh\"" } ] } ] } });
+        let dir = tempfile::tempdir().unwrap();
+        let mut rendered = HashMap::new();
+        let silent = [(
+            ".claude/hooks/inquire-notes.sh",
+            "#!/bin/sh\ncat >/dev/null\nexit 0\n",
+        )];
+        let p = probe(&sh, dir.path(), &settings, &mut rendered, &silent, &[]);
+        let c = notes_view(&p);
+        assert_ne!(c.status, Status::Pass, "{c:#?}");
+        assert_ne!(c.status, Status::Skip, "{c:#?}");
+    }
+
+    #[test]
+    fn the_noop_cd_probe_catches_a_hook_that_drops_every_cd() {
+        let sh = shell(&Value::Null);
+        let settings = pre_tool_use("Bash", "drop-noop-cd.sh");
+        let dir = tempfile::tempdir().unwrap();
+        let mut rendered = HashMap::new();
+        let strip_all = "#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"updatedInput\":{\"command\":\"echo ok\",\"description\":\"verify\"}}}'\n";
+        let script = [(".claude/hooks/drop-noop-cd.sh", strip_all)];
+        let p = probe(&sh, dir.path(), &settings, &mut rendered, &script, &[]);
+        let c = noop_cd(&p);
+        assert_eq!(c.status, Status::Fail, "{c:#?}");
+        assert!(c.detail.contains("another folder"), "{c:#?}");
     }
 }

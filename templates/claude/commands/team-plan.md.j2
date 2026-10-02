@@ -13,16 +13,20 @@ argument-hint: "[what the team should accomplish]"
 поза межами. Решту виведи самостійно й зазнач, що саме припустив.
 
 ## 2. Спільний список задач
-Запиши намір і нумерований список задач у `.claude/team/plan.md`. Дай кожній задачі id та роль-
-виконавця з-поміж: {% for sub in subagents %}{{ sub.name }}{% if not loop.last %}, {% endif %}{% endfor %}.
-Дві задачі не повинні редагувати одні й ті самі файли.
+Запиши намір і нумерований список задач у `.claude/team/plan.md`. Дай кожній задачі id і
+виконавця — teammate на ім'я: `Owner: <teammate-name>`. Називай teammate за роллю, з номером,
+якщо роль має кількох (`implementer-1`, `implementer-2`); ролі: {% for sub in subagents %}{{ sub.name }}{% if not loop.last %}, {% endif %}{% endfor %}.
+Дві задачі не повинні редагувати одні й ті самі файли. Задача може звузити перевірку проєкту
+рядком `Check:` в описі — та сама перевірка з аргументами (напр. `Check: cargo test -p parser`);
+інші рядки `Check:` ігноруються.
 
 ## 3. Реєстр ризиків — раунд пом'якшення для КОЖНОГО ризику
 У тому ж файлі перелічи всі передбачувані ризики. Кожен ризик — **одним рядком** з
-`Owner: <роль>` (роль, відповідальна за пом'якшення) та `Mitigation: pending`, напр.
-`- Risk: втрата даних — Owner: implementer — Mitigation: pending`. Жоден ризик не проходить без
+`Owner: <teammate-name>` (teammate, відповідальний за пом'якшення) та `Mitigation: pending`, напр.
+`- Risk: втрата даних — Owner: implementer-1 — Mitigation: pending`. Жоден ризик не проходить без
 власника й раунду пом'якшення — лишай `pending`, доки не оброблено, потім `done` або `accepted`.
-Хук `TeammateIdle` тримає teammate лише поки відкритий ризик, що **йому належить**.
+Хук `TeammateIdle` тримає teammate лише поки відкритий ризик, що **йому належить**; власник-роль
+(`Owner: implementer`) нікого не тримає, бо роль можуть мати кілька teammate.
 
 ## 4. Презентація та доопрацювання
 Презентуй план і **явно запроси заперечення з аргументами**. Відповідай на питання й вноси
@@ -30,9 +34,11 @@ argument-hint: "[what the team should accomplish]"
 створюй задач виконання на цьому етапі.
 
 ## 5. Схвалення
-Після схвалення додай рядок `Status: APPROVED` до `.claude/team/plan.md`, потім передай роботу
-`/team`. Кожен teammate має вказати `Confidence: NN%` у завершенні задачі й бути впевненим
-≥ {{ confidence_threshold }}% перед її завершенням.
+Після схвалення заміни будь-який рядок `Status:` у `.claude/team/plan.md` на
+`Status: APPROVED session=${CLAUDE_SESSION_ID}`, потім передай роботу `/team`. Схвалення діє лише
+для цього плану й цього запуску команди: зміна плану чи нова сесія робить його застарілим, і план
+треба схвалити знову. Кожен teammate завершує задачу останнім повідомленням із рядком
+`Confidence: NN%` і має бути впевненим ≥ {{ confidence_threshold }}% перед її завершенням.
 {%- else -%}
 Goal: $ARGUMENTS
 
@@ -45,15 +51,20 @@ the rest and state what you inferred.
 
 ## 2. Draft the shared task list
 Write the intent and a numbered task list to `.claude/team/plan.md`. Give every task an id and
-an owner role from: {% for sub in subagents %}{{ sub.name }}{% if not loop.last %}, {% endif %}{% endfor %}.
-Two tasks must not touch the same files.
+the teammate who owns it, by name: `Owner: <teammate-name>`. Name teammates after their role,
+numbered when a role has several (`implementer-1`, `implementer-2`); the roles are: {% for sub in subagents %}{{ sub.name }}{% if not loop.last %}, {% endif %}{% endfor %}.
+Two tasks must not touch the same files. A task may narrow the project check with a `Check:` line
+in its description — the project check plus arguments (e.g. `Check: cargo test -p parser`); any
+other `Check:` line is ignored.
 
 ## 3. Risk register — a mitigation round for EVERY risk
 In the same file, list every risk you can foresee. Write each risk on **one line** carrying an
-`Owner: <role>` (the role responsible for mitigating it) and a `Mitigation: pending` status —
-e.g. `- Risk: data loss — Owner: implementer — Mitigation: pending`. No risk ships without an
-owner and its own mitigation round; leave it `pending` until addressed, then mark it `done` or
-`accepted`. The `TeammateIdle` hook holds a teammate only while a risk **it owns** is pending.
+`Owner: <teammate-name>` (the teammate responsible for mitigating it) and a `Mitigation: pending`
+status — e.g. `- Risk: data loss — Owner: implementer-1 — Mitigation: pending`. No risk ships
+without an owner and its own mitigation round; leave it `pending` until addressed, then mark it
+`done` or `accepted`. The `TeammateIdle` hook holds a teammate only while a risk **it owns** is
+pending; a role as owner (`Owner: implementer`) holds no one, since several teammates may share a
+role.
 
 ## 4. Present and refine
 Present the plan and **explicitly invite push-back with reasons.** Answer questions and fold in
@@ -61,7 +72,9 @@ the updates/improvements requested. Iterate until the user approves. Do NOT spaw
 teammates or create execution tasks yet.
 
 ## 5. Approve
-Once the user approves, append a line `Status: APPROVED` to `.claude/team/plan.md`, then hand off
-to `/team` to execute. Each teammate must state `Confidence: NN%` in its task completion and be
-≥ {{ confidence_threshold }}% confident before completing a task.
+Once the user approves, replace any `Status:` line in `.claude/team/plan.md` with
+`Status: APPROVED session=${CLAUDE_SESSION_ID}`, then hand off to `/team` to execute. The approval
+holds for this plan and this team run only: editing the plan, or a later session, makes it stale
+until the user approves again. Each teammate must end its task with a last message carrying a line
+`Confidence: NN%` and be ≥ {{ confidence_threshold }}% confident before completing a task.
 {%- endif %}

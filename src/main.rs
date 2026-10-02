@@ -120,10 +120,26 @@ fn main() -> Result<()> {
         }
         Command::Fields => reference::run(),
         Command::Templates { action } => match action {
-            TemplatesAction::Init => {
-                let dir = templates::init_override()?;
-                println!("Templates copied to {}", dir.display());
+            TemplatesAction::Init { force } => {
+                let r = templates::init_override(force)?;
+                println!(
+                    "{} template(s) copied to {}",
+                    r.written.len(),
+                    r.dir.display()
+                );
+                if !r.kept.is_empty() {
+                    println!("Kept your existing copies (re-run with --force to overwrite them):");
+                    for p in &r.kept {
+                        println!("  {p}");
+                    }
+                }
                 println!("Edit them there — ocgen prefers these over the built-in defaults.");
+                println!(
+                    "Hook scripts and the gate-protocol templates aren't copied: they always come from the ocgen binary."
+                );
+                for p in templates::ignored_overrides() {
+                    println!("  ignored (delete it): {}", r.dir.join(p).display());
+                }
             }
             TemplatesAction::Path => match templates::override_dir() {
                 Some(d) => println!("{}", d.display()),
@@ -131,7 +147,11 @@ fn main() -> Result<()> {
             },
             TemplatesAction::List => {
                 for (path, overridden) in templates::list() {
-                    let tag = if overridden { "override" } else { "embedded" };
+                    let tag = match (overridden, templates::is_overridable(&path)) {
+                        (true, true) => "override",
+                        (true, false) => "embedded; override ignored",
+                        (false, _) => "embedded",
+                    };
                     println!("{path:<40} [{tag}]");
                 }
             }
@@ -171,6 +191,10 @@ fn run_notes(action: NotesAction) -> Result<()> {
             }
         }
         NotesAction::Render { files } => {
+            // Refuse every non-ledger before writing anything.
+            for f in &files {
+                notes::ledger_slug(std::path::Path::new(f))?;
+            }
             for f in files {
                 let html = notes::render_file(std::path::Path::new(&f))?;
                 println!("{}", html.display());

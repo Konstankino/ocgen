@@ -466,3 +466,218 @@ fn doctor_cancel_writes_nothing() {
     );
     assert!(!tmp.path().join(".ocgen-backup").exists());
 }
+
+// ---------- the sandbox: on by default with the approval gate ----------
+
+use crate::cli::{OutputArg, TeamCli};
+use ocgen::claude::sandbox_supported;
+
+/// Answers for `new` on a Claude project up to the sandbox question, keeping
+/// every default, then `sandbox`.
+fn new_claude_answers<'a>(sandbox: &[&'a str]) -> Vec<&'a str> {
+    let mut a = vec![
+        "", "", // agents: the default pipeline, no more
+        "", // what the project is for
+        "", // CLAUDE.md
+        "", // power-user defaults
+        "", "", // extra hooks, formatter
+        "", "", "", "", "", "", "", // intake … inquire
+        "", "", "", "", "", "", // /intent and its settings
+        "", "", "", // subagent confidence, check command, loop guard
+        "", "", "", "", "", "", "", // Agent Teams and its gates
+    ];
+    a.extend_from_slice(sandbox);
+    a
+}
+
+fn build_new(team: bool, approval_gate: bool) -> Project {
+    super::build_claude_project(
+        &ColorfulTheme::default(),
+        &Manifest::load().unwrap(),
+        "English",
+        "wiz",
+        OutputArg::Project,
+        None,
+        TeamCli {
+            enabled: team,
+            confidence: None,
+            plan_gate: true,
+            risk_rounds: true,
+            approval_gate,
+        },
+    )
+    .unwrap()
+}
+
+#[test]
+fn new_with_the_gate_on_sandboxes_by_default() {
+    // Enter on the sandbox question, its extra domains and the credentials one.
+    let answers = if sandbox_supported() {
+        new_claude_answers(&["", "", ""])
+    } else {
+        new_claude_answers(&[""])
+    };
+    script(&answers);
+    let p = build_new(true, true);
+    assert_eq!(
+        script_remaining(),
+        0,
+        "asked exactly the scripted questions"
+    );
+    assert!(p.claude.team.enabled && p.claude.team.approval_gate);
+    assert_eq!(p.claude.sandbox.enabled, sandbox_supported());
+
+    let tmp = tempfile::tempdir().unwrap();
+    p.scaffold(tmp.path(), false).unwrap();
+    let s: serde_json::Value = serde_json::from_str(&read(tmp.path(), SETTINGS)).unwrap();
+    if !sandbox_supported() {
+        assert!(s.get("sandbox").is_none());
+        return;
+    }
+    assert!(!p.claude.sandbox.declined);
+    assert_eq!(s["sandbox"]["enabled"], true);
+    assert_eq!(
+        s["sandbox"]["filesystem"]["denyWrite"][0],
+        "~/.claude/ocgen"
+    );
+    assert!(
+        s["sandbox"]["credentials"]["files"].is_array(),
+        "credentials withheld: {s}"
+    );
+}
+
+#[test]
+fn new_without_the_gate_keeps_the_sandbox_off_by_default() {
+    script(&new_claude_answers(&[""])); // Enter = no, so no follow-ups
+    let p = build_new(true, false);
+    assert_eq!(script_remaining(), 0);
+    assert!(!p.claude.sandbox.enabled);
+}
+
+#[test]
+fn new_declining_the_sandbox_is_remembered() {
+    script(&new_claude_answers(&["n"]));
+    let p = build_new(true, true);
+    assert_eq!(script_remaining(), 0);
+    assert!(!p.claude.sandbox.enabled);
+    // Only a no to the recommended yes is an opt-out (native Windows asks with
+    // no as the default).
+    assert_eq!(
+        p.claude.sandbox.declined,
+        sandbox_supported(),
+        "an explicit no is recorded"
+    );
+
+    let tmp = tempfile::tempdir().unwrap();
+    p.scaffold(tmp.path(), false).unwrap();
+    let s: serde_json::Value = serde_json::from_str(&read(tmp.path(), SETTINGS)).unwrap();
+    assert!(s.get("sandbox").is_none());
+    assert_eq!(
+        reload(tmp.path()).claude.sandbox.declined,
+        sandbox_supported()
+    );
+}
+
+#[test]
+fn keeping_the_sandbox_off_without_the_gate_is_no_opt_out() {
+    // `new` without the gate: Enter keeps the sandbox off, its default — not a
+    // no to the recommendation, so turning the gate on later offers it as yes.
+    script(&new_claude_answers(&[""]));
+    let p = build_new(true, false);
+    assert_eq!(script_remaining(), 0);
+    assert!(!p.claude.sandbox.enabled);
+    assert!(!p.claude.sandbox.declined, "nothing was declined");
+
+    let tmp = tempfile::tempdir().unwrap();
+    p.scaffold(tmp.path(), false).unwrap();
+    let path = tmp.path().to_string_lossy().into_owned();
+    let mut answers = team_with_gate();
+    answers[0] = ""; // Agent Teams is on already: Enter keeps it
+    if sandbox_supported() {
+        answers.extend(["", "", ""]); // Enter on the sandbox: yes
+    }
+    script(&answers);
+    super::run_edit_team(path).unwrap();
+    assert_eq!(script_remaining(), 0);
+    let p = reload(tmp.path());
+    assert!(p.claude.team.approval_gate);
+    assert_eq!(p.claude.sandbox.enabled, sandbox_supported());
+}
+
+/// Answers for `edit team` turning Agent Teams on with the approval gate.
+fn team_with_gate() -> Vec<&'static str> {
+    vec![
+        "y", // enable Agent Teams
+        "",  // quality-gate hooks
+        "",  // display mode
+        "",  // plan gate
+        "",  // confidence
+        "",  // risk rounds
+        "y", // the approval gate
+    ]
+}
+
+#[test]
+fn edit_team_turning_the_gate_on_offers_the_sandbox() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = claude_project(tmp.path());
+    let mut answers = team_with_gate();
+    if sandbox_supported() {
+        answers.extend(["", "", ""]); // Enter = yes, extra domains, credentials
+    }
+    script(&answers);
+    super::run_edit_team(path).unwrap();
+    assert_eq!(script_remaining(), 0, "the sandbox was offered");
+
+    let p = reload(tmp.path());
+    assert!(p.claude.team.approval_gate);
+    assert_eq!(p.claude.sandbox.enabled, sandbox_supported());
+    let s: serde_json::Value = serde_json::from_str(&read(tmp.path(), SETTINGS)).unwrap();
+    assert_eq!(s.get("sandbox").is_some(), sandbox_supported());
+}
+
+#[test]
+fn edit_team_declining_the_sandbox_is_remembered() {
+    if !sandbox_supported() {
+        return; // never offered where it can't run
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let path = claude_project(tmp.path());
+    let mut answers = team_with_gate();
+    answers.push("n");
+    script(&answers);
+    super::run_edit_team(path).unwrap();
+    assert_eq!(script_remaining(), 0);
+    let p = reload(tmp.path());
+    assert!(!p.claude.sandbox.enabled && p.claude.sandbox.declined);
+}
+
+#[test]
+fn edit_team_without_the_gate_does_not_ask_about_the_sandbox() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = claude_project(tmp.path());
+    let mut answers = team_with_gate();
+    *answers.last_mut().unwrap() = "n"; // no approval gate
+    script(&answers);
+    super::run_edit_team(path).unwrap();
+    assert_eq!(script_remaining(), 0);
+    assert!(!reload(tmp.path()).claude.sandbox.enabled);
+}
+
+#[test]
+fn the_sandbox_help_names_the_gate_only_when_it_is_on() {
+    use super::sandbox_help_for;
+    // Supported: with the gate it says what the gate is without the sandbox.
+    assert!(sandbox_help_for(true, true).contains("approval gate is advisory only"));
+    // …and claims no more than it keeps away.
+    assert!(sandbox_help_for(true, true).contains("the credentials ocgen knows about"));
+    assert!(!sandbox_help_for(true, true).contains("however"));
+    assert!(!sandbox_help_for(true, false).contains("approval gate"));
+    // Native Windows: the sandbox isn't there, and the gate is advisory only
+    // when there is a gate.
+    assert!(sandbox_help_for(false, true).contains("isn't available on native Windows"));
+    assert!(sandbox_help_for(false, true).contains("approval gate is advisory"));
+    let off = sandbox_help_for(false, false);
+    assert!(off.contains("isn't available on native Windows"), "{off}");
+    assert!(!off.contains("approval gate"), "{off}");
+}

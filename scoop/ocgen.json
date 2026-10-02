@@ -1,11 +1,12 @@
 {
-  "version": "0.1.0",
+  "version": "0.4.6",
   "description": "Interactive wizard to scaffold OpenCode and Claude Code multi-agent projects",
   "homepage": "https://github.com/Konstankino/ocgen",
   "license": "MIT",
   "architecture": {
     "64bit": {
-      "url": "https://github.com/Konstankino/ocgen/releases/download/v0.1.0/ocgen-v0.1.0-x86_64-pc-windows-msvc.zip"
+      "url": "https://github.com/Konstankino/ocgen/releases/download/v0.4.6/ocgen-v0.4.6-x86_64-pc-windows-msvc.zip",
+      "hash": "2b33d968b049a94a3f2f8224652d5181bc28a7805f8a0b232b1a24a5ebf51add"
     }
   },
   "bin": "ocgen.exe",
@@ -13,7 +14,11 @@
   "autoupdate": {
     "architecture": {
       "64bit": {
-        "url": "https://github.com/Konstankino/ocgen/releases/download/v$version/ocgen-v$version-x86_64-pc-windows-msvc.zip"
+        "url": "https://github.com/Konstankino/ocgen/releases/download/v$version/ocgen-v$version-x86_64-pc-windows-msvc.zip",
+        "hash": {
+          "url": "$baseurl/SHA256SUMS",
+          "regex": "$sha256\\s+\\*?$basename"
+        }
       }
     }
   }
