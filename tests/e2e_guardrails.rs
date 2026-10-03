@@ -83,6 +83,10 @@ struct Fixture {
 }
 
 fn project(mode: Mode) -> Fixture {
+    project_with(mode, |_| {})
+}
+
+fn project_with(mode: Mode, tune: impl FnOnce(&mut Project)) -> Fixture {
     let dir = tempfile::tempdir().unwrap();
     repo(dir.path());
     let mut p = Project::from_manifest(&Manifest::load().unwrap(), "English");
@@ -101,6 +105,7 @@ fn project(mode: Mode) -> Fixture {
     };
     p.claude.workflow.check_cmd = "sh ./check.sh".into();
     p.claude.hooks_extra.config_audit = true;
+    tune(&mut p);
     p.scaffold(dir.path(), false).unwrap();
     fs::write(dir.path().join("check.sh"), PASS).unwrap();
     let settings = serde_json::from_str(
@@ -805,4 +810,45 @@ fn a_push_the_text_gate_misses_still_does_not_land() {
         assert!(o.status.success(), "{mode:?} a human push: {o:?}");
         assert!(landed(), "{mode:?} a human push lands");
     }
+}
+
+/// The sandbox can't hide an OS keychain, which git asks through a credential
+/// helper. With credentials withheld, the generated settings start the agent's
+/// shell with no helper, so a plain `git push` has no token to send.
+#[test]
+fn a_shell_with_credentials_withheld_has_no_git_credential_helper() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let asks_keychain = |f: &Fixture| {
+        // Stands in for osxkeychain: hands a token to whoever asks.
+        let helper = f.home.path().join("keychain");
+        fs::write(
+            &helper,
+            "#!/bin/sh\n[ \"$1\" = get ] && echo username=u && echo password=from-keychain\n",
+        )
+        .unwrap();
+        fs::set_permissions(&helper, fs::Permissions::from_mode(0o755)).unwrap();
+        fs::write(
+            f.home.path().join(".gitconfig"),
+            format!("[credential]\n\thelper = {}\n", for_shell(&helper)),
+        )
+        .unwrap();
+        let o = f
+            .bash(
+                "printf 'protocol=https\\nhost=example.invalid\\n\\n' | git credential fill",
+                f.root(),
+                &[("GIT_CONFIG_NOSYSTEM", "1"), ("GIT_TERMINAL_PROMPT", "0")],
+            )
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&o.stdout).contains("password=from-keychain")
+    };
+    assert!(
+        asks_keychain(&project(Mode::Scripts)),
+        "without the sandbox, git asks the helper (the test's premise)"
+    );
+    let sandboxed = project_with(Mode::Scripts, |p| p.claude.sandbox.enabled = true);
+    assert!(
+        !asks_keychain(&sandboxed),
+        "credentials withheld, yet git asked the keychain"
+    );
 }

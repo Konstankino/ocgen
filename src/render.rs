@@ -1547,6 +1547,12 @@ impl Project {
                 );
             }
         }
+        if self.claude.sandbox.enabled && !self.claude.sandbox.allow_credentials {
+            // Git asks an OS keychain the sandbox can't hide: start with no helper.
+            for (k, v) in crate::claude::GIT_HELPER_RESET {
+                env.insert(k.into(), json!(v));
+            }
+        }
         if self.claude.workflow.intent {
             // The WebFetch guard's trusted documentation sites (empty = none).
             env.insert(

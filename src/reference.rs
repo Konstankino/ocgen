@@ -308,7 +308,9 @@ const CLAUDE_FIELDS: &[Field] = &[
                  where it points, not by its name), the statusline, ocgen's state file or \
                  .git/hooks. Unless you allow credentials, it withholds the credential files and \
                  variables of ssh, git, GitHub, the clouds, Docker and the package registries; \
-                 one an OS keychain helper hands out may still be reachable. It contains shell \
+                 git starts with no credential helper, so it doesn't ask an OS keychain the \
+                 sandbox can't hide — though a command can name one itself (`ocgen verify` \
+                 warns while one is configured). It contains shell \
                  commands only, not the file tools, hooks or MCP servers (the hooks run the \
                  check and formatter in a sandbox of their own). The wizard asks after the \
                  Agent Teams questions and defaults to yes when the approval gate is on and the \

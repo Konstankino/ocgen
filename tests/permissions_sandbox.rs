@@ -758,3 +758,36 @@ fn hooks_learn_the_sandbox_from_the_settings_env() {
     p.scaffold(dir.path(), false).unwrap();
     assert!(!hook_env(dir.path()).contains_key("OCGEN_SANDBOX"));
 }
+
+#[test]
+fn withheld_credentials_start_git_with_no_credential_helper() {
+    // The sandbox hides credential files and variables, not an OS keychain: git
+    // reaches one through a credential helper (osxkeychain, Git Credential
+    // Manager, `gh auth git-credential`). With credentials withheld, Claude
+    // Code's shells start with none: an empty `credential.helper`, read last,
+    // resets every helper git read before it.
+    let reset = [
+        ("GIT_CONFIG_COUNT", "1"),
+        ("GIT_CONFIG_KEY_0", "credential.helper"),
+        ("GIT_CONFIG_VALUE_0", ""),
+    ];
+    let dir = tempdir().unwrap();
+    sandboxed("sb-git").scaffold(dir.path(), false).unwrap();
+    let env = hook_env(dir.path());
+    for (k, v) in reset {
+        assert_eq!(env.get(k).and_then(|v| v.as_str()), Some(v), "{k}: {env:?}");
+    }
+    // Credentials allowed, or no sandbox: git keeps its own helpers.
+    let mut allowed = sandboxed("sb-git-allowed");
+    allowed.claude.sandbox.allow_credentials = true;
+    for p in [allowed, gated("sb-git-off")] {
+        let dir = tempdir().unwrap();
+        p.scaffold(dir.path(), false).unwrap();
+        let env = hook_env(dir.path());
+        assert!(
+            reset.iter().all(|(k, _)| !env.contains_key(*k)),
+            "{}: {env:?}",
+            p.project_name
+        );
+    }
+}

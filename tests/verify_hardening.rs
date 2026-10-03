@@ -12,7 +12,7 @@ use ocgen::manifest::Manifest;
 use ocgen::paths::for_shell;
 use ocgen::render::Project;
 use ocgen::target::Target;
-use ocgen::verify::{sandbox_check, verify, Check, Options, Status};
+use ocgen::verify::{keychain_check, sandbox_check, verify, Check, Options, Status};
 use serde_json::{json, Value};
 use tempfile::tempdir;
 
@@ -1239,4 +1239,123 @@ fn verify_reports_the_linked_codeowners() {
     let c = named(&gone, "CODEOWNERS");
     assert_eq!(c.status, Status::Warn, "{c:?}");
     assert!(c.detail.contains("is gone"), "{c:?}");
+}
+
+fn helpers(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+    pairs
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect()
+}
+
+/// The sandbox hides credential files, not an OS keychain: a helper that asks
+/// one hands a sandboxed `git push` a token. verify names it.
+#[test]
+fn verify_warns_when_git_can_ask_a_keychain_the_sandbox_cannot_hide() {
+    let plain = |v: &str| helpers(&[("credential.helper", v)]);
+    for helper in [
+        "osxkeychain",
+        "manager",
+        "manager-core",
+        "/usr/local/share/gcm-core/git-credential-manager",
+        "C:/Program Files/Git/mingw64/bin/git-credential-manager.exe",
+        "wincred",
+        "libsecret",
+        "/usr/share/git/credential/libsecret/git-credential-libsecret",
+        "!/opt/homebrew/bin/gh auth git-credential",
+    ] {
+        let c = keychain_check(true, &plain(helper));
+        assert_eq!(c.status, Status::Warn, "{helper}: {c:#?}");
+        assert!(
+            c.detail.contains(helper) && c.detail.contains("git -c credential.helper"),
+            "{c:#?}"
+        );
+    }
+    // What `gh auth setup-git` writes clears github.com's helpers only:
+    // osxkeychain still answers for every other host.
+    let gh = helpers(&[
+        ("credential.helper", "osxkeychain"),
+        ("credential.https://github.com.helper", ""),
+        (
+            "credential.https://github.com.helper",
+            "!/opt/homebrew/bin/gh auth git-credential",
+        ),
+    ]);
+    let c = keychain_check(true, &gh);
+    assert_eq!(c.status, Status::Warn, "{c:#?}");
+    assert!(
+        c.detail.contains("osxkeychain") && c.detail.contains("gh auth git-credential"),
+        "{c:#?}"
+    );
+    // A reset read last leaves none; a file store the sandbox hides is no keychain.
+    let reset = helpers(&[
+        ("credential.helper", "osxkeychain"),
+        ("credential.helper", ""),
+    ]);
+    assert_eq!(keychain_check(true, &reset).status, Status::Pass);
+    assert_eq!(keychain_check(true, &plain("store")).status, Status::Pass);
+    assert_eq!(keychain_check(true, &[]).status, Status::Pass);
+    // Credentials not withheld (no sandbox, or allowed): nothing to say.
+    assert_eq!(
+        keychain_check(false, &plain("osxkeychain")).status,
+        Status::Skip
+    );
+}
+
+/// verify reads the helpers git would use in the repository (its own config
+/// included) — and only reads them: a helper is never run.
+#[test]
+fn verify_reads_the_credential_helpers_git_uses_here() {
+    let dir = tempdir().unwrap();
+    git_init(dir.path());
+    let mut p = gated("keychain");
+    p.claude.sandbox.enabled = true;
+    p.scaffold(dir.path(), false).unwrap();
+    let marker = dir.path().join("helper-ran");
+    let helper = format!("!{}", touch(&marker));
+    let ok = std::process::Command::new("git")
+        .args(["config", "--add", "credential.helper", "osxkeychain"])
+        .current_dir(dir.path())
+        .status()
+        .unwrap()
+        .success()
+        && std::process::Command::new("git")
+            .args(["config", "--add", "credential.helper", &helper])
+            .current_dir(dir.path())
+            .status()
+            .unwrap()
+            .success();
+    assert!(ok, "git config");
+    let c = named(&verify_lib(dir.path()), "git credentials").clone();
+    if ocgen::claude::sandbox_supported() {
+        assert_eq!(c.status, Status::Warn, "{c:#?}");
+        assert!(c.detail.contains("osxkeychain"), "{c:#?}");
+    } else {
+        assert_eq!(c.status, Status::Skip, "{c:#?}");
+    }
+    assert!(!marker.exists(), "verify ran a credential helper");
+}
+
+/// The reset is part of withholding credentials: a settings file that takes it
+/// back hands the keychain to the agent again.
+#[test]
+fn a_local_override_that_gives_git_its_helpers_back_fails_verify() {
+    let dir = tempdir().unwrap();
+    git_init(dir.path());
+    let mut p = gated("helper-back");
+    p.claude.sandbox.enabled = true;
+    p.scaffold(dir.path(), false).unwrap();
+    let local = dir.path().join(".claude/settings.local.json");
+    for env in [
+        json!({ "GIT_CONFIG_COUNT": "0" }),
+        json!({ "GIT_CONFIG_VALUE_0": "osxkeychain" }),
+    ] {
+        write_json(&local, &json!({ "env": env }));
+        let eff = named(&verify_lib(dir.path()), "effective settings").clone();
+        assert_eq!(eff.status, Status::Fail, "{env}: {eff:#?}");
+        assert!(eff.detail.contains("GIT_CONFIG_"), "{eff:#?}");
+    }
+    fs::remove_file(&local).unwrap();
+    let eff = named(&verify_lib(dir.path()), "effective settings").clone();
+    assert_eq!(eff.status, Status::Pass, "{eff:#?}");
 }

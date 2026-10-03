@@ -7,9 +7,10 @@
 //! of variables, aliases or scripts. A guard-rail, not a boundary. The boundary
 //! is the sandbox: sandboxed commands can't write the approval store and run
 //! without the credentials ocgen knows about, so a push or publish that needs
-//! them fails however it is phrased (a credential an OS keychain helper hands
-//! out may still be reachable). For pushes, server-side branch protection is
-//! what really stops one.
+//! them fails however it is phrased — except one an OS keychain hands git
+//! through a credential helper, which the sandbox can't hide (git starts with
+//! no helper, but a command can name one: see `claude::GIT_HELPER_RESET`). For
+//! pushes, server-side branch protection is what really stops one.
 
 use regex::Regex;
 use std::sync::OnceLock;

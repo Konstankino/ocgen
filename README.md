@@ -297,6 +297,10 @@ delete as stale (`-`) is listed with a short diff.
 - with `/intent`, the WebFetch guard allows only `https://` fetches to trusted docs sites and
   blocks `http://`, other hosts and look-alikes;
 - the no-op `cd` hook drops `cd <project> &&` and leaves a `cd` into another folder alone;
+- **git credentials:** with credentials withheld, warns while git can ask an OS keychain
+  (osxkeychain, Git Credential Manager, wincred, libsecret, `gh auth git-credential`) — it reads
+  the helpers git uses in the repository and never runs one. A settings file that takes back
+  the empty-helper reset fails, like any other weakened setting;
 - **sandbox:** warns when the approval gate is on and the sandbox off (the gate is then advisory),
   on native Windows (no sandbox there), and on Linux when `bwrap` is missing;
 - **git pre-push hook:** it runs the installed hook as git would — it must refuse a push made under
@@ -961,9 +965,17 @@ ocgen approve --revoke     # re-lock now
 - **Credentials.** With the power-user defaults, reading `~/.ssh`, `~/.aws`, the `gh` token, kube
   and gcloud config is denied. With the sandbox on, shell commands also run without the
   credential files and variables of ssh, git, GitHub, the clouds and clusters, Docker and the
-  package registries (npm, yarn, cargo, PyPI, gem, Terraform, Pulumi), unless you opt in. A
-  credential an OS keychain helper hands out (osxkeychain, Git Credential Manager, gh's keyring
-  token) may still be reachable.
+  package registries (npm, yarn, cargo, PyPI, gem, Terraform, Pulumi), unless you opt in. An OS
+  keychain is another matter: git asks one through a credential helper (osxkeychain, Git
+  Credential Manager, `gh auth git-credential`), and the keychain answers through a system
+  service no sandbox file rule covers — tested on GitHub, a sandboxed HTTPS push to a new branch
+  went through that way. So `settings.json` also starts git in Claude Code's shells and hooks
+  with no credential helper (`GIT_CONFIG_*` set to an empty `credential.helper`, which resets
+  every helper git read before it). That stops the plain way, not an agent that names a helper
+  in its own command (`git -c credential.helper=…`), and `ocgen verify` warns while one is
+  configured: protect every branch on the server, not only `main`. For an approved push to work
+  from Claude, allow the credentials: the wizard asks when it turns the sandbox on, or set
+  `claude.sandbox.allow_credentials` in `.claude/.ocgen-state.json` and run `ocgen doctor`.
 
 The old `touch .claude/team/execution-approved` file is no longer honoured, because an agent
 could create it. `ocgen verify` flags a leftover one.

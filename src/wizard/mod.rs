@@ -865,7 +865,7 @@ fn configure_sandbox(
     sandbox.allow_credentials = ask_confirm(
         theme,
         "  Let sandboxed commands use your push/deploy credentials?",
-        "No (recommended): SSH keys, the gh and git tokens, cloud and kube logins and the npm/cargo/PyPI/gem tokens are withheld, so a push or publish that needs them fails — you do those steps. A credential an OS keychain helper hands out (osxkeychain, Git Credential Manager) may still be reachable; branch protection on the server is the real stop for pushes.",
+        "No (recommended): SSH keys, the gh and git tokens, cloud and kube logins and the npm/cargo/PyPI/gem tokens are withheld, so a push or publish that needs them fails — you do those steps. git also starts with no credential helper, so it doesn't ask your OS keychain (osxkeychain, Git Credential Manager), which the sandbox can't hide — but a command can name one itself, so branch protection on every branch is the real stop for pushes.",
         false,
     )?;
     Ok(())

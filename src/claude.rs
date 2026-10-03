@@ -488,9 +488,9 @@ pub struct SandboxProfile {
     /// Let sandboxed commands use your push/deploy credentials. Off by default:
     /// the credentials ocgen knows about ([`CREDENTIAL_PATHS`],
     /// [`CREDENTIAL_ENV`]) are withheld, so a push or publish that needs them
-    /// fails however the command is phrased. One kept elsewhere — an OS
-    /// keychain credential helper (osxkeychain, Git Credential Manager, gh's
-    /// keyring token) — may still be reachable.
+    /// fails however the command is phrased. One an OS keychain holds is out of
+    /// the sandbox's reach; git starts with no credential helper to ask it
+    /// ([`GIT_HELPER_RESET`]), but a command can name one itself.
     pub allow_credentials: bool,
     /// The user was asked and said no, so "chose off" reads apart from "never
     /// asked" (states written before ocgen asked load as `false`).
@@ -553,6 +553,21 @@ pub const CREDENTIAL_ENV: [&str; 23] = [
     "DOCKER_PASSWORD",
     "KUBECONFIG",
     "PULUMI_ACCESS_TOKEN",
+];
+
+/// Git config set in the environment of Claude Code's shells and hooks while
+/// credentials are withheld. The sandbox hides credential files and variables,
+/// not an OS keychain: git asks one through a credential helper (osxkeychain,
+/// Git Credential Manager, `gh auth git-credential`), and the keychain answers
+/// through a system service no file rule covers. An empty `credential.helper`,
+/// read after every config file, resets all the helpers git read before it —
+/// the per-URL ones too. An agent can still name a helper in its own command
+/// (`git -c credential.helper=…`): a guard-rail, like the approval gate's text
+/// match. `ocgen verify` warns when one is configured.
+pub const GIT_HELPER_RESET: [(&str, &str); 3] = [
+    ("GIT_CONFIG_COUNT", "1"),
+    ("GIT_CONFIG_KEY_0", "credential.helper"),
+    ("GIT_CONFIG_VALUE_0", ""),
 ];
 
 /// What a hook's own sandbox write-protects when it runs project code (the

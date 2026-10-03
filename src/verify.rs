@@ -219,6 +219,7 @@ pub fn verify(project: &Project, root: &Path, opts: &Options) -> Vec<Check> {
             out.push(notes_view(&probe));
         }
         out.push(sandbox(project, &layers));
+        out.push(git_credentials(project, root, &layers));
         out.push(pre_push(shell_ok.then_some(sh.as_path()), project, root));
         if shell_ok {
             out.push(statusline(&probe, &layers));
@@ -853,6 +854,113 @@ fn sandbox(project: &Project, layers: &Layers) -> Check {
     )
 }
 
+/// The credential helpers in `entries` that ask an OS keychain or a login
+/// service: osxkeychain, Git Credential Manager, wincred, libsecret,
+/// gnome-keyring and the GitHub CLI (`gh auth git-credential`). The sandbox
+/// can't hide those — git reaches the keychain through a system service, not
+/// a file. `entries` are `credential.helper` and `credential.<url>.helper`
+/// `(key, value)` pairs in the order git reads them; an empty value resets the
+/// helpers read before it under its key (every one, for `credential.helper`).
+pub fn keychain_helpers(entries: &[(String, String)]) -> Vec<String> {
+    let mut kept: Vec<(&str, &str)> = Vec::new();
+    for (key, value) in entries {
+        match value.trim() {
+            "" if key == "credential.helper" => kept.clear(),
+            "" => kept.retain(|(k, _)| k != key),
+            v => kept.push((key, v)),
+        }
+    }
+    let mut found: Vec<String> = Vec::new();
+    for (_, helper) in kept {
+        if is_keychain(helper) && !found.iter().any(|f| f == helper) {
+            found.push(helper.to_string());
+        }
+    }
+    found
+}
+
+/// Whether a credential helper value names a keychain helper: `osxkeychain`,
+/// `git-credential-manager` or a path to one (a path with spaces in it too,
+/// so any word may name it), or `!… gh auth git-credential`.
+fn is_keychain(helper: &str) -> bool {
+    let command = helper.trim_start_matches('!');
+    let names: Vec<&str> = command
+        .split_whitespace()
+        .map(|word| {
+            let word = word.trim_matches(['"', '\'']);
+            let base = word.rsplit(['/', '\\']).next().unwrap_or(word);
+            let base = base.strip_suffix(".exe").unwrap_or(base);
+            base.strip_prefix("git-credential-").unwrap_or(base)
+        })
+        .collect();
+    names.iter().any(|n| {
+        matches!(
+            *n,
+            "osxkeychain" | "manager" | "manager-core" | "wincred" | "libsecret" | "gnome-keyring"
+        )
+    }) || (names.contains(&"gh") && command.contains("git-credential"))
+}
+
+/// Whether a credential the sandbox is meant to withhold is still in git's
+/// reach. `withheld`: the sandbox is on, here, and credentials aren't allowed;
+/// `entries` as for [`keychain_helpers`].
+pub fn keychain_check(withheld: bool, entries: &[(String, String)]) -> Check {
+    let name = "git credentials";
+    if !withheld {
+        return check(
+            name,
+            Status::Skip,
+            "not withheld (no sandbox, or credentials allowed)",
+        );
+    }
+    let found = keychain_helpers(entries);
+    if found.is_empty() {
+        return check(
+            name,
+            Status::Pass,
+            "no keychain credential helper — sandboxed git has no token to ask for",
+        );
+    }
+    check(
+        name,
+        Status::Warn,
+        format!(
+            "git can get a token from {} — a keychain the sandbox can't hide. Claude Code's shells start with no credential helper, but an agent can name one in its own command (`git -c credential.helper=…`): protect every branch on the server, or remove the stored credential if you don't need it",
+            found.join(", ")
+        ),
+    )
+}
+
+/// [`keychain_check`] for this project, on this machine: the helpers git reads
+/// in the repository (its config files only — not a reset in this process's
+/// environment, such as the one Claude Code's shells get). Read, never run.
+fn git_credentials(project: &Project, root: &Path, layers: &Layers) -> Check {
+    let on = layers
+        .get("/sandbox/enabled")
+        .is_some_and(|(v, _)| v.as_bool() == Some(true));
+    let withheld =
+        on && !project.claude.sandbox.allow_credentials && crate::claude::sandbox_supported();
+    let mut git = Command::new("git");
+    git.arg("-C")
+        .arg(root)
+        .args(["config", "--get-regexp", r"^credential\..*helper$"]);
+    for var in ["GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS"] {
+        git.env_remove(var);
+    }
+    let listed = git
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .unwrap_or_default();
+    let entries: Vec<(String, String)> = listed
+        .lines()
+        .map(|l| match l.split_once(' ') {
+            Some((k, v)) => (k.to_string(), v.to_string()),
+            None => (l.to_string(), String::new()),
+        })
+        .collect();
+    keychain_check(withheld, &entries)
+}
+
 /// Claude Code merges the user's settings, the project's, a git-ignored
 /// settings.local.json and any managed policy, the most specific winning key by
 /// key. Any of them can switch the hooks off or loosen a gate — also with a
@@ -1014,6 +1122,10 @@ fn weakens(key: &str, want: Option<&str>, got: Option<&str>, ocgen: &Value) -> b
         }
         "TEAM_TASK_GATE" => hook("SubagentStop") && got == Some("1") && want != Some("1"),
         "OCGEN_HOOK_PROBE" => got.is_some(),
+        // The reset that keeps git from asking a keychain (claude::GIT_HELPER_RESET).
+        "GIT_CONFIG_COUNT" | "GIT_CONFIG_KEY_0" | "GIT_CONFIG_VALUE_0" => {
+            want.is_some() && got != want
+        }
         _ => false,
     }
 }
