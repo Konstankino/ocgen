@@ -99,6 +99,24 @@ pub fn pre_push_chain(root: &Path) -> String {
     format!("[ ! -f {script} ] || sh {script} || exit 1")
 }
 
+/// The role (archetype) whose subagent turns on the coordinator's adversary loop:
+/// run it last, send its serious findings back to the implementer, re-check.
+pub const ADVERSARY_ROLE: &str = "adversary";
+
+/// Rework rounds the adversary loop allows before the rest is reported UNRESOLVED.
+pub const ADVERSARY_ROUNDS: u32 = 2;
+
+/// `extra` after `base`, a blank line between them; `base`'s trailing newlines
+/// end the result, so the text sits in its template exactly as `base` did.
+fn join_section(base: &str, extra: &str) -> String {
+    let head = base.trim_end_matches('\n');
+    if head.is_empty() {
+        return extra.to_string();
+    }
+    let tail = &base[head.len()..];
+    format!("{head}\n\n{}{tail}", extra.trim_end_matches('\n'))
+}
+
 /// User-owned files: ocgen creates them once (with its default) and never
 /// overwrites them, so they're exempt from conflicts, doctor's plan and fingerprints.
 pub const USER_OWNED: [&str; 3] = [
@@ -728,6 +746,45 @@ impl Project {
         self.agents.iter().find(|a| a.mode == "primary")
     }
 
+    /// The enabled subagent playing `role`: by its role first, so a renamed one
+    /// still counts, then by name.
+    fn subagent_for(&self, role: &str) -> Option<&Agent> {
+        let subs = || {
+            self.agents
+                .iter()
+                .filter(|a| a.mode == "subagent" && !a.disable)
+        };
+        subs()
+            .find(|a| a.role == role)
+            .or_else(|| subs().find(|a| a.name == role))
+    }
+
+    /// The coordinator's adversary loop, when the team has an adversary. Only
+    /// then is its template loaded, so other projects render exactly as before.
+    fn adversary_loop(&self, env: &Environment) -> Result<Option<String>> {
+        let Some(adversary) = self.subagent_for(ADVERSARY_ROLE) else {
+            return Ok(None);
+        };
+        let implementer = self.subagent_for("implementer");
+        // A stale override missing a variable fails instead of printing nothing.
+        let mut env = env.clone();
+        env.set_undefined_behavior(minijinja::UndefinedBehavior::Strict);
+        let text = env
+            .render_str(
+                &templates::load("coordination/adversary.md.j2")?,
+                context! {
+                    adversary => adversary.name,
+                    implementer => implementer.map(|a| a.name.as_str()).unwrap_or_default(),
+                    implementer_isolated => implementer
+                        .is_some_and(|a| a.isolation.trim() == "worktree"),
+                    rounds => ADVERSARY_ROUNDS,
+                    language => self.language,
+                },
+            )
+            .context("rendering the adversary loop")?;
+        Ok(Some(text))
+    }
+
     /// Render every output file as (relative path, contents). Pure — no disk I/O.
     pub fn render_all(&self) -> Result<Vec<(PathBuf, String)>> {
         match self.target {
@@ -766,7 +823,18 @@ impl Project {
 
         // Per-agent files (+ external prompt files).
         let agent_tmpl = templates::load("opencode/agents/_agent.md.j2")?;
+        let adversary_loop = self.adversary_loop(&env)?;
         for agent in &self.agents {
+            // A coordinator runs the adversary loop: at the end of its prompt file,
+            // or of its body when it has none.
+            let loop_here = adversary_loop
+                .as_deref()
+                .filter(|_| agent.mode == "primary");
+            let has_prompt_file = agent.prompt_file && agent.prompt_body.is_some();
+            let body = match loop_here {
+                Some(l) if !has_prompt_file => join_section(&agent.body, l),
+                _ => agent.body.clone(),
+            };
             let mut permissions = agent.permissions.trim_end().to_string();
             if agent.mode == "primary" {
                 permissions.push_str("\n  task:\n    \"*\": deny");
@@ -791,7 +859,7 @@ impl Project {
                 options => agent.options.trim_end(),
                 prompt_file => agent.prompt_file,
                 permissions => permissions,
-                body => agent.body,
+                body => body,
             };
             let md = env
                 .render_str(&agent_tmpl, context! { agent => agent_val })
@@ -803,12 +871,15 @@ impl Project {
 
             if agent.prompt_file {
                 if let Some(prompt_src) = &agent.prompt_body {
-                    let txt = body_as_template(
+                    let mut txt = body_as_template(
                         &env,
                         &agent.name,
                         prompt_src,
                         context! { subagents => &subs, language => lang, parallel => false },
                     );
+                    if let Some(l) = loop_here {
+                        txt = join_section(&txt, l);
+                    }
                     out.push((
                         PathBuf::from(format!(".opencode/prompts/{}.txt", agent.name)),
                         txt,
@@ -1135,7 +1206,7 @@ impl Project {
 
         // Coordinator body may itself be a template (the orchestrator prompt loops
         // over subagents), so render it with that context for CLAUDE.md.
-        let coordinator = match self.primary() {
+        let mut coordinator = match self.primary() {
             Some(p) => body_as_template(
                 &env,
                 &p.name,
@@ -1144,6 +1215,10 @@ impl Project {
             ),
             None => String::new(),
         };
+        // The main session coordinates, so the adversary loop is its to run.
+        if let Some(l) = self.adversary_loop(&env)? {
+            coordinator = join_section(&coordinator, &l);
+        }
         // Behavioral guidance lives in .claude/rules/ (loads every session at CLAUDE.md
         // priority) so ocgen never has to touch a user-owned CLAUDE.md.
         let has_coordinator = !coordinator.is_empty();

@@ -714,3 +714,139 @@ fn the_sandbox_help_names_the_gate_only_when_it_is_on() {
     assert!(off.contains("isn't available on native Windows"), "{off}");
     assert!(!off.contains("approval gate"), "{off}");
 }
+
+// ---------- the adversary: offered first to a team that lacks it ----------
+
+/// A project with the team every project had before the adversary existed.
+fn legacy_team(dir: &Path, target: Target) -> String {
+    let mut p = Project::from_manifest(&Manifest::load().unwrap(), "English");
+    p.target = target;
+    p.project_name = "legacy".into();
+    p.agents = ["coordinator", "explorer", "implementer", "reviewer"]
+        .iter()
+        .map(|n| match target {
+            Target::ClaudeCode => agent::Agent::from_archetype_claude(n, n, "English"),
+            Target::OpenCode => agent::Agent::from_archetype(n, n, "English", "mac"),
+        })
+        .collect::<anyhow::Result<_>>()
+        .unwrap();
+    if target == Target::ClaudeCode {
+        p.providers.clear();
+    }
+    p.scaffold(dir, false).unwrap();
+    dir.to_string_lossy().into_owned()
+}
+
+#[test]
+fn the_default_preset_is_the_next_pipeline_role_the_team_lacks() {
+    use super::default_preset;
+    let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+    let presets = s(&[
+        "adversary",
+        "coordinator",
+        "explorer",
+        "implementer",
+        "reviewer",
+        "verifier",
+        "blank (custom role)",
+    ]);
+    let pipeline = s(&[
+        "coordinator",
+        "explorer",
+        "implementer",
+        "reviewer",
+        "adversary",
+    ]);
+    // A new project starts from the coordinator, as before.
+    assert_eq!(
+        presets[default_preset(&presets, &[], &pipeline)],
+        "coordinator"
+    );
+    // A team from before the adversary is offered the adversary.
+    let legacy = s(&["coordinator", "explorer", "implementer", "reviewer"]);
+    assert_eq!(
+        presets[default_preset(&presets, &legacy, &pipeline)],
+        "adversary"
+    );
+    // A renamed agent still counts by its role.
+    let renamed = s(&[
+        "boss",
+        "coordinator",
+        "explorer",
+        "implementer",
+        "reviewer",
+        "redteam",
+        "adversary",
+    ]);
+    assert_eq!(
+        presets[default_preset(&presets, &renamed, &pipeline)],
+        "verifier"
+    );
+    // Every preset used: the blank role; no pipeline at all: the first unused.
+    let all = s(&[
+        "adversary",
+        "coordinator",
+        "explorer",
+        "implementer",
+        "reviewer",
+        "verifier",
+    ]);
+    assert_eq!(
+        presets[default_preset(&presets, &all, &pipeline)],
+        "blank (custom role)"
+    );
+    assert_eq!(
+        presets[default_preset(&presets, &s(&["adversary"]), &[])],
+        "coordinator"
+    );
+}
+
+#[test]
+fn add_agent_offers_the_adversary_to_a_claude_team_that_lacks_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = legacy_team(tmp.path(), Target::ClaudeCode);
+    // Enter on every prompt: preset, name, then the agent's fields.
+    script(&[""; 13]);
+    super::run_add_agent(Some(path)).unwrap();
+    assert_eq!(
+        script_remaining(),
+        0,
+        "asked exactly the scripted questions"
+    );
+
+    let p = reload(tmp.path());
+    let adv = p.agents.iter().find(|a| a.name == "adversary").unwrap();
+    assert_eq!(adv.role, "adversary");
+    assert_eq!(adv.tools, "Read, Grep, Glob, Bash");
+    assert!(read(tmp.path(), ".claude/agents/adversary.md").contains("maxTurns: 40"));
+    assert!(read(tmp.path(), ".claude/rules/ocgen-team.md").contains("`Verdict: REWORK`"));
+    let s: serde_json::Value = serde_json::from_str(&read(tmp.path(), SETTINGS)).unwrap();
+    let ro = s["env"]["SUBAGENT_READONLY_ROLES"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(ro.split_whitespace().any(|r| r == "adversary"), "{ro:?}");
+}
+
+#[test]
+fn add_agent_named_adversary_starts_an_opencode_agent_from_its_preset() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = legacy_team(tmp.path(), Target::OpenCode);
+    // The name comes first in OpenCode; the preset of that name is preselected.
+    let mut answers = vec!["adversary"];
+    answers.extend([""; 17]);
+    script(&answers);
+    super::run_add_agent(Some(path)).unwrap();
+    assert_eq!(
+        script_remaining(),
+        0,
+        "asked exactly the scripted questions"
+    );
+
+    let p = reload(tmp.path());
+    let adv = p.agents.iter().find(|a| a.name == "adversary").unwrap();
+    assert_eq!(adv.role, "adversary");
+    assert_eq!(adv.model, "devstral-24b");
+    let prompt = read(tmp.path(), ".opencode/prompts/coordinator.txt");
+    assert!(prompt.contains("`Verdict: REWORK`"), "{prompt}");
+    assert!(read(tmp.path(), ".opencode/agents/coordinator.md").contains("\"adversary\": allow"));
+}

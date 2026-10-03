@@ -834,7 +834,10 @@ fn lead_editing(dir: &Path) {
 
 const WORKER: &[(&str, &str)] = &[
     ("SUBAGENT_CONFIDENCE_THRESHOLD", "96"),
-    ("SUBAGENT_READONLY_ROLES", "explorer reviewer verifier"),
+    (
+        "SUBAGENT_READONLY_ROLES",
+        "explorer reviewer verifier adversary",
+    ),
     ("LOOP_GUARD_MAX_BLOCKS", "3"),
 ];
 
@@ -859,6 +862,14 @@ fn worker_tree_steps() -> Vec<Step> {
         // A read-only role is never gated, even in a tree the lead dirtied.
         start("e1", "explorer").setup(lead_editing),
         stop("e1", "Explorer", "Finding: auth is in src/auth.rs:12", 0),
+        // Nor is the adversary, whose findings carry their own confidence.
+        start("x1", "adversary"),
+        stop(
+            "x1",
+            "adversary",
+            "Verdict: PASS\nFindings:\n- [Low] a.rs:1 — x — y — z — w — Inferred (Confidence: 60%)\nNot checked: none",
+            0,
+        ),
         // A writer that changed nothing since it started passes…
         start("g1", "general-purpose"),
         stop("g1", "general-purpose", "Nothing to change.", 0),

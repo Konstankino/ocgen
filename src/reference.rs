@@ -24,8 +24,12 @@ const AGENT_FIELDS: &[Field] = &[
     },
     Field {
         label: "role",
-        detail: "A free-text label describing the agent's job. Informational only — it is shown \
-                 in `ocgen landscape` but is not written into the generated agent file.",
+        detail: "A free-text label describing the agent's job. It is shown in `ocgen landscape` \
+                 but is not written into the generated agent file. One value matters: an enabled \
+                 subagent with role (or name) `adversary` makes the coordinator run its check \
+                 last, send \
+                 Critical/High findings back to the implementer for up to 2 rework rounds, and \
+                 report what is left as UNRESOLVED.",
         example: "reviewer",
     },
     Field {
@@ -190,9 +194,11 @@ const CLAUDE_FIELDS: &[Field] = &[
     },
     Field {
         label: "subagent controls",
-        detail: "disallowedTools removes tools even if `tools` allows them (the explorer, reviewer \
-                 and verifier ship with Edit, Write, NotebookEdit denied, so they are hard read-only); \
-                 effort (low/medium/high/xhigh/max) trades cost for depth (the reviewer uses high); \
+        detail: "disallowedTools removes tools even if `tools` allows them (the explorer, reviewer, \
+                 verifier and adversary ship with Edit, Write, NotebookEdit denied, so they have no \
+                 file-editing tools; the verifier and adversary keep Bash to run tests); effort \
+                 (low/medium/high/xhigh/max) trades cost for depth (the reviewer and adversary use \
+                 high); \
                  permissionMode (plan/acceptEdits/dontAsk/default); memory (project = committed \
                  .claude/agent-memory/, local = git-ignored, user = every project); background; \
                  skills to preload; and the MCP servers it may use. All optional; set them in \
@@ -221,7 +227,7 @@ const CLAUDE_FIELDS: &[Field] = &[
         detail: "Claude subagent `maxTurns`: a hard ceiling on the agent's agentic turns. At the \
                  limit Claude Code returns its output marked partial, which can be resumed. \
                  Defaults come from the role (explorer 40, implementer 60, reviewer 30, verifier \
-                 40); '-' means unlimited.",
+                 40, adversary 40); '-' means unlimited.",
         example: "60",
     },
     Field {

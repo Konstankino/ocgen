@@ -31,8 +31,8 @@ fn default_pipeline_scaffolds_and_matches_sample() {
 
     let dir = tempdir().unwrap();
     let written = project.scaffold(dir.path(), false).unwrap();
-    // 4 agents + coordinator prompt + opencode.json + multi command = 7.
-    assert_eq!(written.len(), 7);
+    // One file per agent + coordinator prompt + opencode.json + multi command.
+    assert_eq!(written.len(), project.agents.len() + 3);
 
     let json: serde_json::Value = serde_json::from_str(&read(dir.path(), "opencode.json")).unwrap();
     assert_eq!(json["model"], "mac/qwen3-35b-a3b");
@@ -253,7 +253,7 @@ fn add_agent_reloads_state_and_updates_references() {
     project.scaffold(dir.path(), false).unwrap();
 
     let mut reloaded = Project::load_state(dir.path()).unwrap();
-    assert_eq!(reloaded.agents.len(), 4);
+    assert_eq!(reloaded.agents.len(), project.agents.len());
     assert_eq!(reloaded.providers.len(), 1);
     reloaded
         .agents
@@ -381,7 +381,7 @@ fn discover_finds_project_from_a_subdirectory() {
         root.canonicalize().unwrap(),
         dir.path().canonicalize().unwrap()
     );
-    assert_eq!(loaded.agents.len(), 4);
+    assert_eq!(loaded.agents.len(), project.agents.len());
 
     // A directory with no project (and no project ancestor) errors clearly.
     let empty = tempdir().unwrap();
@@ -517,6 +517,7 @@ fn templates_embedded_access() {
         "implementer",
         "reviewer",
         "verifier",
+        "adversary",
     ] {
         assert!(names.contains(&n.to_string()), "missing archetype {n}");
     }
@@ -707,7 +708,13 @@ fn provider_with_base_url_overrides_only_the_url() {
 
 #[test]
 fn manifest_declares_the_default_pipeline() {
-    let m = Manifest::load().unwrap();
+    // The SHIPPED template, not a developer's override (see above).
+    let src = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/templates/manifest.toml"
+    ))
+    .unwrap();
+    let m: Manifest = toml::from_str(&src).unwrap();
     let pairs: Vec<(&str, &str)> = m
         .pipeline
         .iter()
@@ -720,6 +727,7 @@ fn manifest_declares_the_default_pipeline() {
             ("explorer", "explorer"),
             ("implementer", "implementer"),
             ("reviewer", "reviewer"),
+            ("adversary", "adversary"),
         ]
     );
 }

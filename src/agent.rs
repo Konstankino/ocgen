@@ -213,10 +213,9 @@ mod tests {
     fn claude_default_pipeline_uses_manifest() {
         let team = claude_default_pipeline("English").unwrap();
         let names: Vec<&str> = team.iter().map(|a| a.name.as_str()).collect();
-        assert_eq!(
-            names,
-            vec!["coordinator", "explorer", "implementer", "reviewer"]
-        );
+        let manifest = crate::manifest::Manifest::load().unwrap();
+        let want: Vec<&str> = manifest.pipeline.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, want);
         assert!(team.iter().any(|a| a.mode == "primary"));
     }
 }

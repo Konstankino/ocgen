@@ -34,8 +34,8 @@ pub use skill::{run_add_skill, run_edit_skill};
 // Per-field help, shown dimmed above each prompt so the user is reminded what it means.
 const HELP_NAME: &str = "Identifier → file name and @mention. Lowercase, no spaces (e.g. editor).";
 const HELP_PRESET: &str = "A starting point that fills the fields below; 'blank' starts empty.";
-const HELP_ROLE: &str =
-    "Free-text job label (e.g. reviewer). Informational; not written to the file.";
+const HELP_ROLE: &str = "Free-text job label (e.g. reviewer); not written to the file. \
+     'adversary' makes the coordinator run this agent's check last.";
 const HELP_MODE: &str =
     "primary = invoked directly & delegates; subagent = only called by others; all = both.";
 const HELP_TOPP: &str =
@@ -1554,6 +1554,7 @@ fn collect_claude_agents(
             theme,
             language,
             &names,
+            &used_labels(&agents),
             &ClaudeAgentCtx::default(),
         )?);
     }
@@ -1585,13 +1586,15 @@ fn prompt_claude_agent(
     theme: &ColorfulTheme,
     language: &str,
     taken: &[String],
+    used: &[String],
     ctx: &ClaudeAgentCtx,
 ) -> Result<Agent> {
     // Preset first, so the (generic) role name seeds the agent name.
     let mut presets = templates::archetype_names();
     let blank = "blank (custom role)".to_string();
     presets.push(blank.clone());
-    let pidx = ask_select(theme, "  Start from preset", HELP_PRESET, &presets, 0)?;
+    let def = default_preset(&presets, used, &pipeline_archetypes());
+    let pidx = ask_select(theme, "  Start from preset", HELP_PRESET, &presets, def)?;
     let default_name = if presets[pidx] == blank {
         "agent".to_string()
     } else {
@@ -1832,6 +1835,35 @@ fn print_claude_summary(project: &Project, target_dir: &str) {
 }
 
 /// `ocgen add agent` — reload the saved project, append one agent, re-render.
+/// Every agent's name and role: what the preset suggestion counts as covered.
+fn used_labels(agents: &[Agent]) -> Vec<String> {
+    agents
+        .iter()
+        .flat_map(|a| [a.name.clone(), a.role.clone()])
+        .collect()
+}
+
+/// The archetypes of the manifest's default team, in order (empty without one).
+fn pipeline_archetypes() -> Vec<String> {
+    Manifest::load()
+        .map(|m| m.pipeline.into_iter().map(|p| p.archetype).collect())
+        .unwrap_or_default()
+}
+
+/// The preset to suggest: the first default-team role nobody plays yet, else the
+/// first unused preset, else the first. So a new project starts from the
+/// coordinator, a team that lacks a newer default role is offered it, and the
+/// suggested name is free.
+fn default_preset(presets: &[String], used: &[String], pipeline: &[String]) -> usize {
+    let free = |p: &String| !used.contains(p);
+    pipeline
+        .iter()
+        .filter(|p| free(p))
+        .find_map(|p| presets.iter().position(|x| x == p))
+        .or_else(|| presets.iter().position(free))
+        .unwrap_or(0)
+}
+
 pub fn run_add_agent(path_arg: Option<String>) -> Result<()> {
     let theme = ColorfulTheme::default();
     let start = path_arg.unwrap_or_else(|| ".".to_string());
@@ -1844,15 +1876,17 @@ pub fn run_add_agent(path_arg: Option<String>) -> Result<()> {
     );
 
     let taken: Vec<String> = project.agents.iter().map(|a| a.name.clone()).collect();
+    let used = used_labels(&project.agents);
     let agent = if project.target == Target::ClaudeCode {
         prompt_claude_agent(
             &theme,
             &project.language,
             &taken,
+            &used,
             &ClaudeAgentCtx::of(&project),
         )?
     } else {
-        prompt_agent(&theme, &project.providers, &project.language, &taken)?
+        prompt_agent(&theme, &project.providers, &project.language, &taken, &used)?
     };
     project.agents.push(agent);
 
@@ -2619,19 +2653,27 @@ fn collect_agents(
             break;
         }
         let names: Vec<String> = agents.iter().map(|a| a.name.clone()).collect();
-        agents.push(prompt_agent(theme, providers, language, &names)?);
+        agents.push(prompt_agent(
+            theme,
+            providers,
+            language,
+            &names,
+            &used_labels(&agents),
+        )?);
     }
 
     Ok(agents)
 }
 
 /// Add flow: ask a name, pick a preset (or blank), then configure every field.
-/// `taken_names` are agent names already used (for uniqueness).
+/// `taken_names` are agent names already used (for uniqueness); `used` adds their
+/// roles, for the preset to suggest.
 fn prompt_agent(
     theme: &ColorfulTheme,
     providers: &[Provider],
     language: &str,
     taken_names: &[String],
+    used: &[String],
 ) -> Result<Agent> {
     let default_provider = providers[0].key.clone();
 
@@ -2646,7 +2688,12 @@ fn prompt_agent(
     let mut presets = templates::archetype_names();
     let blank_label = "blank (custom role)".to_string();
     presets.push(blank_label.clone());
-    let pidx = ask_select(theme, "  Start from preset", HELP_PRESET, &presets, 0)?;
+    // A name that is a preset's picks it; otherwise suggest what the team lacks.
+    let def = presets
+        .iter()
+        .position(|p| *p == name)
+        .unwrap_or_else(|| default_preset(&presets, used, &pipeline_archetypes()));
+    let pidx = ask_select(theme, "  Start from preset", HELP_PRESET, &presets, def)?;
 
     let seed = if presets[pidx] == blank_label {
         Agent::blank(&name, "custom", &default_provider)

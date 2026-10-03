@@ -2311,6 +2311,23 @@ mod tests {
     }
 
     #[test]
+    fn an_adversary_report_states_no_confidence_unless_it_ends_with_one() {
+        // A finding's own confidence sits mid-line, so it is never the report's.
+        let report = "Verdict: REWORK\n\
+            Findings:\n\
+            - [High] src/unpack.rs:88 — no canonical path — `../../.bashrc` — writes outside — canonicalize — Verified\n\
+            - [Low] src/cli.rs:120 — full path in errors — bad `--path` — leaks layout — relative path — Inferred (Confidence: 70%)\n\
+            Challenged claims:\n\
+            - implementer: «Confidence: 97%, all tests pass» — refuted — `cargo test unpack` fails\n\
+            Not checked: Windows";
+        assert_eq!(stated_confidence(report), None);
+        assert_eq!(
+            stated_confidence(&format!("{report}\nConfidence: 90%")),
+            Some(90)
+        );
+    }
+
+    #[test]
     fn marker_confidence_takes_the_first_integer() {
         assert_eq!(marker_confidence("97"), Some(97));
         assert_eq!(marker_confidence("Confidence: 60% (target 96%)"), Some(60));

@@ -74,6 +74,13 @@ archetype = "implementer"
 name = "reviewer"
 archetype = "reviewer"
 
+# Last: checks the others' results as a skeptic and outside attacker. With it in
+# the team, the coordinator runs it before its final report and sends serious
+# findings back to the implementer (see coordination/adversary.md.j2).
+[[pipeline]]
+name = "adversary"
+archetype = "adversary"
+
 # Fallbacks. primary_model is used for the top-level "model" when no agent is
 # primary; utility_provider/utility_model drive the compaction/title/summary agents.
 [defaults]

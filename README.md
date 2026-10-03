@@ -99,8 +99,8 @@ project it then asks for:
    editable default at the base-URL prompt.
 3. **Utility model** — which provider + model the built-in compaction/title/summary
    agents use.
-4. **Agents** — start from the default 4-agent writing pipeline, then add/rename as
-   many as you like. For each agent you configure **every field OpenCode exposes**:
+4. **Agents** — start from the default 5-agent pipeline (coordinator, explorer,
+   implementer, reviewer, adversary), then add/rename as many as you like. For each agent you configure **every field OpenCode exposes**:
    name, a starting **role/preset** (or `blank (custom role)`), **mode**
    (primary/subagent/all), **provider** and **model**, **variant**, **temperature**,
    **top_p**, **max steps**, **color**, **disable**, **hidden**, **description**, the
@@ -134,7 +134,7 @@ is shown, and your `$EDITOR` opens pre-filled only if you choose to edit.
 so its model reference becomes `<provider>/<model>`; all providers are written into
 `opencode.json`.
 
-**Dynamic roles:** roles are not limited to the built-in four. Pick `blank (custom
+**Dynamic roles:** roles are not limited to the built-in presets. Pick `blank (custom
 role)`, name the role, and fill in the fields yourself — no archetype file involved.
 
 Cross-references stay consistent automatically: the coordinator's task permissions,
@@ -396,6 +396,27 @@ coordinator's body is rendered as a template (it may loop over `{{ subagents }}`
 isn't a valid template, or names a value ocgen doesn't know (`${{ secrets.X }}`,
 `{{ .Values }}`), is written exactly as typed, with a warning.
 
+**The adversary loop.** The default team ends with `adversary`, a skeptic and outside
+attacker. It checks what the explorer found, the implementer built and the reviewer approved,
+and accepts no claim ("tests pass", "Confidence: 97%") without evidence. It has
+`Read, Grep, Glob, Bash`, so it can run the tests, the built binary and PoC inputs, with
+`Edit, Write, NotebookEdit` denied. Each finding carries `file:line`, a scenario, the impact and a
+fix, marked Verified or Inferred. Its report starts with `Verdict: PASS` or `Verdict: REWORK`;
+any Critical or High finding means REWORK.
+
+A subagent can't call another, so the coordinator runs the loop. Whenever the team has an
+enabled subagent whose role (or name) is `adversary`, ocgen adds the loop to the coordinator's
+instructions (`.claude/rules/ocgen-team.md`, or the OpenCode prompt file):
+- Call the adversary last, before the final report. If the implementer works in a worktree,
+  merge its branch first.
+- On REWORK, send the implementer exactly the Critical and High findings, then call the
+  adversary again to check the fixes.
+- After 2 rework rounds (at most 3 checks), report what is left as **UNRESOLVED**.
+
+Teams without an adversary render exactly as before. To add one to an existing project, run
+`ocgen add agent`. The preset picker suggests the default-team role the project lacks, so
+`adversary` comes preselected; in OpenCode, name the agent `adversary` and its preset is picked.
+
 **Workflow commands are skills.** Claude Code merged commands into skills, so ocgen renders
 its workflows as `.claude/skills/<name>/SKILL.md`. You still type `/deliver`, `/inquire` and so on.
 - **You start the side-effecting ones:** `/multi`, `/fanout`, `/deliver`, `/intent`, `/team` and
@@ -481,9 +502,10 @@ and autocomplete it.
 
 **Subagent controls.** Beyond model, tools and color, each subagent can set:
 - `disallowedTools`: removes tools even if its tool list would allow them. The explorer,
-  reviewer and verifier ship with `Edit, Write, NotebookEdit` denied, so they are **hard
-  read-only**.
-- `effort`: the reviewer uses `high`.
+  reviewer, verifier and adversary ship with `Edit, Write, NotebookEdit` denied, so they have no
+  file-editing tools. The explorer and reviewer are **hard read-only**; the verifier and
+  adversary keep `Bash` to run tests, so their read-only status rests on their prompts.
+- `effort`: the reviewer and adversary use `high`.
 - `permissionMode`.
 - `memory`: `project` is committed under `.claude/agent-memory/`, `local` is git-ignored,
   `user` spans every project.
@@ -1066,7 +1088,7 @@ with a shared `.claude/hooks/loop-guard.sh`:
   retrying and go idle. The execution-approval gate denies the command **and halts the agent**
   (`continue: false`). The loop guard never lets an unapproved plan or a gated `git push` through.
 - **Turn ceilings.** Each subagent gets a `maxTurns` limit (explorer 40, implementer 60, reviewer
-  30, verifier 40). At the limit its output comes back marked partial and can be resumed once.
+  30, verifier 40, adversary 40). At the limit its output comes back marked partial and can be resumed once.
 - **Loop discipline.** The workflow rule tells agents to change approach after two failures,
   report the blocker after the third, re-plan at most twice, and never inflate confidence to get
   past a gate. The coordinator must report every escalation as unresolved.
@@ -1200,6 +1222,11 @@ change just one template without copying everything, use
 `ocgen templates edit <path>`, which opens it in your `$EDITOR` (seeded with its
 current content) and writes only that file to the override dir.
 
+An override `manifest.toml` replaces the built-in one as a whole, and its `[[pipeline]]` is the
+default team. If you made one before the adversary existed, new projects still get the old
+four agents until you add the `adversary` entry to it (archetypes need no copy: a missing one
+comes from the binary).
+
 **What can't be overridden.** Hook scripts, the statusline script (`claude/statusline.sh`) and
 the gate-protocol templates (`claude/commands/team.md.j2`, `team-plan.md.j2`, `fanout.md.j2` and
 `claude/rules/ocgen-team.md.j2`, which teach the plan, owner, check and confidence lines the
@@ -1212,6 +1239,7 @@ refuses them, and a copy left by an older ocgen is marked `[embedded; override i
 ```
 manifest.toml            # wizard questions (with help text) + default provider(s)
 archetypes/*.toml        # agent role presets (mode, permissions, colour, text)
+coordination/adversary.md.j2     # the coordinator's adversary loop (when the team has one)
 opencode.json.j2         # the provider/model config template (loops over providers)
 opencode/agents/_agent.md.j2      # one generic agent, rendered per agent
 opencode/commands/multi.md.j2     # a command that fans out to the subagents

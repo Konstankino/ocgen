@@ -1,0 +1,41 @@
+{% if language == "Ukrainian" -%}
+Перевірка adversary ({{ adversary }}):
+- Коли решта агентів завершила роботу, виклич {{ adversary }} останнім, перед фінальним звітом.
+  Передай йому задачу, змінені файли й твердження агентів дослівно.
+{% if implementer_isolated -%}
+- {{ implementer }} працює в окремому git worktree: перед кожним викликом {{ adversary }}
+  злий його гілку в робочу, інакше {{ adversary }} перевірятиме код без змін.
+{% endif -%}
+- `Verdict: PASS` — переходь до фінального звіту; знахідки Medium і Low внеси в зауваження й ризики.
+- `Verdict: REWORK` — передай {% if implementer %}агентові {{ implementer }}{% else %}агентові, який вносив зміни,{% endif %}
+  лише знахідки Critical і High із цього звіту, дослівно (file:line, сценарій, виправлення), потім
+  знову виклич {{ adversary }}, щоб він перевірив виправлення.
+- Не більше {{ rounds }} кіл доопрацювання: до {{ rounds }} виправлень і {{ rounds + 1 }} викликів {{ adversary }}.
+  Якщо після цього вердикт усе ще REWORK, зупинись і у фінальному звіті познач решту знахідок
+  як UNRESOLVED.
+- Якщо у звіті немає рядка `Verdict:`, виклич {{ adversary }} ще раз; якщо вердикту знову немає,
+  познач перевірку як UNRESOLVED.
+- Підагенти не викликають одне одного: знахідки між {{ adversary }} і {% if implementer %}{{ implementer }}{% else %}агентом, який вносив зміни,{% endif %}
+  передаєш лише ти.
+- У фінальному звіті вкажи вердикт {{ adversary }}, кількість використаних кіл і всі знахідки UNRESOLVED.
+{%- else -%}
+Adversary check ({{ adversary }}):
+- When the other agents have finished, call {{ adversary }} last, right before your final report.
+  Give it the task, the changed files and the other agents' claims, quoted.
+{% if implementer_isolated -%}
+- {{ implementer }} works in its own git worktree: merge its branch into the working branch before
+  every call to {{ adversary }}, or {{ adversary }} checks code without the change.
+{% endif -%}
+- `Verdict: PASS` — go on to the final report; put its Medium and Low findings under remarks and risks.
+- `Verdict: REWORK` — send {{ implementer if implementer else "the subagent that made the change" }} only the Critical and High findings
+  from that report, verbatim (file:line, scenario, fix), then call {{ adversary }} again to check
+  the fixes.
+- At most {{ rounds }} rework rounds: up to {{ rounds }} fixes and {{ rounds + 1 }} calls to {{ adversary }}. If the
+  verdict is still REWORK after that, stop and list the remaining findings as UNRESOLVED in the
+  final report.
+- If the report has no `Verdict:` line, call {{ adversary }} once more; if it still has none, mark
+  the check UNRESOLVED.
+- Subagents can't call each other: only you pass findings between {{ adversary }} and
+  {{ implementer if implementer else "the subagent that made the change" }}.
+- In the final report, give {{ adversary }}'s verdict, the rounds used and every UNRESOLVED finding.
+{%- endif %}
