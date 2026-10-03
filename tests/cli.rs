@@ -1764,3 +1764,45 @@ fn fields_explain_both_languages() {
         .stdout(contains("Never answer in"))
         .stdout(contains("Russian."));
 }
+
+#[test]
+fn edit_language_with_flags_regenerates_and_reports() {
+    let dir = tempdir().unwrap();
+    let home = tempdir().unwrap();
+    scaffold_claude(dir.path());
+    let read = |rel: &str| std::fs::read_to_string(dir.path().join(rel)).unwrap();
+
+    // Answers only: the agents keep their text, the coordinator gets the line.
+    ocgen()
+        .env("HOME", home.path())
+        .args(["edit", "language", "--answers", "ukrainian", "-p"])
+        .arg(dir.path())
+        .assert()
+        .success()
+        .stdout(contains("answers Ukrainian"));
+    assert!(read(".claude/settings.json").contains("\"language\": \"ukrainian\""));
+    assert!(read(".claude/rules/ocgen-team.md").contains("Answer the user in Ukrainian."));
+
+    // Instructions too: the untouched preset agents are re-seeded; one language
+    // for both needs no answer line.
+    ocgen()
+        .env("HOME", home.path())
+        .args(["edit", "language", "--prompts", "Ukrainian", "-p"])
+        .arg(dir.path())
+        .assert()
+        .success()
+        .stdout(contains("re-seeded"))
+        .stdout(contains("explorer"));
+    assert!(read(".claude/agents/explorer.md").contains("Ти дослідник"));
+    assert!(!read(".claude/settings.json").contains("\"language\""));
+    assert!(!read(".claude/rules/ocgen-team.md").contains("Answer the user in"));
+
+    // A language the presets don't speak is refused, naming the ones they do.
+    ocgen()
+        .env("HOME", home.path())
+        .args(["edit", "language", "--prompts", "Polish", "-p"])
+        .arg(dir.path())
+        .assert()
+        .failure()
+        .stderr(contains("English, Ukrainian"));
+}

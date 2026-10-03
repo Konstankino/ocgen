@@ -3685,6 +3685,9 @@ fn body_as_template(env: &Environment, agent: &str, body: &str, ctx: minijinja::
 mod codeowners;
 pub use codeowners::{check_link as check_codeowners_link, found as found_codeowners};
 
+mod language;
+pub use language::{match_language, LanguageChange};
+
 #[cfg(test)]
 mod write_tests;
 

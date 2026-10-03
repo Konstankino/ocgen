@@ -174,6 +174,15 @@ When the two languages differ:
 - If a coordinator prompt you edited still says "Respond in English." before its last line,
   `ocgen landscape` warns that it contradicts the answer line.
 
+**Switch an existing project** with `ocgen edit language` (interactive), or with flags:
+- `--answers Ukrainian` only sets the answer language. The agents keep their text, and the
+  coordinator gets the answer line.
+- `--prompts English` sets the instruction language. Each preset agent whose text is still what
+  its preset gave it is re-seeded in that language. Agents you edited, custom agents and skills
+  keep their text, and the command lists them.
+- A project made before this setting answers in its old instruction language. Changing only the
+  instructions keeps that answer language, so the answers don't flip.
+
 An override `manifest.toml` from before this setting asks no answer-language question. Its
 projects answer in the instruction language until you add the `response_language` variable to
 the override.
@@ -192,6 +201,7 @@ ocgen edit mcp [name] -p ./dir      # change or remove an MCP server
 ocgen edit permissions -p ./dir --allow "Bash(gh run view:*)"   # your own settings.json permission rules (Claude projects)
 ocgen edit permissions -p ./dir --list                          # every permission rule at a glance
 ocgen edit agent [name] -p ./dir    # tweak any field of an existing agent
+ocgen edit language -p ./dir --prompts English --answers Ukrainian   # instruction / answer language
 ocgen add provider ./my-project     # add another provider to an existing project
 ocgen edit provider [key] -p ./dir  # edit a provider and its models
 ocgen show agent [name] -p ./dir    # print one agent's full configuration
@@ -1190,6 +1200,7 @@ defaults to `.`.
 | `ocgen new [dir] --target claude --output both --repo <owner/repo>` | Emit both the project **and** a plugin (marketplace + release workflow). |
 | `ocgen new [dir] --target claude --team` | Also enable Agent Teams (env flag + `/team` + hooks + guidance). With the approval gate on, the sandbox question defaults to yes (macOS, Linux/WSL2). |
 | `ocgen edit team -p <dir>` | Turn Agent Teams and its gates on, off or retune them later. With the approval gate on and the sandbox off, it offers the sandbox (on native Windows it warns instead). |
+| `ocgen edit language -p <dir> [--prompts L] [--answers L]` | Change the instruction language (re-seeds the preset agents you didn't edit; lists the rest) or the answer language (the coordinator's answer line and Claude Code's `language` setting). Without flags it asks. See [Languages](#languages). |
 
 `--output` is `project` (default) / `plugin` / `both`; `--repo` is the GitHub `owner/repo`
 for a plugin; `--team` is off by default. (The `--base-url` flag is OpenCode-only.)

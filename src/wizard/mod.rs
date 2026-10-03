@@ -807,6 +807,88 @@ fn configure_claude_team(theme: &ColorfulTheme, seed: &Team) -> Result<Team> {
 
 /// `ocgen edit team <dir>`: enable or adjust Agent Teams for an existing Claude
 /// project, then re-render. Preserves the user's CLAUDE.md (create-once).
+/// The languages the manifest offers for `key`, else English and Ukrainian.
+fn language_choices(key: &str) -> Vec<String> {
+    Manifest::load()
+        .ok()
+        .and_then(|m| m.variables.into_iter().find(|v| v.key == key))
+        .map(|v| v.choices)
+        .filter(|c| !c.is_empty())
+        .unwrap_or_else(|| vec!["English".to_string(), "Ukrainian".to_string()])
+}
+
+/// `ocgen edit language` — set the instruction and/or answer language, re-seed
+/// the preset agents nobody edited, and re-render.
+pub fn run_edit_language(
+    path: String,
+    prompts: Option<String>,
+    answers: Option<String>,
+) -> Result<()> {
+    let (root, mut project) = Project::discover(Path::new(&path))?;
+    let prompt_choices = language_choices("language");
+    let answer_choices = language_choices("response_language");
+    let (prompts, answers) = if prompts.is_none() && answers.is_none() {
+        if !crate::prompt::can_ask() {
+            bail!("no terminal to ask in — pass --prompts <LANGUAGE> and/or --answers <LANGUAGE>");
+        }
+        let theme = ColorfulTheme::default();
+        ui::banner("edit language");
+        let pick = |label: &str, help: &str, choices: &[String], current: &str| {
+            let at = choices
+                .iter()
+                .position(|c| c.eq_ignore_ascii_case(current))
+                .unwrap_or(0);
+            ask_select(&theme, label, help, choices, at).map(|i| choices[i].clone())
+        };
+        let p = pick(
+            "Instruction language",
+            "Language of the agents' instructions; preset agents you didn't edit are re-seeded in it.",
+            &prompt_choices,
+            &ocgen::render::canonical_language(&project.language),
+        )?;
+        let a = pick(
+            "Answer language",
+            "Language the agents answer you in.",
+            &answer_choices,
+            project.response_language(),
+        )?;
+        (Some(p), Some(a))
+    } else {
+        (
+            prompts
+                .map(|p| ocgen::render::match_language(&p, &prompt_choices))
+                .transpose()?,
+            answers
+                .map(|a| ocgen::render::match_language(&a, &answer_choices))
+                .transpose()?,
+        )
+    };
+
+    let change = project.change_languages(prompts.as_deref(), answers.as_deref())?;
+    let written = project.scaffold(&root, true)?;
+    report_written(&written);
+    ui::kv("language", &project.languages_label());
+    if !change.reseeded.is_empty() {
+        ui::kv("re-seeded", &change.reseeded.join(", "));
+    }
+    if !change.kept.is_empty() {
+        ui::kv(
+            "kept",
+            &format!(
+                "{} (edited, or not from a preset — change them with `ocgen edit agent`)",
+                change.kept.join(", ")
+            ),
+        );
+    }
+    if let Some(old) = &change.pinned_answers {
+        ui::kv("answers", &format!("kept in {old}, as before"));
+    }
+    if !project.skills.is_empty() && !change.reseeded.is_empty() {
+        ui::kv("skills", "keep their text");
+    }
+    Ok(())
+}
+
 pub fn run_edit_team(path: String) -> Result<()> {
     let (root, mut project) = Project::discover(Path::new(&path))?;
     if project.target != Target::ClaudeCode {

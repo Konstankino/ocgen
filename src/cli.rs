@@ -290,6 +290,26 @@ pub enum EditWhat {
         #[arg(short, long, default_value = ".")]
         path: String,
     },
+    /// Change the instruction language (the agents' prompts) or the answer
+    /// language (what you read).
+    ///
+    /// A new instruction language re-seeds each preset agent whose text is still
+    /// what its preset gave it; agents you edited keep theirs and are listed. When
+    /// the answers are in another language than the instructions, the coordinator
+    /// is told to answer in it (and a Claude project's settings.json gets Claude
+    /// Code's `language`). With flags the change applies directly; without flags
+    /// the command asks.
+    Language {
+        /// Directory of the existing project.
+        #[arg(short, long, default_value = ".")]
+        path: String,
+        /// The instruction language, e.g. English.
+        #[arg(long, value_name = "LANGUAGE")]
+        prompts: Option<String>,
+        /// The answer language, e.g. Ukrainian.
+        #[arg(long, value_name = "LANGUAGE")]
+        answers: Option<String>,
+    },
     /// Add or remove your own permission rules in settings.json (Claude projects only).
     ///
     /// Your rules are saved in the project state and appended to the rules ocgen
