@@ -4,12 +4,17 @@
 //! drift. The `inquire-notes` hook re-renders it after each write and shows it:
 //! an open tab is refreshed, and a new one is opened only when none shows it
 //! (see [`viewer`]).
+//!
+//! The pages speak the project's answer language ([`words`]). An /intent reading
+//! copy (`.claude/intent/view/<slug>.md`, the English intent file translated
+//! into that language) gets a page of its own the same way.
 
 pub mod blocks;
 pub mod browser;
 pub mod html;
 pub mod ledger;
 pub mod viewer;
+pub mod words;
 
 use std::collections::HashMap;
 use std::fs;
@@ -60,6 +65,39 @@ pub fn ledger_target(path: &str) -> Target {
     } else {
         Target::BadSlug
     }
+}
+
+/// The slug of an /intent reading copy — `.claude/intent/view/<slug>.md`, any
+/// path form — or `None` for anything else.
+pub fn intent_view_target(path: &str) -> Option<String> {
+    let p = path.replace('\\', "/");
+    let mut parts = p.rsplit('/');
+    let (file, view, intent, claude) = (parts.next()?, parts.next()?, parts.next()?, parts.next()?);
+    if (view, intent, claude) != ("view", "intent", ".claude") {
+        return None;
+    }
+    let stem = file.strip_suffix(".md")?;
+    is_slug(stem).then(|| stem.to_string())
+}
+
+/// The ocgen project containing `path`: its root and state.
+fn project_of(path: &Path) -> Option<(PathBuf, crate::render::Project)> {
+    let abs = absolute(path);
+    let root = abs.ancestors().find(|a| {
+        crate::target::Target::state_files()
+            .iter()
+            .any(|f| a.join(f).is_file())
+    })?;
+    let project = crate::render::Project::load_state(root).ok()?;
+    Some((root.to_path_buf(), project))
+}
+
+/// The answer language of the project containing `path` — what its pages
+/// speak — or English outside a project.
+pub fn answer_language(path: &Path) -> String {
+    project_of(path)
+        .map(|(_, p)| p.response_language().to_string())
+        .unwrap_or_else(|| "English".to_string())
 }
 
 /// A short content revision (FNV-1a, 64-bit): pages carry it so the viewer can
@@ -133,8 +171,58 @@ pub fn ledger_slug(md: &Path) -> Result<String> {
 /// is refused (see [`ledger_slug`]): the sibling page would overwrite a real
 /// `.html`, and the `*` .gitignore would hide its directory from git.
 pub fn render_file(md: &Path) -> Result<PathBuf> {
+    if let Some(slug) = intent_view_target(&absolute(md).to_string_lossy()) {
+        return render_intent_view(md, &slug);
+    }
     let slug = ledger_slug(md)?;
     render_ledger(md, &slug)
+}
+
+/// Render /intent reading copy `md` (slug `slug`) to its sibling `.html`, in
+/// the project's answer language, linking the English intent file it
+/// translates; the view directory keeps itself out of git.
+fn render_intent_view(md: &Path, slug: &str) -> Result<PathBuf> {
+    let dir = match md.parent() {
+        Some(d) if !d.as_os_str().is_empty() => d,
+        _ => Path::new("."),
+    };
+    let out = dir.join(format!("{slug}.html"));
+    let project = project_of(md);
+    let language = project
+        .as_ref()
+        .map_or("English", |(_, p)| p.response_language())
+        .to_string();
+    let original = project
+        .as_ref()
+        .and_then(|(root, p)| original_intent(root, &p.claude.intent.dir, slug));
+    let source = format!(".claude/intent/view/{slug}.md");
+    for _ in 0..3 {
+        let src = fs::read_to_string(md).with_context(|| format!("reading {}", md.display()))?;
+        let page = html::render_intent(&src, &source, original.as_deref(), &language)?;
+        write_if_changed(&out, page.as_bytes())?;
+        if fs::read_to_string(md).ok().as_deref() == Some(src.as_str()) {
+            break;
+        }
+    }
+    let ignore = dir.join(".gitignore");
+    if !ignore.exists() {
+        let _ = fs::write(ignore, "*\n");
+    }
+    Ok(out)
+}
+
+/// The project-relative path of the intent file that reading copy `slug`
+/// translates: the file in the intent directory whose name, lowercased, is
+/// `<slug>.md`.
+fn original_intent(root: &Path, dir: &str, slug: &str) -> Option<String> {
+    let dir = dir.trim_end_matches('/');
+    let want = format!("{slug}.md");
+    fs::read_dir(root.join(dir))
+        .ok()?
+        .flatten()
+        .filter_map(|e| e.file_name().to_str().map(str::to_string))
+        .find(|n| n.to_ascii_lowercase() == want)
+        .map(|n| format!("{dir}/{n}"))
 }
 
 /// [`render_file`] for ledger `md` of slug `slug`, already known to be one: the
@@ -146,10 +234,11 @@ fn render_ledger(md: &Path, slug: &str) -> Result<PathBuf> {
         _ => Path::new("."),
     };
     let out = dir.join(format!("{slug}.html"));
+    let language = answer_language(md);
     for _ in 0..3 {
         let src = fs::read_to_string(md).with_context(|| format!("reading {}", md.display()))?;
         let source = format!(".claude/notes/{slug}.md");
-        let page = html::render_page(&ledger::parse(&src), Some(&source))?;
+        let page = html::render_page_in(&ledger::parse(&src), Some(&source), &language)?;
         write_if_changed(&out, page.as_bytes())?;
         if fs::read_to_string(md).ok().as_deref() == Some(src.as_str()) {
             break;
@@ -241,8 +330,17 @@ pub fn show(md: &Path, env: &HashMap<String, String>, explicit: bool) -> Result<
             None => {}
         }
     }
-    // No live viewer: open the file itself — once, or the browser would gain a
-    // tab on every update.
+    open_once(dir, slug, env, explicit)
+}
+
+/// Open page `<slug>.html` in `dir` as a file — once, or the browser would gain
+/// a tab on every update (unless `explicit`).
+fn open_once(
+    dir: &Path,
+    slug: &str,
+    env: &HashMap<String, String>,
+    explicit: bool,
+) -> Result<Shown> {
     let page = crate::paths::plain(&dir.join(format!("{slug}.html")));
     let marker = dir.join(format!(".{slug}.opened"));
     if !explicit && marker.exists() {
@@ -251,6 +349,18 @@ pub fn show(md: &Path, env: &HashMap<String, String>, explicit: bool) -> Result<
     browser::open(&page.to_string_lossy(), env).context("opening the browser")?;
     let _ = fs::write(marker, "");
     Ok(Shown::OpenedFile(page))
+}
+
+/// Show the page of /intent reading copy `md`: the file itself, opened once
+/// (the live viewer serves only `.claude/notes`).
+pub fn show_intent_view(md: &Path, env: &HashMap<String, String>, explicit: bool) -> Result<Shown> {
+    if !browser::decide(env, browser::this_os(), explicit) {
+        return Ok(Shown::Off);
+    }
+    let Some(slug) = intent_view_target(&absolute(md).to_string_lossy()) else {
+        bail!("{} is not an /intent reading copy", md.display());
+    };
+    open_once(md.parent().unwrap_or(Path::new(".")), &slug, env, explicit)
 }
 
 /// The `.claude/notes` directory of the project containing `start`.

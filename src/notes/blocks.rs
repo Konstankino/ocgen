@@ -123,11 +123,11 @@ fn split_legend(lines: &[String]) -> (String, Vec<String>) {
 }
 
 /// Render a fenced block of a known `kind`; `None` for any other kind.
-pub fn render(kind: &str, lines: &[String]) -> Option<String> {
+pub fn render(kind: &str, lines: &[String], words: &'static super::words::Words) -> Option<String> {
     let (legend_html, rows) = split_legend(lines);
     let body = match kind {
         "stats" => stats(&rows),
-        "claims" => claims(&rows),
+        "claims" => claims(&rows, words),
         "steps" => steps(&rows),
         "bars" => bars(&rows),
         "cards" => cards(&rows),
@@ -171,7 +171,7 @@ fn badge_class(label: &str, color: Option<&str>) -> String {
     }
 }
 
-fn claims(rows: &[String]) -> String {
+fn claims(rows: &[String], words: &super::words::Words) -> String {
     let mut out = String::from(r#"<ul class="claims">"#);
     for r in rows {
         let c = cells(r);
@@ -179,7 +179,7 @@ fn claims(rows: &[String]) -> String {
         out.push_str(&format!(
             r#"<li><span class="badge {}">{}</span><div class="claim"><div class="claim-title">{}</div>"#,
             badge_class(&label, color),
-            escape(&label),
+            escape(&words.claim_label(&label)),
             inline(cell(&c, 1))
         ));
         let detail = c.get(2..).map(|d| d.join(" | ")).unwrap_or_default();

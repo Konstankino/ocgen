@@ -175,9 +175,11 @@ pub enum NotesAction {
         #[arg(long, short, default_value = ".")]
         path: String,
     },
-    /// Render ledgers to their HTML pages without showing them.
+    /// Render ledgers (and /intent reading copies) to their HTML pages without
+    /// showing them.
     Render {
-        /// Ledger files (.claude/notes/<topic>.md).
+        /// Ledger files (.claude/notes/<topic>.md) or /intent reading copies
+        /// (.claude/intent/view/<name>.md).
         #[arg(required = true)]
         files: Vec<String>,
     },

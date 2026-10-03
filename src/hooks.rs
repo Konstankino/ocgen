@@ -1091,6 +1091,20 @@ impl<'a> Hook<'a> {
             stdout: String::new(),
             stderr: format!("inquire-notes: {msg}\n"),
         };
+        // An /intent reading copy: rendered and opened as a file.
+        if notes::intent_view_target(path).is_some() {
+            let md = match Path::new(path) {
+                p if p.is_absolute() => p.to_path_buf(),
+                p => self.project().join(p),
+            };
+            if let Err(e) = notes::render_file(&md) {
+                return note(format!("could not render the HTML view: {e:#}"));
+            }
+            return match notes::show_intent_view(&md, self.env, false) {
+                Ok(_) => Outcome::allow(),
+                Err(e) => note(format!("could not show the HTML view: {e:#}")),
+            };
+        }
         match notes::ledger_target(path) {
             notes::Target::NotLedger => return Outcome::allow(),
             notes::Target::BadSlug => {

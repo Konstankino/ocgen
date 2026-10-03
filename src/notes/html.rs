@@ -12,9 +12,14 @@ use minijinja::{AutoEscape, Environment, Value};
 use regex::Regex;
 
 use super::ledger::{Entry, Evidence, Ledger};
+use super::words::{self, Words};
 use crate::templates;
 
 pub const TEMPLATE: &str = "claude/notes/ledger.html.j2";
+/// The /intent reading copy's page.
+pub const INTENT_TEMPLATE: &str = "claude/notes/intent.html.j2";
+/// The style both pages share.
+pub const STYLE: &str = "claude/notes/page.css";
 
 /// HTML-escape text (including quotes, so it is safe inside attributes).
 pub fn escape(s: &str) -> String {
@@ -60,21 +65,19 @@ pub fn inline(s: &str) -> String {
 /// tables, `>` callouts, fenced code, and the report's visual blocks (see
 /// [`super::blocks`]; a `mermaid` fence becomes a diagram).
 pub fn blocks(lines: &[String]) -> String {
-    Blocks::default().run(lines)
+    blocks_in(lines, &words::ENGLISH)
 }
 
-/// Paragraphs that read as a source line or a footnote.
-const FOOTNOTE_PREFIXES: [&str; 6] = [
-    "Source:",
-    "Sources:",
-    "Note:",
-    "Evidence:",
-    "Example:",
-    "Why:",
-];
+/// [`blocks`], with the ledger's fixed keys (evidence tags, footnote prefixes)
+/// shown in `words`.
+pub fn blocks_in(lines: &[String], words: &'static Words) -> String {
+    Blocks::new(words).run(lines)
+}
 
 #[derive(Default)]
 struct Blocks {
+    /// How the ledger's fixed keys are shown (English when unset).
+    words: Option<&'static Words>,
     out: String,
     para: Vec<String>,
     list: Option<(&'static str, Vec<String>)>,
@@ -86,11 +89,22 @@ struct Blocks {
 }
 
 impl Blocks {
-    fn lead() -> Self {
+    fn new(words: &'static Words) -> Self {
         Self {
-            lead: true,
+            words: Some(words),
             ..Self::default()
         }
+    }
+
+    fn lead(words: &'static Words) -> Self {
+        Self {
+            lead: true,
+            ..Self::new(words)
+        }
+    }
+
+    fn words(&self) -> &'static Words {
+        self.words.unwrap_or(&words::ENGLISH)
     }
 
     fn push(&mut self, html: &str) {
@@ -100,8 +114,9 @@ impl Blocks {
 
     fn flush(&mut self) {
         if !self.para.is_empty() {
-            let text = self.para.join(" ");
-            let class = if FOOTNOTE_PREFIXES.iter().any(|p| text.starts_with(p)) {
+            let mut text = self.para.join(" ");
+            let class = if Words::is_footnote(&text) {
+                text = self.words().footnote(&text);
                 r#" class="footnote""#
             } else if self.lead && !self.emitted {
                 r#" class="lead""#
@@ -150,7 +165,7 @@ impl Blocks {
                 "<pre class=\"mermaid\">{}</pre>\n",
                 escape(&body.join("\n"))
             )
-        } else if let Some(h) = super::blocks::render(lang, body) {
+        } else if let Some(h) = super::blocks::render(lang, body, self.words()) {
             h
         } else {
             format!("<pre><code>{}</code></pre>\n", escape(&body.join("\n")))
@@ -262,6 +277,11 @@ impl Blocks {
 /// A phase (one tab of the report): an intro, then `### Title` cards. A title
 /// ending in `[half]` makes a half-width card; neighbouring halves share a row.
 pub fn phase(lines: &[String]) -> String {
+    phase_in(lines, &words::ENGLISH)
+}
+
+/// [`phase`], with the ledger's fixed keys shown in `words`.
+pub fn phase_in(lines: &[String], words: &'static Words) -> String {
     // (title, half, lines); the intro has no title.
     let mut parts: Vec<(Option<String>, bool, Vec<String>)> = vec![(None, false, Vec::new())];
     let mut in_fence = false;
@@ -296,7 +316,7 @@ pub fn phase(lines: &[String]) -> String {
                 out.push_str("</div>\n");
                 row_open = false;
             }
-            out.push_str(&Blocks::lead().run(&body));
+            out.push_str(&Blocks::lead(words).run(&body));
             continue;
         };
         if half && !row_open {
@@ -312,7 +332,7 @@ pub fn phase(lines: &[String]) -> String {
             inline(&title)
         ));
         out.push('\n');
-        out.push_str(&Blocks::lead().run(&body));
+        out.push_str(&Blocks::lead(words).run(&body));
         out.push_str("</section>\n");
     }
     if row_open {
@@ -330,7 +350,7 @@ fn anchor(n: u32) -> String {
     format!("q{n}")
 }
 
-fn entry_value(e: &Entry) -> Value {
+fn entry_value(e: &Entry, w: &'static Words) -> Value {
     let (evidence, confidence) = match e.evidence {
         Evidence::Verified => ("verified", String::new()),
         Evidence::Inferred(c) => ("inferred", c.map(|c| format!("{c}%")).unwrap_or_default()),
@@ -339,7 +359,7 @@ fn entry_value(e: &Entry) -> Value {
     let mut m: BTreeMap<&str, Value> = BTreeMap::new();
     m.insert("n", Value::from(e.n));
     m.insert("id", Value::from(anchor(e.n)));
-    m.insert("lens", Value::from(e.lens.clone()));
+    m.insert("lens", Value::from(w.lens(&e.lens)));
     m.insert(
         "lens_class",
         Value::from(e.lens.to_ascii_lowercase().replace(' ', "-")),
@@ -360,12 +380,112 @@ fn entry_value(e: &Entry) -> Value {
     );
     m.insert("hint", safe(inline(&e.hint)));
     m.insert("hint_lens", Value::from(e.hint_lens.clone()));
+    m.insert("hint_lens_label", Value::from(w.lens(&e.hint_lens)));
     m.insert(
         "notes",
         Value::from(e.notes.iter().map(|n| safe(inline(n))).collect::<Vec<_>>()),
     );
-    m.insert("extra", safe(blocks(&e.extra)));
+    m.insert("extra", safe(blocks_in(&e.extra, w)));
     Value::from(m)
+}
+
+/// The page for an /intent reading copy (`md`, already translated): its `# `
+/// title, its leading `Key: value` lines as pills, anything else before the
+/// first `## ` heading, then one card per `## ` section. `source` is the copy's
+/// path and `original` the English intent file it translates.
+pub fn render_intent(
+    md: &str,
+    source: &str,
+    original: Option<&str>,
+    language: &str,
+) -> Result<String> {
+    let w = words::for_language(language);
+    let mut env = Environment::new();
+    env.set_auto_escape_callback(|_| AutoEscape::Html);
+    env.add_template_owned("page.css", templates::load(STYLE)?)
+        .context("parsing the notes page style")?;
+    env.add_template_owned("intent.html", templates::load(INTENT_TEMPLATE)?)
+        .context("parsing the intent HTML template")?;
+
+    let field = Regex::new(r"^([^:`|#>*\-][^:`|]{0,30}):\s+(\S.*)$").unwrap();
+    let mut title = String::new();
+    let mut fields: Vec<Value> = Vec::new();
+    let mut preface: Vec<String> = Vec::new();
+    let mut sections: Vec<(String, Vec<String>)> = Vec::new();
+    let (mut in_fence, mut in_comment) = (false, false);
+    for line in md.lines() {
+        let t = line.trim();
+        // A template's guidance comment is not part of the copy.
+        if !in_fence && (in_comment || t.starts_with("<!--")) {
+            in_comment = !t.contains("-->");
+            continue;
+        }
+        if t.starts_with("```") {
+            in_fence = !in_fence;
+        }
+        if !in_fence {
+            if title.is_empty() && sections.is_empty() {
+                if let Some(h) = t.strip_prefix("# ") {
+                    title = h.trim().to_string();
+                    continue;
+                }
+            }
+            if let Some(h) = t.strip_prefix("## ") {
+                sections.push((h.trim().to_string(), Vec::new()));
+                continue;
+            }
+        }
+        match sections.last_mut() {
+            Some((_, body)) => body.push(line.to_string()),
+            None => match field
+                .captures(t)
+                .filter(|_| preface.iter().all(|l| l.trim().is_empty()))
+            {
+                Some(c) => {
+                    let mut m: BTreeMap<&str, Value> = BTreeMap::new();
+                    m.insert("key", Value::from(c[1].trim().to_string()));
+                    m.insert("value", safe(inline(&c[2])));
+                    fields.push(Value::from(m));
+                }
+                None => preface.push(line.to_string()),
+            },
+        }
+    }
+    if title.is_empty() {
+        title = source
+            .rsplit('/')
+            .next()
+            .unwrap_or(source)
+            .trim_end_matches(".md")
+            .to_string();
+    }
+    let sections: Vec<Value> = sections
+        .iter()
+        .map(|(t, body)| {
+            let mut m: BTreeMap<&str, Value> = BTreeMap::new();
+            m.insert("title", safe(inline(t)));
+            m.insert("html", safe(blocks_in(body, w)));
+            Value::from(m)
+        })
+        .collect();
+    let ctx = minijinja::context! {
+        w => words_value(w),
+        title => title.replace('`', ""),
+        title_html => safe(inline(&title)),
+        fields => fields,
+        preface => safe(blocks_in(&preface, w)),
+        sections => sections,
+        original => safe(escape(original.unwrap_or(""))),
+        source => safe(escape(source)),
+    };
+    let mut page = env
+        .get_template("intent.html")?
+        .render(ctx)
+        .context("rendering the intent HTML")?;
+    if !page.ends_with('\n') {
+        page.push('\n');
+    }
+    Ok(page)
 }
 
 /// The page for `ledger`.
@@ -375,9 +495,55 @@ pub fn render(ledger: &Ledger) -> Result<String> {
 
 /// The page for `ledger`; `source` is the ledger's path, shown in the header.
 pub fn render_page(ledger: &Ledger, source: Option<&str>) -> Result<String> {
+    render_page_in(ledger, source, "English")
+}
+
+/// The page's own words for the template, as one `w` map.
+fn words_value(w: &'static Words) -> Value {
+    let mut m: BTreeMap<&str, Value> = BTreeMap::new();
+    for (k, v) in [
+        ("lang", w.lang),
+        ("commit", w.commit),
+        ("ledger", w.ledger),
+        ("overview", w.overview),
+        ("qa_log", w.qa_log),
+        ("where_we_left_off", w.where_we_left_off),
+        ("mental_model", w.mental_model),
+        ("nothing_yet", w.nothing_yet),
+        ("lens_coverage", w.lens_coverage),
+        ("lens_lead", w.lens_lead),
+        ("lens_aria", w.lens_aria),
+        ("map", w.map),
+        ("open_questions", w.open_questions),
+        ("none_recorded", w.none_recorded),
+        ("glossary", w.glossary),
+        ("term", w.term),
+        ("meaning", w.meaning),
+        ("verified", w.verified),
+        ("inferred", w.inferred),
+        ("stale_reverify", w.stale_reverify),
+        ("hint", w.hint),
+        ("no_answers", w.no_answers),
+        ("footer", w.footer),
+        ("intent_original", w.intent_original),
+        ("intent_footer", w.intent_footer),
+    ] {
+        m.insert(k, Value::from(v));
+    }
+    // Ours, not the ledger's: it names a command in markup.
+    m.insert("offline", safe(w.offline.to_string()));
+    Value::from(m)
+}
+
+/// [`render_page`] in an answer language (e.g. `Ukrainian`): the page's own
+/// words, the counts and the ledger's fixed keys are shown in it.
+pub fn render_page_in(ledger: &Ledger, source: Option<&str>, language: &str) -> Result<String> {
+    let w = words::for_language(language);
     let src = templates::load(TEMPLATE)?;
     let mut env = Environment::new();
     env.set_auto_escape_callback(|_| AutoEscape::Html);
+    env.add_template_owned("page.css", templates::load(STYLE)?)
+        .context("parsing the notes page style")?;
     env.add_template_owned("ledger.html", src)
         .context("parsing the ledger HTML template")?;
     let tmpl = env.get_template("ledger.html")?;
@@ -400,7 +566,7 @@ pub fn render_page(ledger: &Ledger, source: Option<&str>) -> Result<String> {
         .iter()
         .map(|(name, count)| {
             let mut m: BTreeMap<&str, Value> = BTreeMap::new();
-            m.insert("name", Value::from(name.clone()));
+            m.insert("name", Value::from(w.lens(name)));
             m.insert(
                 "class",
                 Value::from(name.to_ascii_lowercase().replace(' ', "-")),
@@ -416,11 +582,11 @@ pub fn render_page(ledger: &Ledger, source: Option<&str>) -> Result<String> {
         .iter()
         .enumerate()
         .map(|(i, s)| {
-            let html = phase(&s.lines);
+            let html = phase_in(&s.lines, w);
             htmls.push(html.clone());
             let mut m: BTreeMap<&str, Value> = BTreeMap::new();
             m.insert("id", Value::from(format!("phase-{}", i + 1)));
-            m.insert("title", safe(inline(&s.title)));
+            m.insert("title", safe(inline(&w.phase_title(&s.title))));
             m.insert("html", safe(html));
             Value::from(m)
         })
@@ -440,8 +606,8 @@ pub fn render_page(ledger: &Ledger, source: Option<&str>) -> Result<String> {
         })
         .collect();
 
-    let map_html = blocks(&l.map_text);
-    let qa_html = blocks(&l.qa_text);
+    let map_html = blocks_in(&l.map_text, w);
+    let qa_html = blocks_in(&l.qa_text, w);
     htmls.push(map_html.clone());
     htmls.push(qa_html.clone());
     let has_mermaid =
@@ -457,10 +623,11 @@ pub fn render_page(ledger: &Ledger, source: Option<&str>) -> Result<String> {
         resume_question => safe(inline(&l.resume.question)),
         resume_hint => safe(inline(&l.resume.hint)),
         resume_hint_lens => l.resume.hint_lens.clone(),
+        resume_hint_lens_label => w.lens(&l.resume.hint_lens),
         mental_model => l.mental_model.iter().map(|m| safe(inline(m))).collect::<Vec<_>>(),
         map_html => safe(map_html),
         mermaid => l.map_mermaid.clone(),
-        entries => l.entries.iter().map(entry_value).collect::<Vec<_>>(),
+        entries => l.entries.iter().map(|e| entry_value(e, w)).collect::<Vec<_>>(),
         qa_html => safe(qa_html),
         has_mermaid => has_mermaid,
         open_questions => l.open_questions.iter().map(|q| safe(inline(q))).collect::<Vec<_>>(),
@@ -473,6 +640,8 @@ pub fn render_page(ledger: &Ledger, source: Option<&str>) -> Result<String> {
         count_inferred => inferred,
         count_stale => stale,
         count_open => l.open_questions.len(),
+        counts => w.counts(l.entries.len(), verified, inferred, stale),
+        w => words_value(w),
     };
     let mut page = tmpl.render(ctx).context("rendering the ledger HTML")?;
     if !page.ends_with('\n') {

@@ -183,6 +183,19 @@ When the two languages differ:
 - A project made before this setting answers in its old instruction language. Changing only the
   instructions keeps that answer language, so the answers don't flip.
 
+**Pages follow the answer language; Markdown that others read stays English.**
+- **`/inquire`:** the ledger page shows its own words in the answer language: labels, counts, lens
+  names and evidence tags. Claude writes the ledger's text in that language too. The ledger's
+  structural keys (`Topic:`, `## Mental model`, `Q:`, `Verified`, `Source:`) stay English, because
+  ocgen parses them.
+- **`/intent`:** the intent file and the GitHub issue draft are always English: they are the shared
+  record and GitHub's. When the answers aren't English, `/intent` also writes a translated **reading
+  copy** of the intent file to `.claude/intent/view/<name, lowercased>.md`, which is git-ignored. ocgen
+  renders it as a page with the same look as the ledger page, linking the English original, and opens
+  it once.
+- **Other languages:** the pages have built-in words for English and Ukrainian. Any other answer
+  language shows English labels.
+
 An override `manifest.toml` from before this setting asks no answer-language question. Its
 projects answer in the instruction language until you add the `response_language` variable to
 the override.
@@ -766,7 +779,7 @@ converted on their next update.
 | Command / variable | What it does |
 |---|---|
 | `ocgen notes open [topic] [-p dir]` | Render a ledger and show it: refresh its tab, or open one. Picks by file name, then by `Topic:` line; with no topic, the latest ledger. `/inquire` runs this when it resumes. |
-| `ocgen notes render <file.md>…` | Render ledgers without showing them. Only `/inquire` ledgers (`.claude/notes/<topic-slug>.md`, by any path) are rendered; any other file is refused, and every argument is checked before anything is written. |
+| `ocgen notes render <file.md>…` | Render pages without showing them. Only `/inquire` ledgers (`.claude/notes/<topic-slug>.md`) and `/intent` reading copies (`.claude/intent/view/<name>.md`), by any path, are rendered; any other file is refused, and every argument is checked before anything is written. |
 | `OCGEN_NOTES_OPEN=0` | Never open a browser (pages are still rendered). `=1` always does. |
 | `OCGEN_NOTES_BROWSER` | Open pages with this command instead of the system default (`open`, `xdg-open`, `start`). Like those, it runs detached: ocgen doesn't wait for it or check how it exits, so a plain `firefox` is fine. |
 
@@ -1233,7 +1246,7 @@ for a plugin; `--team` is off by default. (The `--base-url` flag is OpenCode-onl
 | `ocgen approve [dir] [--minutes N] [--status] [--revoke]` | You approve high-impact actions for 1–1440 minutes (default 30). Refuses to run under Claude Code or without a terminal. |
 | `ocgen verify [dir] --run-check` | Also run the project's committed check command, as you and unsandboxed (only on a repository you trust). |
 | `ocgen notes open [topic]` | Show an `/inquire` ledger's HTML page: refresh the tab that shows it, or open one ([details](#the-visual-ledger)). |
-| `ocgen notes render <file.md>…` | Render `/inquire` ledgers (`.claude/notes/<topic-slug>.md`) to their HTML pages without opening them; any other file is refused. |
+| `ocgen notes render <file.md>…` | Render `/inquire` ledgers (`.claude/notes/<topic-slug>.md`) and `/intent` reading copies (`.claude/intent/view/<name>.md`) to their HTML pages without opening them; any other file is refused. |
 | `ocgen managed-settings` | Print a recommended organisation policy (`managed-settings.json`): no bypass mode, secrets unreadable, high-impact commands always ask, strict sandbox. |
 | `ocgen fields` (alias `reference`) | Explain every configurable field, including the Claude-specific ones (alias, tools, skills, output/plugin, agent teams). |
 
@@ -1298,6 +1311,8 @@ claude/CLAUDE.md.j2             # project instructions + roster
 claude/commands/*.md.j2         # multi / intake / refine / deliver / inquire / intent… (rendered as skills)
 claude/intent/*.md              # default /intent issue and intent-file templates (copied into new projects)
 claude/notes/ledger.html.j2     # the /inquire ledger's HTML page
+claude/notes/intent.html.j2     # the /intent reading copy's HTML page
+claude/notes/page.css           # the style both pages share
 claude/skill/SKILL.md.j2        # one generic skill
 claude/skill-presets.toml       # add-skill presets (command / knowledge / forked-research)
 claude/output-styles/ocgen-concise.md.j2

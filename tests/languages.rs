@@ -145,15 +145,21 @@ fn english_prompts_with_ukrainian_answers() {
         ] {
             assert!(coord.contains(must), "missing {must:?} in:\n{coord}");
         }
-        // Only the coordinator's text (and Claude's settings) change: the
-        // subagents and the commands keep their English instructions.
+        // Only the coordinator's text, Claude's settings and the two skills that
+        // write files people read (/inquire's ledger, /intent's reading copy)
+        // change: the subagents and the other commands keep their instructions.
         let changed: Vec<&String> = split
             .iter()
             .filter(|(rel, text)| same.get(*rel) != Some(text))
             .map(|(rel, _)| rel)
             .collect();
         let want: &[&str] = match target {
-            Target::ClaudeCode => &[".claude/rules/ocgen-team.md", ".claude/settings.json"],
+            Target::ClaudeCode => &[
+                ".claude/rules/ocgen-team.md",
+                ".claude/settings.json",
+                ".claude/skills/inquire/SKILL.md",
+                ".claude/skills/intent/SKILL.md",
+            ],
             Target::OpenCode => &[".opencode/prompts/coordinator.txt"],
         };
         assert_eq!(changed, want, "{target:?}");

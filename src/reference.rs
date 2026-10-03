@@ -30,8 +30,10 @@ const PROJECT_FIELDS: &[Field] = &[
                  subagents in the instruction language and keep protocol lines such as \
                  `Confidence: NN%` as they are; a Claude project's settings.json also gets \
                  Claude Code's `language` setting. Subagents still report to the coordinator in \
-                 the instruction language. The same language for both changes nothing. Set it \
-                 with `ocgen new` or `ocgen edit language --answers`.",
+                 the instruction language. The pages follow it too: the /inquire ledger page, and \
+                 the reading copy /intent writes next to its English intent file and issue draft \
+                 whenever the answers aren't English. The same language for both changes nothing \
+                 in the agents' text. Set it with `ocgen new` or `ocgen edit language --answers`.",
         example: "Ukrainian",
     },
 ];

@@ -196,9 +196,13 @@ fn run_notes(action: NotesAction) -> Result<()> {
             }
         }
         NotesAction::Render { files } => {
-            // Refuse every non-ledger before writing anything.
+            // Refuse anything but a ledger or an /intent reading copy before
+            // writing anything.
             for f in &files {
-                notes::ledger_slug(std::path::Path::new(f))?;
+                let abs = std::path::absolute(f).unwrap_or_else(|_| f.into());
+                if notes::intent_view_target(&abs.to_string_lossy()).is_none() {
+                    notes::ledger_slug(std::path::Path::new(f))?;
+                }
             }
             for f in files {
                 let html = notes::render_file(std::path::Path::new(&f))?;

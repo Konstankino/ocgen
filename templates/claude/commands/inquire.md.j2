@@ -86,6 +86,12 @@ Only if subagents are unavailable, edit it directly and keep the change small. D
 update in your reply. The helper writes with the **Write or Edit tool**, never through Bash: the
 write is what triggers ocgen to re-render the HTML page, so a Bash write leaves the page stale.
 
+{% if not english_answers -%}
+Write the ledger's text in {{ answer_language }}, but keep its headings, keys and labels exactly as in the layout below —
+`Topic:`, `## Mental model`, `Q:`, the lens names, `Verified`, `Source:` and the block names: ocgen parses them
+and shows them in {{ answer_language }} on the page.
+
+{% endif -%}
 The ledger has exactly this layout (ocgen draws its page from it — keep the headings and keys):
 
 ````

@@ -793,6 +793,18 @@ impl Project {
         }
     }
 
+    /// Whether the answers are in a language other than English: then /intent
+    /// adds a translated reading copy of each (English) intent file.
+    pub fn writes_reading_copies(&self) -> bool {
+        self.claude.workflow.intent && !self.response_language().eq_ignore_ascii_case("English")
+    }
+
+    /// Whether the notes hook runs: it renders /inquire ledgers and /intent
+    /// reading copies as pages.
+    pub fn renders_notes(&self) -> bool {
+        self.claude.workflow.inquire || self.writes_reading_copies()
+    }
+
     /// Whether the answers are in another language than the instructions: only
     /// then does the coordinator get an answer line.
     pub fn answers_differ(&self) -> bool {
@@ -1174,6 +1186,8 @@ impl Project {
                 env.render_str(
                     &templates::load("claude/commands/intent.md.j2")?,
                     context! {
+                        answer_language => canonical_language(self.response_language()),
+                        reading_copies => self.writes_reading_copies(),
                         prefix => i.prefix,
                         digits => i.digits,
                         dir => i.dir.trim_end_matches('/'),
@@ -1203,7 +1217,11 @@ impl Project {
                 "commands/inquire.md".to_string(),
                 env.render_str(
                     &templates::load("claude/commands/inquire.md.j2")?,
-                    context! { language => lang },
+                    context! {
+                        language => lang,
+                        answer_language => crate::render::canonical_language(self.response_language()),
+                        english_answers => self.response_language().eq_ignore_ascii_case("English"),
+                    },
                 )
                 .context("rendering inquire command")?,
             ));
@@ -1304,8 +1322,9 @@ impl Project {
             let body = templates::load_embedded("claude/hooks/https-only-fetch.sh")?;
             components.push(("hooks/https-only-fetch.sh".to_string(), body));
         }
-        // /inquire ledgers get an HTML view, rendered and shown by this hook.
-        if self.claude.workflow.inquire {
+        // /inquire ledgers and /intent reading copies get an HTML view, rendered
+        // and shown by this hook.
+        if self.renders_notes() {
             let body = templates::load_embedded("claude/hooks/inquire-notes.sh")?;
             components.push(("hooks/inquire-notes.sh".to_string(), body));
         }
@@ -2028,8 +2047,9 @@ impl Project {
                 json!({ "matcher": "Edit|Write", "hooks": [ command_hook(hook_cmd(&format!("OCGEN_FORMAT_CMD='{fmt}' {prefix}"), dir, "format.sh")) ] }),
             );
         }
-        if self.claude.workflow.inquire {
-            // Re-render an /inquire ledger's HTML view after each write and show it.
+        if self.renders_notes() {
+            // Re-render a ledger's or a reading copy's HTML view after each write
+            // and show it.
             push(
                 "PostToolUse",
                 json!({ "matcher": "Write|Edit|MultiEdit", "hooks": [ command_hook(hook_cmd(prefix, dir, "inquire-notes.sh")) ] }),

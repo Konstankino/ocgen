@@ -21,6 +21,14 @@ Settings for this project (change them with `ocgen edit intent`):
 {% else -%}
 - **No approvers configured.** Say "No approvers configured" in both drafts, ask me whether to
   proceed without a sign-off, and suggest `ocgen edit intent --approver @handle`.
+{% endif %}{% if reading_copies %}
+**Languages.** Write the intent file and the GitHub issue draft in English, even though we talk in
+{{ answer_language }}: they are the shared record and GitHub's. After every write to an intent file
+(steps 4 and 6), also write its **reading copy**: `.claude/intent/view/<the intent file's name,
+lowercased>`, the whole file translated into {{ answer_language }} with the same structure — code, paths,
+identifiers, `file:line` and @mentions left as they are. Write it with the Write or Edit tool (a Bash
+write doesn't trigger the page): ocgen renders it as a page beside it and opens it —
+never write the `.html` yourself. The copy is git-ignored; the English intent file is the record.
 {% endif %}
 ## 0. Route the arguments
 - **Empty** (or `list`): list the intent files in `{{ dir }}/` that have no `Issue:` line yet — number,

@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="{{ w.lang }}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta name="generator" content="ocgen — rendered from an /intent reading copy; edit the .md, not this file">
+<title>{{ title }} · /intent</title>
+<style>
+{% include "page.css" %}
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="eyebrow">/intent</div>
+    <h1>{{ title_html }}</h1>
+    <div class="pills">
+      {% for f in fields %}<span class="pill">{{ f.key }}: {{ f.value }}</span>
+      {% endfor %}{% if original %}<span class="pill">{{ w.intent_original }} <code>{{ original }}</code></span>{% endif %}
+    </div>
+  </header>
+  {% if preface %}<section class="card">
+    {{ preface }}
+  </section>{% endif %}
+  {% for s in sections %}
+  <section class="card">
+    <h3>{{ s.title }}</h3>
+    {{ s.html }}
+  </section>
+  {% endfor %}
+  <footer>{{ w.intent_footer }} <code>{{ source }}</code></footer>
+</main>
+</body>
+</html>
