@@ -48,7 +48,16 @@ Give each task at most 3 attempts: if the same approach fails twice, change it; 
 failure, stop and report the blocker with evidence.
 Do not perform high-impact external actions (deploys, `git push`/merge, cloud mutations) without my
 explicit approval.
-
+{% if adversary %}
+**Adversary check.** When the plan's tasks are done, and before phase 6, have `{{ adversary }}` check the whole change —
+the adversary loop in `.claude/rules/ocgen-team.md`:
+{% if implementer_isolated %}- First merge `{{ implementer }}`'s worktree branch into the working branch, or it checks code without the change.
+{% endif %}- Give it the goal, the approved plan, the changed files and every agent's claims, quoted.
+- `Verdict: REWORK`: send {% if implementer %}`{{ implementer }}`{% else %}the subagent that made the change{% endif %} only its Critical and High findings, verbatim,
+  then have `{{ adversary }}` check the fixes. At most {{ rounds }} rework rounds.
+- A Critical or High finding still open after that is **UNRESOLVED**: report it in phase 6 with its
+  evidence, never as done.
+{% endif %}
 ## 6. Synthesize
 Summarize what was done, the decisions and their confidence, open risks, and next steps. Report
 anything left unresolved — including every entry in `.claude/loop-guard/escalations.md` — as

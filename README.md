@@ -473,6 +473,15 @@ instructions (`.claude/rules/ocgen-team.md`, or the OpenCode prompt file):
   adversary again to check the fixes.
 - After 2 rework rounds (at most 3 checks), report what is left as **UNRESOLVED**.
 
+The two commands that produce work use it too, naming the adversary by its own name:
+- **`/deliver`:** after phase 5 (Execute) and before Synthesize, the adversary checks the whole
+  change. The implementer's worktree branch is merged first, and the same REWORK rounds apply.
+  Unresolved findings are reported in the synthesis, never as done.
+- **`/intent`:** the adversary challenges the findings in Pass 4, in place of the explorer.
+  It then attacks the plan before you are asked to approve it, revising it for up to 2 rounds.
+  Any Critical or High finding still open is listed as **UNRESOLVED** in the intent file's Risks
+  and in the issue draft, and the tone check makes sure both have it.
+
 Teams without an adversary render exactly as before. To add one to an existing project, run
 `ocgen add agent`. The preset picker suggests the default-team role the project lacks, so
 `adversary` comes preselected; in OpenCode, name the agent `adversary` and its preset is picked.

@@ -55,7 +55,8 @@ const AGENT_FIELDS: &[Field] = &[
                  subagent with role (or name) `adversary` makes the coordinator run its check \
                  last, send \
                  Critical/High findings back to the implementer for up to 2 rework rounds, and \
-                 report what is left as UNRESOLVED.",
+                 report what is left as UNRESOLVED. /deliver runs the same check after \
+                 execution, and /intent has it challenge the findings and attack the plan.",
         example: "reviewer",
     },
     Field {

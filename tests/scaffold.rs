@@ -4887,9 +4887,14 @@ fn intent_uses_the_projects_own_research_and_review_agents() {
         !md.contains("`Explore`"),
         "names the denied built-in Explore: {md}"
     );
-    for n in [2, 3, 4] {
+    for n in [2, 3] {
         assert!(skill_pass(&md, n).contains("`explorer`"), "Pass {n}");
     }
+    // The default team has an adversary: it challenges the findings.
+    assert!(
+        skill_pass(&md, 4).contains("fresh `adversary` subagent"),
+        "Pass 4"
+    );
     // The explorer has no shell: the git and gh reads stay with the lead.
     assert!(skill_pass(&md, 2).contains("no shell"));
     // The tone check is the reviewer's.

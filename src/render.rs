@@ -843,6 +843,22 @@ impl Project {
             .or_else(|| subs().find(|a| a.name == role))
     }
 
+    /// Who the adversary steps in /deliver and /intent name: the adversary (empty
+    /// without one), the implementer it sends findings to (may be empty), whether
+    /// that implementer works in a worktree, and the rework rounds allowed.
+    fn adversary_names(&self) -> (String, String, bool, u32) {
+        let Some(adversary) = self.subagent_for(ADVERSARY_ROLE) else {
+            return (String::new(), String::new(), false, ADVERSARY_ROUNDS);
+        };
+        let implementer = self.subagent_for("implementer");
+        (
+            adversary.name.clone(),
+            implementer.map(|a| a.name.clone()).unwrap_or_default(),
+            implementer.is_some_and(|a| a.isolation.trim() == "worktree"),
+            ADVERSARY_ROUNDS,
+        )
+    }
+
     /// The coordinator's adversary loop, when the team has an adversary. Only
     /// then is its template loaded, so other projects render exactly as before.
     fn adversary_loop(&self, env: &Environment) -> Result<Option<String>> {
@@ -1164,6 +1180,7 @@ impl Project {
                 .context("rendering fanout command")?,
             ));
         }
+        let (adversary, implementer, implementer_isolated, rounds) = self.adversary_names();
         if self.claude.workflow.deliver {
             components.push((
                 "commands/deliver.md".to_string(),
@@ -1174,6 +1191,10 @@ impl Project {
                         inquire => self.claude.workflow.inquire,
                         intent => self.claude.workflow.intent,
                         approvers => self.claude.intent.approvers.join(", "),
+                        adversary => adversary,
+                        implementer => implementer,
+                        implementer_isolated => implementer_isolated,
+                        rounds => rounds,
                     },
                 )
                 .context("rendering deliver command")?,
@@ -1207,6 +1228,8 @@ impl Project {
                             .any(|a| a.name == "reviewer" && a.mode == "subagent"),
                         issue_template => crate::claude::INTENT_ISSUE_TEMPLATE,
                         intent_template => crate::claude::INTENT_FILE_TEMPLATE,
+                        adversary => adversary,
+                        rounds => rounds,
                     },
                 )
                 .context("rendering intent command")?,

@@ -93,8 +93,9 @@ that needs another's answer waits for the next round. Repeat until a pass finds 
 3 extra passes). Only then ask me what the code can't answer — one question at a time, 2–4 options
 with the recommended one first.
 
-**Pass 4 — Challenge.** Give a fresh {% if prefer_explorer %}`explorer`{% else %}`Explore`{% endif %} subagent the findings' claims (not your conclusion)
-and ask it to find evidence that would contradict them. Reconcile, and record what changed.
+**Pass 4 — Challenge.** Give a fresh {% if adversary %}`{{ adversary }}`{% elif prefer_explorer %}`explorer`{% else %}`Explore`{% endif %} subagent the findings' claims (not your conclusion)
+and ask it to find evidence that would contradict them. Reconcile, and record what changed.{% if adversary %} Its
+Critical and High findings that hold up become numbered findings (F#) like yours; say which you rejected and why.{% endif %}
 
 **Analysis report** — show it before any plan:
 - **Current behaviour** (Verified findings)
@@ -109,6 +110,13 @@ and ask it to find evidence that would contradict them. Reconcile, and record wh
 - **Overall `Confidence: NN%`**
 
 ## 3. Plan and get my approval
+{% if adversary -%}
+Before you present the plan, give `{{ adversary }}` the plan and the findings it rests on, and ask it to attack the
+proposed fix as an outside attacker and a skeptic. On `Verdict: REWORK`, revise the plan for its Critical and High
+findings and have it check again — at most {{ rounds }} rounds. A Critical or High finding still open after that is
+**UNRESOLVED**: show it to me with the plan.
+
+{% endif -%}
 Present: the problem, the options considered with a recommendation, scope and out-of-scope, risks
 each with a mitigation, and acceptance criteria. Every statement cites the findings it rests on
 (F#); anything that doesn't is labelled **Assumption**. **Invite push-back** and iterate until I approve.
@@ -147,7 +155,8 @@ Draft it following the writing standard; write it only after the tone check (ste
    `{{ intent_template }}` (if it is missing, use: title, Status, Severity, Approvers, Date, Issue,
    Context, Evidence, Decision, Options considered, Consequences, Risks, Sign-off) from the analysis
    and the approved plan, with `Status: Proposed`, `Approvers: {% if approvers %}{{ approvers }}{% else %}No approvers configured{% endif %}`, and every
-   approver pending in Sign-off.
+   approver pending in Sign-off.{% if adversary %} List every UNRESOLVED adversary finding
+   under **Risks**, marked **UNRESOLVED**, with its evidence.{% endif %}
 3. Right before writing, re-check the local directory for the number; if it is taken, take the next.
    Show me the path.
 
@@ -156,7 +165,8 @@ Draft it following the writing standard; write it only after the tone check (ste
 - **Description:** follow the writing standard and `{{ issue_template }}` (if it is missing, use:
   Summary, Current behaviour, Impact, Background, Proposal, Decision requested, Approvers / sign-off,
   Acceptance criteria, Out of scope, Links); at most {{ max_words }} words — state the word count. Link
-  the intent file when there is one.
+  the intent file when there is one.{% if adversary %} Name every UNRESOLVED adversary finding, with its evidence, so the
+  approvers decide with it in view.{% endif %}
 - **Approvers / sign-off:** {% if approvers %}one pending checklist line per approver, as @mentions ({{ approvers }}) —
   GitHub notifies them when I file the issue{% else %}"No approvers configured"{% endif %}. That is the only notice: **Never email**,
   message or otherwise contact anyone. Don't use `--assignee` for approvers — assignees do the work.
@@ -167,7 +177,8 @@ Draft it following the writing standard; write it only after the tone check (ste
   (b) **Softening and omission** (the more important) — every Verified finding of Medium or higher
   appears with its trigger, behavior, impact and evidence; no severity is lower than the evidence supports;
   no hedge contradicts a Verified finding.
-  (c) **Approvers** — every configured approver is listed in both drafts with a pending sign-off.
+  (c) **Approvers** — every configured approver is listed in both drafts with a pending sign-off.{% if adversary %}
+  (d) **Unresolved** — every UNRESOLVED adversary finding appears in both drafts with its evidence.{% endif %}
   Fix everything it reports. Then write the intent file and show me its path, the title and the
   description in separate fenced blocks, and the command for me to run — save the description to a
   file and `gh issue create --title "<title>" --body-file <file>` — with one line on what the check changed.
