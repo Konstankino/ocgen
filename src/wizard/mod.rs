@@ -134,6 +134,53 @@ pub fn run_templates_edit(path_arg: Option<String>) -> Result<()> {
     Ok(())
 }
 
+/// The project basics the manifest asks for.
+pub(crate) struct Basics {
+    pub project_name: String,
+    /// The instruction language (archetype text, seeds, command templates).
+    pub language: String,
+    /// The answer language; the instruction language when the manifest doesn't
+    /// ask (an override from before it existed).
+    pub response_language: String,
+}
+
+/// Ask the manifest's declared variables, in order, and pick out the basics.
+pub(crate) fn ask_basics(theme: &ColorfulTheme, manifest: &Manifest) -> Result<Basics> {
+    let mut answers: HashMap<String, String> = HashMap::new();
+    for var in &manifest.variables {
+        let value = match var.r#type.as_str() {
+            "select" => {
+                let default_idx = var
+                    .choices
+                    .iter()
+                    .position(|c| c == &var.default)
+                    .unwrap_or(0);
+                let idx = ask_select(theme, &var.prompt, &var.help, &var.choices, default_idx)?;
+                var.choices[idx].clone()
+            }
+            "bool" => ask_confirm(
+                theme,
+                &var.prompt,
+                &var.help,
+                var.default.eq_ignore_ascii_case("true"),
+            )?
+            .to_string(),
+            _ => ask(theme, &var.prompt, &var.help, Some(&var.default), false)?,
+        };
+        answers.insert(var.key.clone(), value);
+    }
+    let language = answers
+        .remove("language")
+        .unwrap_or_else(|| "English".to_string());
+    Ok(Basics {
+        project_name: answers.remove("project_name").unwrap_or_default(),
+        response_language: answers
+            .remove("response_language")
+            .unwrap_or_else(|| language.clone()),
+        language,
+    })
+}
+
 /// `ocgen new` — ask everything, then scaffold.
 pub fn run_new(
     path_arg: Option<String>,
@@ -165,41 +212,18 @@ pub fn run_new(
     let target = pick_target(&theme, target)?;
 
     // 1. Project basics, driven by the manifest's declared variables.
-    let mut answers: HashMap<String, String> = HashMap::new();
-    for var in &manifest.variables {
-        let value = match var.r#type.as_str() {
-            "select" => {
-                let default_idx = var
-                    .choices
-                    .iter()
-                    .position(|c| c == &var.default)
-                    .unwrap_or(0);
-                let idx = ask_select(&theme, &var.prompt, &var.help, &var.choices, default_idx)?;
-                var.choices[idx].clone()
-            }
-            "bool" => ask_confirm(
-                &theme,
-                &var.prompt,
-                &var.help,
-                var.default.eq_ignore_ascii_case("true"),
-            )?
-            .to_string(),
-            _ => ask(&theme, &var.prompt, &var.help, Some(&var.default), false)?,
-        };
-        answers.insert(var.key.clone(), value);
-    }
-    let language = answers
-        .get("language")
-        .cloned()
-        .unwrap_or_else(|| "English".to_string());
-    let project_name = answers.get("project_name").cloned().unwrap_or_default();
+    let Basics {
+        project_name,
+        language,
+        response_language,
+    } = ask_basics(&theme, &manifest)?;
 
     let target_dir = match path_arg {
         Some(p) => p,
         None => ask(&theme, "Create in directory", "", Some("."), false)?,
     };
 
-    let project = match target {
+    let mut project = match target {
         TargetArg::Opencode => {
             ui::section("Providers");
             let providers = collect_providers(&theme, &manifest, base_url.as_deref())?;
@@ -229,6 +253,7 @@ pub fn run_new(
             team,
         )?,
     };
+    project.response_language = response_language;
 
     match project.target {
         Target::OpenCode => print_summary(&project, &target_dir),
@@ -1788,7 +1813,7 @@ fn print_claude_summary(project: &Project, target_dir: &str) {
     ui::section("Summary");
     ui::kv("project", &project.project_name);
     ui::kv("target", &format!("{} (Claude Code)", target_dir));
-    ui::kv("language", &project.language);
+    ui::kv("language", &project.languages_label());
     ui::kv("default model", &project.claude.model);
     let agents = project
         .agents
@@ -2880,7 +2905,7 @@ fn print_summary(project: &Project, target_dir: &str) {
     ui::section("Summary");
     ui::kv("project", &project.project_name);
     ui::kv("target", target_dir);
-    ui::kv("language", &project.language);
+    ui::kv("language", &project.languages_label());
     ui::kv(
         "providers",
         &project

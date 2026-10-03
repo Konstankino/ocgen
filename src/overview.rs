@@ -26,7 +26,7 @@ pub fn run(path: String) -> Result<()> {
         "  {} {}  {}",
         style("◆").cyan().bold(),
         style(&project.project_name).bold(),
-        ui::muted(&format!("({})", project.language))
+        ui::muted(&format!("({})", project.languages_label()))
     );
     ui::kv("path", &ui::muted(&root.display().to_string()));
 
@@ -243,6 +243,9 @@ fn print_agent(project: &Project, root: &Path, idx: usize) {
         _ => a.mode.clone(),
     };
     ui::kv("mode", &mode);
+    if a.mode == "primary" && project.answers_differ() {
+        ui::kv("answers", project.response_language());
+    }
     ui::kv(
         "model",
         &format!("{}/{}", style(&a.provider).cyan(), a.model),
@@ -357,7 +360,7 @@ fn run_claude(root: &Path, project: &Project) -> Result<()> {
         "  {} {}  {}",
         style("◆").cyan().bold(),
         style(&project.project_name).bold(),
-        ui::muted(&format!("(Claude Code · {})", project.language))
+        ui::muted(&format!("(Claude Code · {})", project.languages_label()))
     );
     ui::kv("path", &ui::muted(&root.display().to_string()));
 
@@ -626,6 +629,9 @@ fn print_agent_claude(project: &Project, root: &Path, idx: usize) {
             "subagent".to_string()
         },
     );
+    if a.mode == "primary" && project.answers_differ() {
+        ui::kv("answers", project.response_language());
+    }
     if a.mode == "primary" {
         ui::kv(
             "model",

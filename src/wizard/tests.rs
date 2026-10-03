@@ -850,3 +850,40 @@ fn add_agent_named_adversary_starts_an_opencode_agent_from_its_preset() {
     assert!(prompt.contains("`Verdict: REWORK`"), "{prompt}");
     assert!(read(tmp.path(), ".opencode/agents/coordinator.md").contains("\"adversary\": allow"));
 }
+
+// ---------- languages: instructions in one, answers in another ----------
+
+fn shipped_manifest() -> Manifest {
+    toml::from_str(&ocgen::templates::load_embedded("manifest.toml").unwrap()).unwrap()
+}
+
+#[test]
+fn basics_default_to_english_prompts_and_ukrainian_answers() {
+    // Enter on the project name, the instruction language and the answer language.
+    script(&["", "", ""]);
+    let b = super::ask_basics(&ColorfulTheme::default(), &shipped_manifest()).unwrap();
+    assert_eq!(
+        script_remaining(),
+        0,
+        "asked exactly the scripted questions"
+    );
+    assert_eq!(b.project_name, "my-project");
+    assert_eq!(b.language, "English");
+    assert_eq!(b.response_language, "Ukrainian");
+}
+
+#[test]
+fn basics_without_an_answer_question_answer_in_the_prompt_language() {
+    // An override manifest from before the answer language existed.
+    let mut m = shipped_manifest();
+    m.variables.retain(|v| v.key != "response_language");
+    script(&["", "Ukrainian"]);
+    let b = super::ask_basics(&ColorfulTheme::default(), &m).unwrap();
+    assert_eq!(
+        script_remaining(),
+        0,
+        "asked exactly the scripted questions"
+    );
+    assert_eq!(b.language, "Ukrainian");
+    assert_eq!(b.response_language, "Ukrainian");
+}

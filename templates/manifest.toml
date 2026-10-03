@@ -11,10 +11,22 @@ prompt = "Project name"
 help = "A label for this project; not written into the generated files."
 default = "my-project"
 
+# Two languages: the agents' instructions, and their answers to you. English
+# instructions are followed most precisely and cost the fewest tokens; when the
+# answer language differs, the coordinator is told to answer in it (and a Claude
+# project's settings.json gets Claude Code's `language`).
 [[variable]]
 key = "language"
-prompt = "Prompt language"
-help = "Language used for the seeded agent descriptions and system prompts."
+prompt = "Instruction language"
+help = "Language of the agents' instructions. English is followed most precisely and costs fewer tokens."
+type = "select"
+choices = ["English", "Ukrainian"]
+default = "English"
+
+[[variable]]
+key = "response_language"
+prompt = "Answer language"
+help = "Language the agents answer you in. Subagents still report to the coordinator in the instruction language."
 type = "select"
 choices = ["Ukrainian", "English"]
 default = "Ukrainian"

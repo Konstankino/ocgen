@@ -32,7 +32,13 @@ pub struct Project {
     /// Which platform this project targets. Defaults to OpenCode for old state files.
     pub target: Target,
     pub project_name: String,
+    /// The instruction language: the agents' prompts and descriptions.
     pub language: String,
+    /// The answer language: what the user reads. Empty means the same as
+    /// `language` (every project from before it existed) — see
+    /// [`Project::response_language`].
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub response_language: String,
     pub providers: Vec<Provider>,
     /// Provider + model for the built-in compaction/title/summary agents.
     pub utility_provider: String,
@@ -105,6 +111,38 @@ pub const ADVERSARY_ROLE: &str = "adversary";
 
 /// Rework rounds the adversary loop allows before the rest is reported UNRESOLVED.
 pub const ADVERSARY_ROUNDS: u32 = 2;
+
+/// The answer lines the coordinator presets end with. When the answers are in
+/// another language, the one ending a coordinator's text gives way to ocgen's.
+const RESPONSE_LINES: [&str; 2] = ["Respond in English.", "Відповідай українською."];
+
+/// `text` without the answer line it ends with (its trailing newlines kept), or
+/// `None` when it doesn't end with one.
+fn without_response_line(text: &str) -> Option<String> {
+    let head = text.trim_end_matches('\n');
+    let tail = &text[head.len()..];
+    let (rest, last) = match head.rfind('\n') {
+        Some(i) => (&head[..i], &head[i + 1..]),
+        None => ("", head),
+    };
+    RESPONSE_LINES
+        .contains(&last.trim())
+        .then(|| format!("{}{tail}", rest.trim_end_matches('\n')))
+}
+
+/// A language name as the templates compare it: `ukrainian` → `Ukrainian`;
+/// empty → `English`.
+pub fn canonical_language(name: &str) -> String {
+    let name = name.trim();
+    let mut chars = name.chars();
+    match chars.next() {
+        None => "English".to_string(),
+        Some(first) => first
+            .to_uppercase()
+            .chain(chars.flat_map(char::to_lowercase))
+            .collect(),
+    }
+}
 
 /// `extra` after `base`, a blank line between them; `base`'s trailing newlines
 /// end the result, so the text sits in its template exactly as `base` did.
@@ -731,6 +769,40 @@ impl Project {
         }
     }
 
+    /// The language agents answer the user in: `response_language`, else the
+    /// instruction language, else English.
+    pub fn response_language(&self) -> &str {
+        [&self.response_language, &self.language]
+            .into_iter()
+            .map(|l| l.trim())
+            .find(|l| !l.is_empty())
+            .unwrap_or("English")
+    }
+
+    /// The project's language(s) for display: one name when the answers are in
+    /// the instruction language, else both.
+    pub fn languages_label(&self) -> String {
+        if self.answers_differ() {
+            format!(
+                "prompts {} · answers {}",
+                canonical_language(&self.language),
+                canonical_language(self.response_language())
+            )
+        } else {
+            self.language.clone()
+        }
+    }
+
+    /// Whether the answers are in another language than the instructions: only
+    /// then does the coordinator get an answer line.
+    pub fn answers_differ(&self) -> bool {
+        let prompts = match self.language.trim() {
+            "" => "English",
+            l => l,
+        };
+        !self.response_language().eq_ignore_ascii_case(prompts)
+    }
+
     fn subagents(&self) -> Vec<SubCtx> {
         self.agents
             .iter()
@@ -785,6 +857,71 @@ impl Project {
         Ok(Some(text))
     }
 
+    /// The coordinator's answer line, when the answers are in another language
+    /// than the instructions (written in the instruction language).
+    fn response_section(&self, env: &Environment) -> Result<Option<String>> {
+        if !self.answers_differ() {
+            return Ok(None);
+        }
+        let mut env = env.clone();
+        env.set_undefined_behavior(minijinja::UndefinedBehavior::Strict);
+        let text = env
+            .render_str(
+                &templates::load("coordination/response.md.j2")?,
+                context! {
+                    language => canonical_language(&self.language),
+                    response_language => canonical_language(self.response_language()),
+                },
+            )
+            .context("rendering the answer line")?;
+        Ok(Some(text))
+    }
+
+    /// A coordinator's text as written: its own, its answer line replaced when
+    /// the answers are in another language, then the adversary loop. Unchanged
+    /// for a project that has neither.
+    fn coordinator_text(&self, text: &str, env: &Environment) -> Result<String> {
+        let mut out = text.to_string();
+        if let Some(answer) = self.response_section(env)? {
+            let own = without_response_line(&out).unwrap_or(out);
+            out = join_section(&own, &answer);
+        }
+        if let Some(l) = self.adversary_loop(env)? {
+            out = join_section(&out, &l);
+        }
+        Ok(out)
+    }
+
+    /// A coordinator that still says to answer in another language before its
+    /// last line, where it would contradict the answer line ocgen adds.
+    fn language_issues(&self) -> Vec<String> {
+        if !self.answers_differ() {
+            return Vec::new();
+        }
+        self.agents
+            .iter()
+            .filter(|a| a.mode == "primary")
+            .filter_map(|a| {
+                let text = match (&a.prompt_body, a.prompt_file) {
+                    (Some(p), true) if self.target == Target::OpenCode => p,
+                    _ => &a.body,
+                };
+                let stray = RESPONSE_LINES
+                    .into_iter()
+                    .find(|l| text.lines().any(|x| x.trim() == *l))?;
+                without_response_line(text).is_none().then(|| {
+                    format!(
+                        "agent '{}' says \"{stray}\" before its last line, which contradicts \
+                         answering in {} — remove it (`ocgen edit agent {}`)",
+                        a.name,
+                        self.response_language(),
+                        a.name
+                    )
+                })
+            })
+            .collect()
+    }
+
     /// Render every output file as (relative path, contents). Pure — no disk I/O.
     pub fn render_all(&self) -> Result<Vec<(PathBuf, String)>> {
         match self.target {
@@ -823,17 +960,15 @@ impl Project {
 
         // Per-agent files (+ external prompt files).
         let agent_tmpl = templates::load("opencode/agents/_agent.md.j2")?;
-        let adversary_loop = self.adversary_loop(&env)?;
         for agent in &self.agents {
-            // A coordinator runs the adversary loop: at the end of its prompt file,
+            // What ocgen adds to a coordinator goes at the end of its prompt file,
             // or of its body when it has none.
-            let loop_here = adversary_loop
-                .as_deref()
-                .filter(|_| agent.mode == "primary");
+            let primary = agent.mode == "primary";
             let has_prompt_file = agent.prompt_file && agent.prompt_body.is_some();
-            let body = match loop_here {
-                Some(l) if !has_prompt_file => join_section(&agent.body, l),
-                _ => agent.body.clone(),
+            let body = if primary && !has_prompt_file {
+                self.coordinator_text(&agent.body, &env)?
+            } else {
+                agent.body.clone()
             };
             let mut permissions = agent.permissions.trim_end().to_string();
             if agent.mode == "primary" {
@@ -877,8 +1012,8 @@ impl Project {
                         prompt_src,
                         context! { subagents => &subs, language => lang, parallel => false },
                     );
-                    if let Some(l) = loop_here {
-                        txt = join_section(&txt, l);
+                    if primary {
+                        txt = self.coordinator_text(&txt, &env)?;
                     }
                     out.push((
                         PathBuf::from(format!(".opencode/prompts/{}.txt", agent.name)),
@@ -1206,7 +1341,7 @@ impl Project {
 
         // Coordinator body may itself be a template (the orchestrator prompt loops
         // over subagents), so render it with that context for CLAUDE.md.
-        let mut coordinator = match self.primary() {
+        let coordinator = match self.primary() {
             Some(p) => body_as_template(
                 &env,
                 &p.name,
@@ -1215,10 +1350,9 @@ impl Project {
             ),
             None => String::new(),
         };
-        // The main session coordinates, so the adversary loop is its to run.
-        if let Some(l) = self.adversary_loop(&env)? {
-            coordinator = join_section(&coordinator, &l);
-        }
+        // The main session coordinates: the answer line and the adversary loop
+        // are its to follow.
+        let coordinator = self.coordinator_text(&coordinator, &env)?;
         // Behavioral guidance lives in .claude/rules/ (loads every session at CLAUDE.md
         // priority) so ocgen never has to touch a user-owned CLAUDE.md.
         let has_coordinator = !coordinator.is_empty();
@@ -1437,6 +1571,13 @@ impl Project {
             "model": model
         });
         let obj = root.as_object_mut().unwrap();
+        // Claude Code's own answer language, when it isn't the instructions'.
+        if self.answers_differ() {
+            obj.insert(
+                "language".into(),
+                json!(self.response_language().to_lowercase()),
+            );
+        }
         // The generated rules, then the user's own (`ocgen edit permissions`).
         let rules = self.effective_permissions();
         if !rules.is_empty() {
@@ -2862,6 +3003,7 @@ impl Project {
                 w.push(format!("skill '{}': {issue}", s.name));
             }
         }
+        w.extend(self.language_issues());
         w
     }
 
@@ -3012,6 +3154,7 @@ impl Project {
                 self.utility_provider
             ));
         }
+        warnings.extend(self.language_issues());
         warnings
     }
 

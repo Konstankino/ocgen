@@ -1,0 +1,9 @@
+{% if language == "Ukrainian" -%}
+Відповідай користувачеві {% if response_language == "English" %}англійською{% elif response_language == "Ukrainian" %}українською{% else %}мовою {{ response_language }}{% endif %}.
+Завдання для підагентів пиши українською, а службові рядки, як-от `Verdict:`, `Confidence: NN%`,
+`Status: APPROVED` і `Owner:`, залишай точно такими, як задано.
+{%- else -%}
+Answer the user in {{ response_language }}.{% if response_language == "Ukrainian" %} Never answer in Russian.{% endif %}
+Write task briefs for subagents in English, and keep protocol lines such as `Verdict:`,
+`Confidence: NN%`, `Status: APPROVED` and `Owner:` exactly as specified.
+{%- endif %}

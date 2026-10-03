@@ -1,5 +1,6 @@
 //! Manual inspection helper: scaffold a sample project without the wizard.
-//! Usage: cargo run --example demo -- <target-dir> [default|custom|claude] [language]
+//! Usage: cargo run --example demo -- <target-dir> [default|custom|claude] [language] [answers]
+//! (`language` is the instruction language; `answers` defaults to it.)
 
 use ocgen::agent::{self, Agent};
 use ocgen::manifest::{Manifest, Model, Provider};
@@ -10,6 +11,7 @@ fn main() -> anyhow::Result<()> {
     let target = args.next().expect("target dir required");
     let roster = args.next().unwrap_or_else(|| "default".into());
     let language = args.next().unwrap_or_else(|| "Ukrainian".into());
+    let answers = args.next().unwrap_or_default();
 
     let manifest = Manifest::load()?;
 
@@ -18,6 +20,7 @@ fn main() -> anyhow::Result<()> {
         let mut cp = Project::from_manifest(&manifest, &language);
         cp.target = ocgen::target::Target::ClaudeCode;
         cp.project_name = "demo-claude".into();
+        cp.response_language = answers.clone();
         cp.providers.clear();
         if roster == "claude-plugin" {
             cp.claude.output = ocgen::claude::Output {
@@ -60,6 +63,7 @@ fn main() -> anyhow::Result<()> {
 
     let mut project = Project::from_manifest(&manifest, &language);
     project.project_name = "demo-project".into();
+    project.response_language = answers;
 
     if roster == "custom" {
         // Two providers; agents split across them, including a dynamic custom role.

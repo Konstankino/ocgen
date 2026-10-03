@@ -1714,3 +1714,53 @@ fn edit_intent_refuses_a_codeowners_github_wont_read() {
     refuse("docs/CODEOWNERS", "GitHub reads .github/CODEOWNERS");
     assert_eq!(before, std::fs::read_to_string(&state).unwrap());
 }
+
+#[test]
+fn landscape_shows_both_languages_when_they_differ() {
+    let dir = tempdir().unwrap();
+    let m = Manifest::load().unwrap();
+    let mut p = Project::from_manifest(&m, "English");
+    p.target = Target::ClaudeCode;
+    p.project_name = "langs".into();
+    p.providers.clear();
+    p.agents = agent::claude_default_pipeline("English").unwrap();
+    p.response_language = "Ukrainian".into();
+    p.scaffold(dir.path(), false).unwrap();
+    ocgen()
+        .arg("landscape")
+        .arg(dir.path())
+        .assert()
+        .success()
+        .stdout(contains("prompts English · answers Ukrainian"));
+    ocgen()
+        .args(["show", "agent", "coordinator", "-p"])
+        .arg(dir.path())
+        .assert()
+        .success()
+        .stdout(contains("answers"))
+        .stdout(contains("Ukrainian"));
+
+    // One language for both: the header names it once, as before.
+    let same = tempdir().unwrap();
+    scaffold_claude(same.path());
+    ocgen()
+        .arg("landscape")
+        .arg(same.path())
+        .assert()
+        .success()
+        .stdout(contains("(Claude Code · English)"))
+        .stdout(contains("answers").not());
+}
+
+#[test]
+fn fields_explain_both_languages() {
+    ocgen()
+        .arg("fields")
+        .assert()
+        .success()
+        .stdout(contains("instruction language"))
+        .stdout(contains("answer language"))
+        // Wrapped to the terminal, so word by word.
+        .stdout(contains("Never answer in"))
+        .stdout(contains("Russian."));
+}

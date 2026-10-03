@@ -12,6 +12,30 @@ struct Field {
     example: &'static str,
 }
 
+const PROJECT_FIELDS: &[Field] = &[
+    Field {
+        label: "instruction language",
+        detail: "The language of the agents' instructions: their system prompts and descriptions, \
+                 seeded from the role presets, and the command and skill texts. English (the \
+                 default) is followed most precisely and costs the fewest tokens, which matters \
+                 most for small local models. Set it with `ocgen new` or `ocgen edit language \
+                 --prompts`.",
+        example: "English",
+    },
+    Field {
+        label: "answer language",
+        detail: "The language the agents answer you in. When it differs from the instruction \
+                 language, the coordinator's prompt ends with an answer line instead of its own \
+                 (\"Answer the user in Ukrainian. Never answer in Russian.\"), telling it to brief \
+                 subagents in the instruction language and keep protocol lines such as \
+                 `Confidence: NN%` as they are; a Claude project's settings.json also gets \
+                 Claude Code's `language` setting. Subagents still report to the coordinator in \
+                 the instruction language. The same language for both changes nothing. Set it \
+                 with `ocgen new` or `ocgen edit language --answers`.",
+        example: "Ukrainian",
+    },
+];
+
 const AGENT_FIELDS: &[Field] = &[
     Field {
         label: "name",
@@ -385,6 +409,11 @@ const CLAUDE_FIELDS: &[Field] = &[
 
 pub fn run() {
     ui::banner("field reference");
+
+    ui::section("Project languages");
+    for f in PROJECT_FIELDS {
+        print_field(f);
+    }
 
     ui::section("Agent fields");
     for f in AGENT_FIELDS {

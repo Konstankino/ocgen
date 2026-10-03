@@ -91,7 +91,8 @@ The wizard first asks **which tool the project is for** (Claude Code or OpenCode
 pass `--target claude` or `--target opencode` to skip that question. For an OpenCode
 project it then asks for:
 
-1. **Project basics** — project name and prompt language.
+1. **Project basics** — project name, instruction language and answer language (see
+   [Languages](#languages)).
 2. **Providers** — define one or more providers (key, display name, npm adapter,
    base URL, and its models). Start from the seeded provider or add your own. Pass
    `ocgen new --base-url <url>` to set the seeded provider's base URL from the command
@@ -140,6 +141,42 @@ role)`, name the role, and fill in the fields yourself — no archetype file inv
 Cross-references stay consistent automatically: the coordinator's task permissions,
 its prompt file, and the `multi` command are all generated from the agent names you
 chose.
+
+### Languages
+
+A project has two languages:
+- the **instruction language** (`language`) for the agents' prompts and descriptions, and for
+  the command and skill texts;
+- the **answer language** (`response_language`) for what you read.
+
+New projects default to **English instructions with Ukrainian answers**. Models follow English
+instructions most precisely, and English costs the fewest tokens, which matters most for small
+local models. Subagents report to the coordinator, so their English costs you nothing.
+
+When the two languages differ:
+- The coordinator's prompt ends with an answer line instead of its own: "Answer the user in
+  Ukrainian. Never answer in Russian." It also tells the coordinator to brief subagents in the
+  instruction language and to keep protocol lines (`Verdict:`, `Confidence: NN%`,
+  `Status: APPROVED`, `Owner:`) exactly as they are, since the hooks parse them.
+- The line goes in the Claude team rule or the OpenCode prompt file, ahead of the adversary loop.
+  It is written in the instruction language.
+- A Claude project's `settings.json` also gets Claude Code's own `language` setting
+  (`"ukrainian"`), which also sets the language of session titles and voice dictation.
+- Projects whose languages match, including every project made before this setting, render
+  exactly as before.
+
+**Caveats:**
+- The `language` setting lives in the committed project settings, so it overrides each
+  teammate's personal choice.
+- Claude Code doesn't document whether it reaches subagents. If it does, their reports come back
+  in the answer language. The worker gate still asks a subagent that drops `Confidence: NN%` to
+  restate it.
+- If a coordinator prompt you edited still says "Respond in English." before its last line,
+  `ocgen landscape` warns that it contradicts the answer line.
+
+An override `manifest.toml` from before this setting asks no answer-language question. Its
+projects answer in the instruction language until you add the `response_language` variable to
+the override.
 
 ### Other commands
 
@@ -1240,6 +1277,7 @@ refuses them, and a copy left by an older ocgen is marked `[embedded; override i
 manifest.toml            # wizard questions (with help text) + default provider(s)
 archetypes/*.toml        # agent role presets (mode, permissions, colour, text)
 coordination/adversary.md.j2     # the coordinator's adversary loop (when the team has one)
+coordination/response.md.j2      # the coordinator's answer line (when answers differ from instructions)
 opencode.json.j2         # the provider/model config template (loops over providers)
 opencode/agents/_agent.md.j2      # one generic agent, rendered per agent
 opencode/commands/multi.md.j2     # a command that fans out to the subagents
@@ -1274,7 +1312,7 @@ the archetype files.
 
 ```bash
 cargo test                       # library-level scaffold tests
-cargo run --example demo -- /tmp/out default Ukrainian   # render without the wizard
+cargo run --example demo -- /tmp/out default English Ukrainian   # render without the wizard (instructions, answers)
 ```
 
 The scaffolding logic lives in the library (`src/render.rs`). The wizard (`src/wizard/`: `mod.rs`
