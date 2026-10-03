@@ -912,6 +912,13 @@ if [ "$(ocgen hook --check 2>/dev/null)" = "ocgen-hooks 9" ]; then ocgen hook te
   state files, so machines with and without ocgen can work on one project. Parity tests
   (`tests/hooks.rs`) run every gate scenario through both implementations and require
   identical results. These tests already caught a stray-error bug in one script.
+- **Tested the way Claude Code runs them.** `tests/e2e_guardrails.rs` takes the hook commands
+  verbatim from a generated `settings.json` and runs them with `bash -c`, the event on stdin and
+  the settings' `env`, routed by matcher — once with this build's `ocgen` on `PATH`, once with
+  none, so the command falls back to the scripts. It covers the approval gate (high-impact
+  commands from any tool, self-approval, a human approval that expires), the loop guard, the
+  WebFetch guard, the worker, plan, task and risk gates, the config audit, and a push phrased
+  around the text gate that the `pre-push` hook still stops before it reaches a remote.
 
 #### The execution-approval line
 
