@@ -126,7 +126,8 @@ fn all_agent_fields_are_configurable() {
     assert!(md.contains("steps: 7"));
     assert!(md.contains("color: \"#123456\"")); // hex quoted
     assert!(md.contains("description: a bespoke agent"));
-    assert!(md.contains("webfetch: allow"));
+    // OpenCode can't limit webfetch to the trusted sites: ocgen makes allow ask.
+    assert!(md.contains("webfetch: ask") && !md.contains("webfetch: allow"));
     assert!(md.contains("Bespoke instructions."));
 }
 
@@ -1022,7 +1023,10 @@ fn claude_powerups_and_workflow_can_be_disabled() {
         serde_json::from_str(&read(dir.path(), ".claude/settings.json")).unwrap();
     assert_eq!(settings["model"], "opus");
     assert!(settings.get("permissions").is_none());
-    assert!(settings.get("hooks").is_none());
+    // Only the WebFetch guard, which every Claude project has.
+    let hooks: Vec<&String> = settings["hooks"].as_object().unwrap().keys().collect();
+    assert_eq!(hooks, ["PreToolUse"]);
+    assert_eq!(settings["hooks"]["PreToolUse"][0]["matcher"], "WebFetch");
     assert!(settings.get("outputStyle").is_none());
     assert!(settings.get("statusLine").is_none());
 }
@@ -1345,7 +1349,9 @@ fn claude_team_disabled_by_default_adds_nothing() {
     let s: serde_json::Value =
         serde_json::from_str(&read(dir.path(), ".claude/settings.json")).unwrap();
     assert!(s.get("teammateMode").is_none());
-    assert!(s.get("env").is_none());
+    // Only the WebFetch guard's list: nothing of a team.
+    let env: Vec<&String> = s["env"].as_object().unwrap().keys().collect();
+    assert_eq!(env, ["OCGEN_WEBFETCH_DOMAINS"]);
     assert!(!dir.path().join(".claude/skills/team/SKILL.md").exists());
     assert!(!dir
         .path()
@@ -1406,9 +1412,14 @@ fn claude_team_enabled_without_hook_stubs() {
         serde_json::from_str(&read(dir.path(), ".claude/settings.json")).unwrap();
     assert_eq!(s["env"]["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"], "1");
     assert_eq!(s["teammateMode"], "auto");
-    // Hooks disabled → no team hook events, and no hook scripts on disk…
+    // Hooks disabled → no team hook events, and no team hook scripts on disk
+    // (only the WebFetch guard, which every Claude project has)…
     assert!(s["hooks"].get("TaskCreated").is_none());
-    assert!(!dir.path().join(".claude/hooks").exists());
+    let scripts: Vec<String> = std::fs::read_dir(dir.path().join(".claude/hooks"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(scripts, ["https-only-fetch.sh"]);
     // …but the /team command is still emitted.
     assert!(dir.path().join(".claude/skills/team/SKILL.md").is_file());
 }
@@ -1503,7 +1514,13 @@ fn team_confidence_zero_disables_gate() {
     assert!(s["env"].get("TEAM_PLAN_GATE").is_none());
     assert!(s["env"].get("TEAM_RISK_ROUNDS").is_none());
     assert!(s["env"].get("TEAM_APPROVAL_GATE").is_none());
-    assert!(s["hooks"].get("PreToolUse").is_none());
+    // No approval gate: PreToolUse holds only the WebFetch guard.
+    let pre: Vec<&serde_json::Value> = s["hooks"]["PreToolUse"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .collect();
+    assert!(pre.iter().all(|g| g["matcher"] == "WebFetch"), "{pre:?}");
     assert!(!dir
         .path()
         .join(".claude/hooks/team-approval-gate.sh")
@@ -1994,7 +2011,9 @@ fn subagent_confidence_gate_wires_independently_of_teams() {
     p2.scaffold(dir2.path(), false).unwrap();
     let s2: serde_json::Value =
         serde_json::from_str(&read(dir2.path(), ".claude/settings.json")).unwrap();
-    assert!(s2.get("env").is_none());
+    // Only the WebFetch guard's list: no confidence gate settings.
+    let env: Vec<&String> = s2["env"].as_object().unwrap().keys().collect();
+    assert_eq!(env, ["OCGEN_WEBFETCH_DOMAINS"]);
     assert!(s2["hooks"].get("SubagentStop").is_none());
     assert!(!dir2
         .path()
@@ -4760,7 +4779,7 @@ fn intent_trusted_domains_are_configurable_and_validated() {
     use ocgen::validate::domain;
     let dir = tempdir().unwrap();
     let mut p = claude_default("ic");
-    p.claude.intent.trusted_domains = vec!["docs.example.org".into()];
+    p.trusted_docs = vec!["docs.example.org".to_string()].into();
     p.scaffold(dir.path(), false).unwrap();
     let md = read(dir.path(), ".claude/skills/intent/SKILL.md");
     assert!(md.contains("WebFetch(domain:docs.example.org)"));
@@ -4786,12 +4805,9 @@ fn intent_trusted_domains_are_configurable_and_validated() {
     ] {
         assert!(domain(bad).is_err(), "{bad}");
     }
-    p.claude.intent.trusted_domains = vec!["https://x.org".into()];
-    assert!(p.claude.intent.validate().is_err());
-
     // Old state without the field gets the defaults.
-    let s: ocgen::claude::IntentSettings = serde_json::from_str("{}").unwrap();
-    assert!(s.trusted_domains.contains(&"docs.github.com".to_string()));
+    let s: Project = serde_json::from_str("{}").unwrap();
+    assert!(s.trusted_docs.contains(&"docs.github.com".to_string()));
 }
 
 #[test]
@@ -5248,16 +5264,16 @@ fn intent_blocks_plain_http_webfetch_with_a_pretooluse_hook() {
         .join("plugin/hf/hooks/https-only-fetch.sh")
         .exists());
 
-    // Off with /intent.
+    // On without /intent too: every WebFetch in the project goes through it.
     let dir = tempdir().unwrap();
     let mut p = claude_default("hf2");
     p.claude.workflow.intent = false;
     p.scaffold(dir.path(), false).unwrap();
     let s = settings_of(dir.path());
-    assert!(!hook_groups(&s, "PreToolUse")
+    assert!(hook_groups(&s, "PreToolUse")
         .iter()
         .any(|g| g["matcher"] == "WebFetch"));
-    assert!(!dir
+    assert!(dir
         .path()
         .join(".claude/hooks/https-only-fetch.sh")
         .exists());
@@ -5314,7 +5330,7 @@ fn verify_fails_a_trusted_shared_hosting_wildcard() {
 fn the_trusted_list_reaches_the_webfetch_guard_and_an_empty_one_trusts_nothing() {
     let dir = tempdir().unwrap();
     let mut p = claude_default("wg");
-    p.claude.intent.trusted_domains = vec!["docs.rs".into(), "*.amazon.com".into()];
+    p.trusted_docs = vec!["docs.rs".to_string(), "*.amazon.com".to_string()].into();
     p.claude.output = Output {
         project: true,
         plugin: true,
@@ -5334,7 +5350,7 @@ fn the_trusted_list_reaches_the_webfetch_guard_and_an_empty_one_trusts_nothing()
     // An empty list: the variable is still set (to nothing), no WebFetch is
     // pre-approved, and the skill says plainly that no site may be fetched.
     let dir = tempdir().unwrap();
-    p.claude.intent.trusted_domains.clear();
+    p.trusted_docs.clear();
     p.scaffold(dir.path(), false).unwrap();
     let s = settings_of(dir.path());
     assert_eq!(s["env"]["OCGEN_WEBFETCH_DOMAINS"], "");

@@ -66,6 +66,7 @@ fn main() -> Result<()> {
             } => wizard::run_edit_language(path, prompts, answers)?,
             EditWhat::Permissions { path, changes } => wizard::run_edit_permissions(path, changes)?,
             EditWhat::Intent { path, changes } => wizard::run_edit_intent(path, changes)?,
+            EditWhat::Docs { path, changes } => wizard::run_edit_docs(path, changes)?,
             EditWhat::Mcp { name, path } => wizard::run_edit_mcp(path, name)?,
         },
         Command::Show {

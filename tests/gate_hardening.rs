@@ -34,7 +34,7 @@ fn gated() -> Project {
         approval_gate: true,
     };
     p.claude.workflow.intent = true;
-    p.claude.intent.trusted_domains = vec!["docs.rs".into()];
+    p.trusted_docs = vec!["docs.rs".to_string()].into();
     p.claude.hooks_extra.config_audit = true;
     p
 }

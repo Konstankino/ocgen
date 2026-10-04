@@ -17,7 +17,9 @@ use crate::templates;
 
 /// The state file's schema. Bump it when a field changes meaning, so an older
 /// ocgen refuses to regenerate a project instead of misreading its state.
-pub const STATE_SCHEMA: u32 = 1;
+/// 2: the trusted documentation sites moved from `claude.intent.trusted_domains`
+/// to the project's `trusted_docs`.
+pub const STATE_SCHEMA: u32 = 2;
 
 /// Everything needed to render a scaffold. Serializable so it can be saved to
 /// the target's state file (e.g. `.opencode/.ocgen-state.json`) and reloaded by
@@ -50,6 +52,9 @@ pub struct Project {
     pub claude: ClaudeConfig,
     /// Claude Code skills to emit (Claude target only).
     pub skills: Vec<Skill>,
+    /// The documentation sites agents may fetch (`ocgen edit docs`), for every
+    /// way they reach the web and both targets.
+    pub trusted_docs: crate::docs::TrustedDocs,
     /// Fingerprint of every file the last scaffold wrote (relative path → hash), so
     /// `doctor` can tell a hand edit from an ocgen change.
     pub generated: BTreeMap<String, String>,
@@ -128,6 +133,20 @@ fn without_response_line(text: &str) -> Option<String> {
     RESPONSE_LINES
         .contains(&last.trim())
         .then(|| format!("{}{tail}", rest.trim_end_matches('\n')))
+}
+
+/// `text` with `para` as its last paragraph — before a closing answer line,
+/// which stays last — and its trailing newlines kept.
+fn with_paragraph(text: &str, para: &str) -> String {
+    let head = text.trim_end_matches('\n');
+    let tail = &text[head.len()..];
+    match without_response_line(head) {
+        Some(rest) => {
+            let line = head[rest.len()..].trim_start_matches('\n');
+            format!("{rest}\n\n{para}\n\n{line}{tail}")
+        }
+        None => format!("{head}\n\n{para}{tail}"),
+    }
 }
 
 /// A language name as the templates compare it: `ukrainian` → `Ukrainian`;
@@ -746,6 +765,45 @@ fn state_file_in(dir: &Path) -> Option<PathBuf> {
 }
 
 /// YAML-safe colour: hex values need quoting so `#` isn't read as a comment.
+/// Whether a Claude subagent can fetch web pages: `WebFetch` in its tools, or no
+/// tools list at all (it inherits every tool), and not disallowed.
+fn claude_agent_fetches(a: &Agent) -> bool {
+    let named = |list: &str| {
+        crate::claude::split_list(list)
+            .iter()
+            .any(|t| t == "WebFetch" || t.starts_with("WebFetch("))
+    };
+    !named(&a.disallowed_tools) && (a.tools.trim().is_empty() || named(&a.tools))
+}
+
+/// OpenCode can't limit `webfetch` to some sites, so ocgen never pre-allows it:
+/// `allow` — and no key at all, which OpenCode reads as allow — become `ask`.
+/// Returns the permissions and whether the agent can fetch (anything but `deny`).
+fn webfetch_asks(permissions: &str) -> (String, bool) {
+    let mut fetches = true;
+    let mut found = false;
+    let mut lines: Vec<String> = permissions
+        .lines()
+        .map(|line| match line.strip_prefix("  webfetch:") {
+            Some(v) if !v.starts_with(' ') || !v.trim().is_empty() => {
+                found = true;
+                match v.trim().trim_matches('"') {
+                    "deny" => {
+                        fetches = false;
+                        line.to_string()
+                    }
+                    _ => "  webfetch: ask".to_string(),
+                }
+            }
+            _ => line.to_string(),
+        })
+        .collect();
+    if !found {
+        lines.push("  webfetch: ask".to_string());
+    }
+    (lines.join("\n"), fetches)
+}
+
 fn color_yaml(color: &str) -> String {
     if color.starts_with('#') {
         format!("\"{color}\"")
@@ -767,6 +825,22 @@ impl Project {
             agents: Vec::new(),
             ..Default::default()
         }
+    }
+
+    /// What an agent that can fetch is told about the trusted documentation
+    /// sites, in the instruction language. `claude`: the guard blocks every other
+    /// site; in OpenCode each fetch asks instead.
+    fn web_note(&self, env: &Environment, claude: bool) -> Result<String> {
+        env.render_str(
+            &templates::load("web-note.md.j2")?,
+            context! {
+                language => canonical_language(&self.language),
+                sites => self.trusted_docs.join(", "),
+                claude => claude,
+            },
+        )
+        .map(|n| n.trim().to_string())
+        .context("rendering the trusted docs note")
     }
 
     /// The language agents answer the user in: `response_language`, else the
@@ -993,12 +1067,21 @@ impl Project {
             // or of its body when it has none.
             let primary = agent.mode == "primary";
             let has_prompt_file = agent.prompt_file && agent.prompt_body.is_some();
-            let body = if primary && !has_prompt_file {
-                self.coordinator_text(&agent.body, &env)?
+            let (mut permissions, fetches) = webfetch_asks(agent.permissions.trim_end());
+            let note = if fetches {
+                Some(self.web_note(&env, false)?)
             } else {
-                agent.body.clone()
+                None
             };
-            let mut permissions = agent.permissions.trim_end().to_string();
+            let with_note = |text: &str| match &note {
+                Some(n) => with_paragraph(text, n),
+                None => text.to_string(),
+            };
+            let body = if primary && !has_prompt_file {
+                self.coordinator_text(&with_note(&agent.body), &env)?
+            } else {
+                with_note(&agent.body)
+            };
             if agent.mode == "primary" {
                 permissions.push_str("\n  task:\n    \"*\": deny");
                 for sub in &subs {
@@ -1034,12 +1117,12 @@ impl Project {
 
             if agent.prompt_file {
                 if let Some(prompt_src) = &agent.prompt_body {
-                    let mut txt = body_as_template(
+                    let mut txt = with_note(&body_as_template(
                         &env,
                         &agent.name,
                         prompt_src,
                         context! { subagents => &subs, language => lang, parallel => false },
-                    );
+                    ));
                     if primary {
                         txt = self.coordinator_text(&txt, &env)?;
                     }
@@ -1108,6 +1191,11 @@ impl Project {
                     }
                 }
             }
+            let body = if claude_agent_fetches(agent) {
+                with_paragraph(&agent.body, &self.web_note(&env, true)?)
+            } else {
+                agent.body.clone()
+            };
             let agent_val = context! {
                 name => agent.name,
                 description => agent.description,
@@ -1123,7 +1211,7 @@ impl Project {
                 skills => crate::claude::split_list(&agent.preload_skills),
                 mcp_servers => servers,
                 background => agent.background,
-                body => agent.body,
+                body => body,
             };
             let md = env
                 .render_str(&agent_tmpl, context! { agent => agent_val })
@@ -1220,8 +1308,8 @@ impl Project {
                         example => i.first_id(),
                         max_words => i.max_words,
                         branch => i.branch.trim(),
-                        allowed_tools => i.allowed_tools(),
-                        trusted_domains => i.trusted_domains.join(", "),
+                        allowed_tools => i.allowed_tools(&self.trusted_docs),
+                        trusted_domains => self.trusted_docs.join(", "),
                         approvers => i.approvers.join(", "),
                         codeowners => codeowners,
                         codeowners_rule => codeowners_rule,
@@ -1364,11 +1452,10 @@ impl Project {
                 components.push((format!("hooks/{script}"), body));
             }
         }
-        // /intent fetches docs over HTTPS only; this PreToolUse hook enforces it.
-        if self.claude.workflow.intent {
-            let body = templates::load_embedded("claude/hooks/https-only-fetch.sh")?;
-            components.push(("hooks/https-only-fetch.sh".to_string(), body));
-        }
+        // Every WebFetch in the project reaches only the trusted documentation
+        // sites, over HTTPS; this PreToolUse hook enforces it.
+        let body = templates::load_embedded("claude/hooks/https-only-fetch.sh")?;
+        components.push(("hooks/https-only-fetch.sh".to_string(), body));
         // /inquire ledgers and /intent reading copies get an HTML view, rendered
         // and shown by this hook.
         if self.renders_notes() {
@@ -1448,6 +1535,7 @@ impl Project {
             subagent_confidence => self.claude.workflow.subagent_confidence,
             loop_guard_max => self.claude.workflow.loop_guard_max,
             check_cmd => self.claude.workflow.check_cmd.trim(),
+            trusted_docs => self.trusted_docs.join(", "),
         };
         components.push((
             "rules/ocgen-workflow.md".to_string(),
@@ -1734,13 +1822,10 @@ impl Project {
                 }),
             );
         }
-        let sub_conf = self.claude.workflow.subagent_confidence;
         let gate_env = self.gate_env();
-        if self.claude.team.enabled
-            || sub_conf > 0
-            || self.worker_gate()
-            || gate_env.contains_key("OCGEN_SANDBOX")
-        {
+        // Whatever the gates read goes in, whichever gates are on: a list left
+        // out reads as unset (the WebFetch guard would block every site).
+        if self.claude.team.enabled || !gate_env.is_empty() {
             let mut env = serde_json::Map::new();
             if self.claude.team.enabled {
                 env.insert("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS".into(), json!("1"));
@@ -1842,13 +1927,11 @@ impl Project {
                 env.insert(k.into(), json!(v));
             }
         }
-        if self.claude.workflow.intent {
-            // The WebFetch guard's trusted documentation sites (empty = none).
-            env.insert(
-                "OCGEN_WEBFETCH_DOMAINS".into(),
-                json!(self.claude.intent.trusted_domains.join(" ")),
-            );
-        }
+        // The WebFetch guard's trusted documentation sites (empty = none).
+        env.insert(
+            "OCGEN_WEBFETCH_DOMAINS".into(),
+            json!(self.trusted_docs.join(" ")),
+        );
         if self.has_blocking_hooks() {
             env.insert(
                 "LOOP_GUARD_MAX_BLOCKS".into(),
@@ -1902,6 +1985,17 @@ impl Project {
             // Research goes to the shell-free `explorer`; the built-in Explore
             // ignores CLAUDE.md and its shell one-liners prompt under the read block.
             rules.deny.push("Agent(Explore)".into());
+        }
+        // The trusted documentation sites are fetched without asking, by every
+        // agent and skill. Only with the permission defaults: without them the
+        // user manages settings.json, and the WebFetch guard, which blocks every
+        // other site, is on either way.
+        if self.claude.powerups.permissions {
+            for r in self.trusted_docs.webfetch_rules() {
+                if !rules.allow.contains(&r) {
+                    rules.allow.push(r);
+                }
+            }
         }
         rules
     }
@@ -2116,13 +2210,11 @@ impl Project {
                 json!({ "matcher": "Write|Edit|MultiEdit", "hooks": [ command_hook(hook_cmd(prefix, dir, "inquire-notes.sh")) ] }),
             );
         }
-        if self.claude.workflow.intent {
-            // Deterministic HTTPS-only line for WebFetch (the docs /intent reads).
-            push(
-                "PreToolUse",
-                json!({ "matcher": "WebFetch", "hooks": [ command_hook(hook_cmd(prefix, dir, "https-only-fetch.sh")) ] }),
-            );
-        }
+        // Deterministic line for every WebFetch: HTTPS, trusted docs sites only.
+        push(
+            "PreToolUse",
+            json!({ "matcher": "WebFetch", "hooks": [ command_hook(hook_cmd(prefix, dir, "https-only-fetch.sh")) ] }),
+        );
         if x.drop_noop_cd {
             // `cd <this folder> && …` → `…`, so the read block can check its paths.
             push(
@@ -3587,6 +3679,16 @@ fn migrate_state(value: &mut Value) -> Result<()> {
                 }
             }
         }
+    }
+
+    // Schema 1 kept the trusted documentation sites with /intent; they are the
+    // project's now. An explicit `[]` (trust nothing) moves as it is.
+    let old_docs = value
+        .pointer_mut("/claude/intent")
+        .and_then(Value::as_object_mut)
+        .and_then(|intent| intent.remove("trusted_domains"));
+    if let (Some(docs), Some(obj)) = (old_docs, value.as_object_mut()) {
+        obj.entry("trusted_docs").or_insert(docs);
     }
 
     // Determine a default provider key for agents that lack one.

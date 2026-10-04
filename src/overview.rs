@@ -507,6 +507,13 @@ fn run_claude(root: &Path, project: &Project) -> Result<()> {
         },
     );
     ui::kv(
+        "trusted docs",
+        &match project.trusted_docs.len() {
+            0 => ui::muted("none — every web fetch is blocked"),
+            n => format!("{n} site(s) — `ocgen edit docs` to see or change them"),
+        },
+    );
+    ui::kv(
         "sandbox",
         &if project.claude.sandbox.enabled {
             format!(

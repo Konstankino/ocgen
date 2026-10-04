@@ -352,6 +352,46 @@ pub enum EditWhat {
         #[command(flatten)]
         changes: IntentCli,
     },
+    /// The documentation sites agents may fetch: one list for every agent, skill
+    /// and team member (both targets).
+    ///
+    /// Claude projects: a PreToolUse guard blocks every WebFetch to any other site
+    /// or over plain http://, and fetching a trusted site never asks. OpenCode
+    /// can't limit fetching to some sites, so there each fetch asks and the agents
+    /// are told the list. WebSearch stays open; opening a result is a fetch.
+    /// Without flags it shows the list.
+    #[command(after_help = DOCS_EXAMPLES)]
+    Docs {
+        /// Directory of the existing project.
+        #[arg(short, long, default_value = ".")]
+        path: String,
+        #[command(flatten)]
+        changes: DocsCli,
+    },
+}
+
+const DOCS_EXAMPLES: &str = "\
+Examples:
+  ocgen edit docs                                   # show the trusted sites
+  ocgen edit docs --trust docs.example.com          # trust one more site (repeatable)
+  ocgen edit docs --trust \"*.amazon.com\"            # every subdomain (not shared hosts like *.github.io)
+  ocgen edit docs --untrust go.dev                  # stop trusting a site";
+
+/// Trusted documentation sites given on the command line (`ocgen edit docs`).
+#[derive(clap::Args, Default)]
+pub struct DocsCli {
+    /// Trust a documentation site (repeatable). A leading `*.` trusts every
+    /// subdomain, e.g. "*.amazon.com" — never on a shared host such as
+    /// *.github.io. An https:// URL is accepted (its host is stored); http:// is
+    /// refused: docs are fetched over HTTPS only.
+    #[arg(long, value_name = "DOMAIN")]
+    pub trust: Vec<String>,
+    /// Stop trusting a documentation site (repeatable).
+    #[arg(long, value_name = "DOMAIN")]
+    pub untrust: Vec<String>,
+    /// Show the trusted sites and change nothing.
+    #[arg(long, conflicts_with_all = ["trust", "untrust"])]
+    pub show: bool,
 }
 
 const INTENT_EXAMPLES: &str = "\
@@ -388,12 +428,13 @@ pub struct IntentCli {
     /// Remote branch to check for numbers already taken ("" = the remote's default).
     #[arg(long, value_name = "BRANCH")]
     pub branch: Option<String>,
-    /// Trust a documentation site: /intent may fetch it without asking (repeatable).
+    /// Trust a documentation site (repeatable) — the same project-wide list as
+    /// `ocgen edit docs --trust`: every agent and skill may fetch it without asking.
     /// A leading `*.` trusts every subdomain, e.g. "*.amazon.com". An https:// URL
     /// is accepted (its host is stored); http:// is refused — docs are HTTPS only.
     #[arg(long, value_name = "DOMAIN")]
     pub trust_domain: Vec<String>,
-    /// Stop trusting a documentation site (repeatable).
+    /// Stop trusting a documentation site (repeatable; same as `ocgen edit docs --untrust`).
     #[arg(long, value_name = "DOMAIN")]
     pub untrust_domain: Vec<String>,
     /// Add an approver who must sign off before work starts (repeatable): a GitHub

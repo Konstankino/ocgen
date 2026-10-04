@@ -57,7 +57,7 @@ fi
 host=${host%.}
 
 if [ -z "$(printf '%s' "${OCGEN_WEBFETCH_DOMAINS:-}" | tr -d '[:space:]')" ]; then
-    echo "Blocked: no documentation sites are trusted in this project, so WebFetch is off. Ask the user to trust one with \`ocgen edit intent --trust-domain $host\`, or skip it." >&2
+    echo "Blocked: no documentation sites are trusted in this project, so WebFetch is off. Ask the user to trust one with \`ocgen edit docs --trust $host\`, or skip it." >&2
     exit 2
 fi
 set -f # "*.example.com" entries must not glob
@@ -73,5 +73,5 @@ for d in $OCGEN_WEBFETCH_DOMAINS; do
     *) [ "$host" = "$d" ] && exit 0 ;;
     esac
 done
-echo "Blocked: $host is not a trusted documentation site for this project (trusted: $OCGEN_WEBFETCH_DOMAINS). Ask the user to trust it with \`ocgen edit intent --trust-domain $host\`, or skip it." >&2
+echo "Blocked: $host is not a trusted documentation site for this project (trusted: $OCGEN_WEBFETCH_DOMAINS). Ask the user to trust it with \`ocgen edit docs --trust $host\`, or skip it." >&2
 exit 2

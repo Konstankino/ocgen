@@ -844,7 +844,10 @@ fn webfetch_guard_messages() {
     let untrusted = run(TRUSTED, "https://example.com/x");
     assert_eq!(untrusted.code, 2);
     assert!(
-        untrusted.stderr.contains("example.com") && untrusted.stderr.contains("--trust-domain"),
+        untrusted.stderr.contains("example.com")
+            && untrusted
+                .stderr
+                .contains("ocgen edit docs --trust example.com"),
         "{}",
         untrusted.stderr
     );

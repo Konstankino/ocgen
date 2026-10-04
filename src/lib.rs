@@ -19,6 +19,7 @@ pub mod archetype;
 pub mod claude;
 mod clock;
 pub mod diff;
+pub mod docs;
 pub mod gitcheck;
 pub mod hooks;
 pub mod manifest;

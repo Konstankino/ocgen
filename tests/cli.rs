@@ -1077,7 +1077,10 @@ fn edit_permissions_list_shows_every_rule_at_a_glance() {
         .success()
         // Every list, generated rules and yours, each with where it comes from.
         // Counts are what settings.json holds: the shadowed allow isn't in it.
-        .stdout(contains("allow (9)"))
+        .stdout(contains(format!(
+            "allow ({})",
+            9 + ocgen::docs::DEFAULT_TRUSTED_DOMAINS.len()
+        )))
         .stdout(contains(format!(
             "ask ({})",
             ocgen::claude::HIGH_IMPACT_ASK.len()

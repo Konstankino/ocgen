@@ -752,8 +752,10 @@ fn a_gate_switch_ocgen_does_not_set_is_judged_too() {
 }
 
 /// A key only a gate ocgen doesn't generate reads loosens nothing: no worker
-/// gate, no risk gate, no WebFetch guard here. Not from settings.local.json,
-/// nor from the user's settings, which apply to every project.
+/// gate, no risk gate here. Not from settings.local.json, nor from the user's
+/// settings, which apply to every project. (The WebFetch guard is in every
+/// Claude project, so a site added to its list always counts — see
+/// `values_are_judged_as_either_hook_twin_reads_them`.)
 #[test]
 fn a_key_no_generated_gate_reads_is_not_a_failure() {
     let dir = tempdir().unwrap();
@@ -772,7 +774,6 @@ fn a_key_no_generated_gate_reads_is_not_a_failure() {
         "SUBAGENT_READONLY_ROLES": "implementer general-purpose",
         "TEAM_TASK_GATE": "1",
         "TEAM_READONLY_ROLES": "implementer",
-        "OCGEN_WEBFETCH_DOMAINS": "evil.example",
     } });
     write_json(&dir.path().join(".claude/settings.local.json"), &unread);
     let c = named(&verify_lib(dir.path()), "effective settings").clone();

@@ -276,6 +276,17 @@ const CLAUDE_FIELDS: &[Field] = &[
         example: "commit",
     },
     Field {
+        label: "trusted docs",
+        detail: "The documentation sites agents may fetch (`ocgen edit docs`): one list for every \
+                 agent, skill and team member. Claude: a PreToolUse guard blocks every WebFetch to \
+                 any other site or over plain http://, and a trusted site is fetched without asking \
+                 (with the permission defaults). OpenCode can't limit fetching to some sites, so \
+                 each fetch asks and the agents are told the list. WebSearch stays open; opening a \
+                 result is a fetch. Exact hosts, or `*.` for every subdomain — never on a shared \
+                 host such as *.github.io. Empty trusts nothing: every fetch is blocked.",
+        example: "ocgen edit docs --trust docs.example.com",
+    },
+    Field {
         label: "output / plugin",
         detail: "The Claude target can emit a project .claude/ tree, a distributable plugin                  (.claude-plugin/ + a GitHub release workflow), or both. A plugin needs a GitHub                  owner/repo so users can install it with `claude plugin marketplace add`.",
         example: "both  (--output both --repo owner/repo)",

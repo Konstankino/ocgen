@@ -1011,7 +1011,7 @@ impl<'a> Hook<'a> {
         let list = self.env("OCGEN_WEBFETCH_DOMAINS");
         if list.trim().is_empty() {
             return Outcome::block(format!(
-                "Blocked: no documentation sites are trusted in this project, so WebFetch is off. Ask the user to trust one with `ocgen edit intent --trust-domain {host}`, or skip it.\n"
+                "Blocked: no documentation sites are trusted in this project, so WebFetch is off. Ask the user to trust one with `ocgen edit docs --trust {host}`, or skip it.\n"
             ));
         }
         let trusted = list.split_whitespace().any(|d| {
@@ -1027,7 +1027,7 @@ impl<'a> Hook<'a> {
             Outcome::allow()
         } else {
             Outcome::block(format!(
-                "Blocked: {host} is not a trusted documentation site for this project (trusted: {list}). Ask the user to trust it with `ocgen edit intent --trust-domain {host}`, or skip it.\n"
+                "Blocked: {host} is not a trusted documentation site for this project (trusted: {list}). Ask the user to trust it with `ocgen edit docs --trust {host}`, or skip it.\n"
             ))
         }
     }

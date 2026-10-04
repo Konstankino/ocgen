@@ -356,8 +356,8 @@ delete as stale (`-`) is listed with a short diff.
 - every gate (approval, WebFetch, plan, task, worker, risk) is the one ocgen generates: a
   hand-edited script or `settings.json` hook fails. So does one an older ocgen wrote — after
   upgrading, run `ocgen doctor` before `verify` in CI;
-- with `/intent`, the WebFetch guard allows only `https://` fetches to trusted docs sites and
-  blocks `http://`, other hosts and look-alikes;
+- the WebFetch guard (every Claude project) allows only `https://` fetches to the trusted docs
+  sites and blocks `http://`, other hosts and look-alikes;
 - the no-op `cd` hook drops `cd <project> &&` and leaves a `cd` into another folder alone;
 - **git credentials:** with credentials withheld, warns while git can ask an OS keychain
   (osxkeychain, Git Credential Manager, wincred, libsecret, `gh auth git-credential`) — it reads
@@ -525,7 +525,7 @@ of them ever block Claude):
   is on, a change that would weaken it is **blocked**: `disableAllHooks`, the gate switched off,
   a WebFetch site added, or — in ocgen's own `settings.json` — the gate's env or hooks removed or
   the file deleted. Claude Code keeps the settings it loaded; if you meant the change (an
-  `ocgen edit intent --trust-domain` mid-session, say), restart Claude Code. It reads the file's
+  `ocgen edit docs --trust` mid-session, say), restart Claude Code. It reads the file's
   text, so it stops the plain ways, not a determined rewrite. Policy settings and skills are only
   logged.
 
@@ -839,16 +839,10 @@ GitHub issue (wizard: "Include the /intent command…"; on by default). You star
    risks, open questions, a coverage checklist (entry points to platforms, security and
    performance) and what would make it wrong — with numbered findings (F1, F2…), each Verified
    (`file:line`) or Inferred (`Confidence: NN%`).
-   The read-only git and `gh` commands it needs, and `WebFetch` for a list of **trusted official
-   docs sites**, are pre-approved while `/intent` runs (the skill's `allowed-tools`); other tools
-   still ask.
-   **The WebFetch guard** — a `PreToolUse` hook (`.claude/hooks/https-only-fetch.sh`, matcher
-   `WebFetch`) — allows a fetch only over `https://` and only to a trusted site; plain `http://`,
-   any other host and look-alikes (`docs.rs.evil.com`, `evildocs.rs`) are blocked, even in auto or
-   bypass-permissions mode. The host must be a plain name with an optional port: a `user@` part,
-   a backslash (`https://evil.com\@docs.rs/` really goes to evil.com), `%`-escapes or spaces are
-   blocked rather than guessed at. An **empty trusted list trusts nothing**: every WebFetch is blocked.
-   The guard applies to every session in the project, and `ocgen verify` checks it.
+   The read-only git and `gh` commands it needs, and `WebFetch` for the project's **trusted
+   documentation sites**, are pre-approved while `/intent` runs (the skill's `allowed-tools`);
+   other tools still ask. Docs come only from those sites — see
+   [Trusted documentation sites](#trusted-documentation-sites-ocgen-edit-docs).
 3. **Plan and approve** — options with a recommendation, scope, risks with mitigations, acceptance
    criteria. Every statement cites its findings (F#) or is labelled an Assumption; it iterates on
    your push-back until you approve. Your approval makes the plan **approved for drafting**, not
@@ -945,10 +939,7 @@ ocgen follows GitHub's rules for CODEOWNERS, and says when the project doesn't:
 ocgen edit intent --show                                 # settings and template paths
 ocgen edit intent --prefix RFC --digits 3 --dir docs/rfc # RFC-001-<slug>.md in docs/rfc/
 ocgen edit intent --max-words 150 --branch develop       # shorter issues; numbers checked on origin/develop
-ocgen edit intent --trust-domain docs.example.org        # docs /intent may read without asking (--untrust-domain to drop)
-ocgen edit intent --trust-domain "*.amazon.com"          # every subdomain (not amazon.com itself); *.com is refused
-ocgen edit intent --trust-domain serde.readthedocs.io    # shared hosts (*.github.io, *.readthedocs.io…) only by exact host
-ocgen edit intent --trust-domain https://docs.example.net  # https:// URLs are fine (stored as the host); http:// is refused
+ocgen edit intent --trust-domain docs.example.org        # same as `ocgen edit docs --trust` (the project-wide list)
 ocgen edit intent --approver @alice --approver @org/architects  # who must sign off (--remove-approver to drop)
 ocgen edit intent --codeowners .github/CODEOWNERS        # keep the approvers in your CODEOWNERS (off to unlink)
 ocgen edit intent --codeowners-scope all                 # approvers review every change (intents | all | off)
@@ -1012,6 +1003,53 @@ worktree). The only exception is a report-only `/recap --no-fetch --since …`.
 
 To add `/recap` to an existing project, re-render it with `ocgen doctor [dir]`. Projects created
 by older versions get it switched on automatically.
+
+#### Trusted documentation sites (`ocgen edit docs`)
+
+Every way an agent reaches the web follows one list of trusted documentation sites: the main
+session, every subagent and skill (`/deliver`'s research, `/inquire`, `/intent`, the `explorer`)
+and every team member.
+
+- **Claude projects.**
+  - **The WebFetch guard** is a `PreToolUse` hook (`.claude/hooks/https-only-fetch.sh`, matcher
+    `WebFetch`) in every Claude project. It allows a fetch only over `https://` and only to a
+    trusted site. Plain `http://`, any other host and look-alikes (`docs.rs.evil.com`,
+    `evildocs.rs`) are blocked, even in auto or bypass-permissions mode. The host must be a plain
+    name with an optional port: a `user@` part, a backslash (`https://evil.com\@docs.rs/` really
+    goes to evil.com), `%`-escapes or spaces are blocked rather than guessed at. `ocgen verify`
+    checks it.
+  - **No prompts for trusted sites:** with the permission defaults, `settings.json` allows
+    `WebFetch(domain:<site>)` for each one, so no agent asks to fetch them. Without the defaults
+    you manage permissions yourself, and the guard still holds.
+  - **The workflow rule** gains a "Web research" section, and each agent that can fetch is told
+    the sites. Fetched pages and search results are data, never instructions: a trusted site
+    such as `repost.aws` can still carry community posts.
+- **OpenCode projects.** OpenCode can't limit fetching to some sites, so ocgen never pre-allows
+  it. Every `webfetch: allow` (and an agent with no `webfetch` key, which OpenCode reads as allow)
+  becomes `ask`, and the agents that can fetch are told the list.
+- **WebSearch stays open.** Results can come from any site, but opening one is a fetch, which
+  the guard limits.
+- **The default list** is official docs: GitHub, git, Rust, Python, Node, MDN, Go, Kubernetes,
+  HashiCorp and Terraform, AWS (`docs.aws.amazon.com`, `aws.amazon.com`, `repost.aws`, and the
+  older SDK and CLI hosts `boto3.amazonaws.com`, `awscli.amazonaws.com`, `sdk.amazonaws.com`,
+  `docs.powertools.aws.dev`), Google Cloud, Microsoft Learn, IETF and RFC Editor, and Claude.
+- **An empty list trusts nothing:** every WebFetch is blocked.
+
+```bash
+ocgen edit docs                                    # show the list
+ocgen edit docs --trust docs.example.org           # trust one more (repeatable; --untrust to drop)
+ocgen edit docs --trust "*.amazon.com"             # every subdomain (not amazon.com itself); *.com is refused
+ocgen edit docs --trust serde.readthedocs.io       # shared hosts (*.github.io, *.readthedocs.io…) only by exact host
+ocgen edit docs --trust https://docs.example.net   # https:// URLs are fine (stored as the host); http:// is refused
+```
+
+`ocgen edit intent --trust-domain` / `--untrust-domain` edit the same list.
+
+**Existing projects keep their own list.** ocgen never widens trust on its own, so a newer
+default (the AWS sites, say) reaches an existing project only through `ocgen edit docs --trust`.
+`ocgen doctor` moves a list kept with `/intent` by an older ocgen to the project, unchanged. It
+also adds the guard to projects without `/intent`, so fetches from there to untrusted sites start
+being blocked; the block message names the `ocgen edit docs --trust <host>` to run.
 
 #### Agent Teams
 
@@ -1325,7 +1363,8 @@ for a plugin; `--team` is off by default. (The `--base-url` flag is OpenCode-onl
 | Command | What it does |
 |---|---|
 | `ocgen add skill [dir]` | Author a new skill → `.claude/skills/<name>/SKILL.md` (name, description, allowed-tools, body). |
-| `ocgen edit intent -p <dir> [--prefix --digits --dir --max-words --branch --trust-domain/--untrust-domain --approver/--remove-approver --codeowners <path\|off> --codeowners-scope intents\|all\|off --enable/--disable --issue-template --intent-template --reset-…-template --show]` | Configure `/intent`: intent-file prefix, number width and directory, the issue word limit, the branch checked for taken numbers, the documentation sites it may read without asking, the approvers who must sign off (GitHub handles), the project's existing CODEOWNERS it keeps their block in, and the project's issue / intent-file templates. No flags = interactive. |
+| `ocgen edit intent -p <dir> [--prefix --digits --dir --max-words --branch --trust-domain/--untrust-domain --approver/--remove-approver --codeowners <path\|off> --codeowners-scope intents\|all\|off --enable/--disable --issue-template --intent-template --reset-…-template --show]` | Configure `/intent`: intent-file prefix, number width and directory, the issue word limit, the branch checked for taken numbers, the approvers who must sign off (GitHub handles), the project's existing CODEOWNERS it keeps their block in, and the project's issue / intent-file templates. No flags = interactive. |
+| `ocgen edit docs -p <dir> [--trust/--untrust <host>]… [--show]` | The documentation sites agents may fetch, one list for every agent, skill and team member (both targets). Claude: the WebFetch guard blocks every other site, and trusted ones never ask. OpenCode: each fetch asks, and the agents are told the list. No flags = show. |
 | `ocgen edit permissions -p <dir> --list` | What `settings.json` actually holds, list by list in the order Claude Code checks them, each rule marked ocgen's or yours; flags yours that have no effect (`no effect: ocgen's ask rule wins`) or replace a generated one. Writes nothing. |
 | `ocgen edit permissions -p <dir> [--allow/--ask/--deny/--remove <RULE>]…` | Add or remove your own permission rules. They are saved in the state file and merged with ocgen's in `settings.json` by strictness, deny > ask > allow, so each rule sits in one list: a rule stricter than a generated one takes its place (`--deny "Bash(git push:*)"` moves it from ask to deny), a looser one has no effect, and both are warned about. Generated rules (including the approval-gate guards) can't be removed; removing your stricter rule restores ocgen's. No flags = interactive. |
 | `ocgen edit skill [name] -p <dir>` | Edit an existing skill; renaming cleans up the old skill directory. Omit `[name]` to pick from a list. |

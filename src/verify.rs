@@ -1519,7 +1519,11 @@ fn hook_commands(p: &Probe) -> Check {
 fn https_only_fetch(p: &Probe) -> Check {
     let name = "WebFetch guard";
     let Some((event, group, cmd)) = p.find("PreToolUse", "https-only-fetch") else {
-        return check(name, Status::Skip, "/intent not enabled");
+        return check(
+            name,
+            Status::Warn,
+            "not generated — every Claude project has one now; run `ocgen doctor` to add it",
+        );
     };
     let env = &p.env;
     let run = |url: &str| {

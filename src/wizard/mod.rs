@@ -15,7 +15,7 @@ use ocgen::target::Target;
 use ocgen::templates;
 use ocgen::validate::{self, unique_ident};
 
-use crate::cli::{IntentCli, OutputArg, PermissionsCli, TargetArg, TeamCli};
+use crate::cli::{DocsCli, IntentCli, OutputArg, PermissionsCli, TargetArg, TeamCli};
 use crate::prompt::{
     ask, ask_color, ask_confirm, ask_multi, ask_optional_v, ask_select, ask_v, edit_multiline,
 };
@@ -1228,6 +1228,60 @@ fn configure_intent(
 
 /// `ocgen edit intent` — /intent's numbering, issue word limit and templates.
 /// Flags apply directly; otherwise interactive.
+/// `ocgen edit docs`: the documentation sites every agent may fetch.
+pub fn run_edit_docs(path: String, changes: DocsCli) -> Result<()> {
+    let (root, mut project) = Project::discover(Path::new(&path))?;
+    if !changes.show && (!changes.trust.is_empty() || !changes.untrust.is_empty()) {
+        let was = project.trusted_docs.clone();
+        edit_trusted_docs(&mut project.trusted_docs, &changes.trust, &changes.untrust)?;
+        if project.trusted_docs != was {
+            let written = project.scaffold(&root, true)?;
+            report_written(&written);
+        }
+    }
+    ui::section("trusted docs");
+    ui::kv("trusted docs", &trusted_docs_line(&project.trusted_docs));
+    ui::kv(
+        "applies to",
+        if project.target == Target::ClaudeCode {
+            "every WebFetch, by every agent and skill — trusted sites never ask, the guard blocks the rest"
+        } else {
+            "every agent that can fetch — each fetch asks (OpenCode can't limit fetching to some sites)"
+        },
+    );
+    Ok(())
+}
+
+/// Trust, then untrust, documentation sites. A host that can't be trusted
+/// stops it all before anything is written.
+fn edit_trusted_docs(
+    list: &mut ocgen::docs::TrustedDocs,
+    trust: &[String],
+    untrust: &[String],
+) -> Result<()> {
+    for d in trust {
+        let d = validate::trusted_domain(d).map_err(|e| anyhow!("trusted docs: {e}"))?;
+        if !list.contains(&d) {
+            list.push(d);
+        }
+    }
+    for d in untrust {
+        // Lenient: whatever form it was typed in, drop the matching host.
+        let d = validate::trusted_domain(d).unwrap_or_else(|_| d.trim().to_lowercase());
+        list.retain(|x| *x != d);
+    }
+    Ok(())
+}
+
+/// The trusted sites as `--show` prints them.
+fn trusted_docs_line(list: &[String]) -> String {
+    if list.is_empty() {
+        ui::muted("none — every web fetch is blocked (`ocgen edit docs --trust <host>`)")
+    } else {
+        list.join(", ")
+    }
+}
+
 pub fn run_edit_intent(path: String, changes: IntentCli) -> Result<()> {
     use ocgen::claude::{INTENT_FILE_TEMPLATE, INTENT_ISSUE_TEMPLATE};
     let (root, mut project) = Project::discover(Path::new(&path))?;
@@ -1241,6 +1295,7 @@ pub fn run_edit_intent(path: String, changes: IntentCli) -> Result<()> {
     let was = (
         project.claude.workflow.intent,
         project.claude.intent.clone(),
+        project.trusted_docs.clone(),
     );
 
     if changes.is_empty() {
@@ -1273,18 +1328,6 @@ pub fn run_edit_intent(path: String, changes: IntentCli) -> Result<()> {
         if let Some(v) = &changes.branch {
             s.branch = v.trim().to_string();
         }
-        for d in &changes.trust_domain {
-            let d =
-                validate::trusted_domain(d).map_err(|e| anyhow!("intent trusted domain: {e}"))?;
-            if !s.trusted_domains.contains(&d) {
-                s.trusted_domains.push(d);
-            }
-        }
-        for d in &changes.untrust_domain {
-            // Lenient: whatever form it was typed in, drop the matching host.
-            let d = validate::trusted_domain(d).unwrap_or_else(|_| d.trim().to_lowercase());
-            s.trusted_domains.retain(|x| *x != d);
-        }
         for a in &changes.approver {
             s.add_approver(a)?;
         }
@@ -1309,12 +1352,19 @@ pub fn run_edit_intent(path: String, changes: IntentCli) -> Result<()> {
             project.claude.workflow.intent = false;
         }
     }
+    // The project's trusted documentation sites (`ocgen edit docs`).
+    edit_trusted_docs(
+        &mut project.trusted_docs,
+        &changes.trust_domain,
+        &changes.untrust_domain,
+    )?;
     // Check everything before writing anything.
     project.claude.intent.validate()?;
 
     if (
         project.claude.workflow.intent,
         project.claude.intent.clone(),
+        project.trusted_docs.clone(),
     ) != was
     {
         let written = project.scaffold(&root, true)?;
@@ -1422,14 +1472,7 @@ fn print_intent(project: &Project, root: &Path) {
             format!("origin/{}", s.branch)
         },
     );
-    ui::kv(
-        "trusted docs",
-        &if s.trusted_domains.is_empty() {
-            ui::muted("none — every web fetch asks")
-        } else {
-            s.trusted_domains.join(", ")
-        },
-    );
+    ui::kv("trusted docs", &trusted_docs_line(&project.trusted_docs));
     ui::kv(
         "approvers",
         &if s.approvers.is_empty() {

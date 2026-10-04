@@ -760,6 +760,31 @@ fn hooks_learn_the_sandbox_from_the_settings_env() {
 }
 
 #[test]
+fn the_helper_reset_is_written_without_a_team_or_worker_gate() {
+    // The settings env used to be written only with a team, a worker gate or a
+    // sandboxed check or formatter: a sandbox on its own lost the reset (and
+    // the WebFetch guard its list).
+    let mut p = claude_default("sb-git-bare");
+    p.claude.sandbox.enabled = true;
+    p.claude.workflow.subagent_confidence = 0;
+    p.claude.workflow.check_cmd.clear();
+    p.claude.hooks_extra.format_cmd.clear();
+    let dir = tempdir().unwrap();
+    p.scaffold(dir.path(), false).unwrap();
+    let env = hook_env(dir.path());
+    assert_eq!(
+        env.get("GIT_CONFIG_KEY_0").and_then(|v| v.as_str()),
+        Some("credential.helper"),
+        "{env:?}"
+    );
+    assert_eq!(
+        env.get("GIT_CONFIG_VALUE_0").and_then(|v| v.as_str()),
+        Some("")
+    );
+    assert!(env.contains_key("OCGEN_WEBFETCH_DOMAINS"), "{env:?}");
+}
+
+#[test]
 fn withheld_credentials_start_git_with_no_credential_helper() {
     // The sandbox hides credential files and variables, not an OS keychain: git
     // reaches one through a credential helper (osxkeychain, Git Credential
