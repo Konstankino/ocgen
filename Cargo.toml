@@ -1,6 +1,6 @@
 [package]
 name = "ocgen"
-version = "0.7.1"
+version = "0.7.2"
 edition = "2021"
 description = "Interactive bootstrapper for LLM multi-agent projects (OpenCode, Claude Code)"
 license = "MIT"
