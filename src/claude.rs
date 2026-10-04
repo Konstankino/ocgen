@@ -132,8 +132,9 @@ pub const INTENT_FILE_TEMPLATE: &str = ".claude/intent/intent-template.md";
 /// is used). ocgen links an existing one; it never creates one.
 pub const CODEOWNERS_PATHS: [&str; 3] = [".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS"];
 
-/// ocgen's symlink to the CODEOWNERS file it is linked to.
-pub const CODEOWNERS_LINK: &str = ".claude/CODEOWNERS";
+/// Where ocgen 0.7.1 and older kept a symbolic link to the linked CODEOWNERS;
+/// the next run removes it.
+pub const OLD_CODEOWNERS_LINK: &str = ".claude/CODEOWNERS";
 
 /// What ocgen's CODEOWNERS block makes the /intent approvers required reviewers
 /// of (once branch protection requires a review from code owners).

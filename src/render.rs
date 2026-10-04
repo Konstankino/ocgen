@@ -1202,6 +1202,11 @@ impl Project {
         }
         if self.claude.workflow.intent {
             let i = &self.claude.intent;
+            // The linked CODEOWNERS and the rule ocgen's block holds there.
+            let (codeowners, codeowners_rule) = match self.codeowners_block() {
+                Some((rel, Some(rule))) => (rel, rule),
+                _ => Default::default(),
+            };
             components.push((
                 "commands/intent.md".to_string(),
                 env.render_str(
@@ -1218,6 +1223,8 @@ impl Project {
                         allowed_tools => i.allowed_tools(),
                         trusted_domains => i.trusted_domains.join(", "),
                         approvers => i.approvers.join(", "),
+                        codeowners => codeowners,
+                        codeowners_rule => codeowners_rule,
                         // The research and review agents it hands work to: the
                         // project's own where they exist (the built-in Explore is
                         // denied when the explorer is preferred).
@@ -2330,7 +2337,7 @@ impl Project {
             if let PrePush::Installed(p) = self.install_pre_push(target)? {
                 written.push(p);
             }
-            self.sync_codeowners_link(target);
+            codeowners::remove_old_link(target);
         }
 
         // Persist project state so `add agent` can reload and re-render, with a

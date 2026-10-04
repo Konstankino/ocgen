@@ -1642,18 +1642,16 @@ fn edit_intent_links_the_projects_codeowners() {
     assert!(text.starts_with("* @owner\n"), "{text}");
     assert!(text.contains("/docs/adr/ @alice"), "{text}");
     assert_eq!(intent_state(dir.path())["codeowners"], ".github/CODEOWNERS");
-    #[cfg(unix)]
-    assert_eq!(
-        std::fs::read_link(dir.path().join(".claude/CODEOWNERS")).unwrap(),
-        Path::new("../.github/CODEOWNERS")
-    );
+    // No link to it in .claude/: the state and the /intent skill name it.
+    assert!(std::fs::symlink_metadata(dir.path().join(".claude/CODEOWNERS")).is_err());
     ocgen()
         .args(["edit", "intent", "--show", "-p"])
         .arg(dir.path())
         .assert()
         .success()
         .stdout(contains(".github/CODEOWNERS"))
-        .stdout(contains("intents"));
+        .stdout(contains("intents"))
+        .stdout(contains(".claude/CODEOWNERS").not());
 
     ocgen()
         .args(["edit", "intent", "--codeowners-scope", "all", "-p"])
@@ -1669,7 +1667,7 @@ fn edit_intent_links_the_projects_codeowners() {
         .success();
     assert_eq!(std::fs::read_to_string(&owners).unwrap(), "* @owner\n");
 
-    // Unlinked: the link and the block go; the file and your lines stay.
+    // Unlinked: the block goes; the file and your lines stay.
     ocgen()
         .args(["edit", "intent", "--codeowners-scope", "intents", "-p"])
         .arg(dir.path())

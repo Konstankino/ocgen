@@ -2208,8 +2208,8 @@ fn ignored_overrides() -> Option<Check> {
 }
 
 /// The CODEOWNERS ocgen is linked to (`ocgen edit intent --codeowners`): still
-/// there and text, the link at `.claude/CODEOWNERS` in place, and no rule of the
-/// user's after ocgen's block taking precedence over it. The block's lines are
+/// there and text, and no rule of the user's after ocgen's block taking
+/// precedence over it. The block's lines are
 /// checked with the other files ("files up to date").
 fn codeowners(project: &Project, root: &Path) -> Check {
     let name = "CODEOWNERS";
@@ -2236,15 +2236,7 @@ fn codeowners(project: &Project, root: &Path) -> Check {
     } else {
         "no block (no approvers, or scope off)".to_string()
     };
-    check(
-        name,
-        Status::Pass,
-        format!(
-            "{} (linked at {}); {what}",
-            s.codeowners,
-            crate::claude::CODEOWNERS_LINK
-        ),
-    )
+    check(name, Status::Pass, format!("{}: {what}", s.codeowners))
 }
 
 fn git_tracking(root: &Path) -> Check {

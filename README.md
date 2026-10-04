@@ -366,9 +366,9 @@ delete as stale (`-`) is listed with a short diff.
 - **git pre-push hook:** it runs the installed hook as git would — it must refuse a push made under
   Claude Code and let yours through, and it fails if it isn't executable;
 - **line endings:** a generated script with CRLF endings fails, with the fix;
-- **CODEOWNERS:** the file `/intent`'s approvers are linked to is still there, the link at
-  `.claude/CODEOWNERS` is in place, and no rule of yours after ocgen's block takes precedence
-  over it (with a reminder that GitHub enforces it only with "Require review from Code Owners");
+- **CODEOWNERS:** the file `/intent`'s approvers are linked to is still there, and no rule of
+  yours after ocgen's block takes precedence over it (with a reminder that GitHub enforces it only
+  with "Require review from Code Owners");
 - the statusline renders;
 - a compatible `ocgen` is on your `PATH`; a stale binary is flagged, and so are ignored template
   overrides;
@@ -892,16 +892,18 @@ confirmation.
 Inside Claude this rule is enforced by the skills' instructions only. The hard enforcement is
 GitHub's: link the project's **existing** CODEOWNERS with `ocgen edit intent --codeowners
 .github/CODEOWNERS` (or `CODEOWNERS`, `docs/CODEOWNERS` — wherever GitHub reads it; ocgen never
-creates one). ocgen keeps a link to it at `.claude/CODEOWNERS` and a marked block in it that makes
-the approvers code owners — of the intent directory (`--codeowners-scope intents`, the default),
-of every file (`all`), or of nothing (`off`; the block also goes when there are no approvers or you
-unlink with `--codeowners off`). Your own lines are never touched. CODEOWNERS takes the **last**
+creates one). ocgen keeps a marked block in it that makes the approvers code owners — of the
+intent directory (`--codeowners-scope intents`, the default), of every file (`all`), or of nothing
+(`off`; the block also goes when there are no approvers or you unlink with `--codeowners off`). The
+`/intent` skill names the file and its rule, and tells Claude never to edit the block; nothing in
+`.claude/` links to it (the next run removes the `.claude/CODEOWNERS` symbolic link that ocgen
+0.7.1 and older kept there). Your own lines are never touched. CODEOWNERS takes the **last**
 matching rule, so ocgen appends its block at the end and tells you when a rule of yours after it
 takes precedence. GitHub only *requires* their review once branch protection asks for it, which
 ocgen can't turn on: **Settings → Branches → Add classic branch protection rule** → your main
 branch → **Require a pull request before merging** → **Require review from Code Owners**; or with
 rulesets, **Settings → Rules → Rulesets → New branch ruleset** → target the branch → **Require a
-pull request before merging** → require review from code owners. `ocgen verify` reports the link
+pull request before merging** → require review from code owners. `ocgen verify` reports the file
 and the block.
 
 **Configure it with `ocgen edit intent`:**

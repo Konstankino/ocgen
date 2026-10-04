@@ -1225,14 +1225,13 @@ fn verify_reports_the_linked_codeowners() {
     p.scaffold(dir.path(), true).unwrap();
     let ok = verify_lib(dir.path());
     let c = named(&ok, "CODEOWNERS");
-    // Native Windows may refuse the symbolic link (a warning that says so).
-    if cfg!(unix) {
-        assert_eq!(c.status, Status::Pass, "{c:?}");
-        assert!(
-            c.detail.contains("Require review from Code Owners"),
-            "{c:?}"
-        );
-    }
+    // No symbolic link involved, so it passes on every platform.
+    assert_eq!(c.status, Status::Pass, "{c:?}");
+    assert!(
+        c.detail.contains("Require review from Code Owners"),
+        "{c:?}"
+    );
+    assert!(!c.detail.contains(".claude/CODEOWNERS"), "{c:?}");
 
     fs::remove_file(&owners).unwrap();
     let gone = verify_lib(dir.path());

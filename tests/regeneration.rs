@@ -1666,8 +1666,10 @@ fn codeowners_is_never_created() {
     }
 }
 
+const INTENT_SKILL: &str = ".claude/skills/intent/SKILL.md";
+
 #[test]
-fn a_linked_codeowners_gets_the_approvers_block_and_a_link() {
+fn a_linked_codeowners_gets_the_approvers_block_and_the_intent_skill_names_it() {
     let dir = with_codeowners("co-link", OWNERS);
     edit_intent(dir.path(), |s| {
         s.approvers = vec!["@alice".into(), "@org/architects".into()];
@@ -1677,10 +1679,12 @@ fn a_linked_codeowners_gets_the_approvers_block_and_a_link() {
         read(dir.path(), OWNERS),
         block("/docs/adr/ @alice @org/architects")
     );
-    #[cfg(unix)]
-    assert_eq!(
-        fs::read_link(dir.path().join(".claude/CODEOWNERS")).unwrap(),
-        Path::new("../.github/CODEOWNERS")
+    // No link to it: the /intent skill names the file and its rule instead.
+    assert!(fs::symlink_metadata(dir.path().join(".claude/CODEOWNERS")).is_err());
+    let skill = read(dir.path(), INTENT_SKILL);
+    assert!(
+        skill.contains("`.github/CODEOWNERS` (`/docs/adr/ @alice @org/architects`)"),
+        "{skill}"
     );
     // Nothing more to do on the next run.
     let plan = reload(dir.path()).plan_changes(dir.path()).unwrap();
@@ -1692,6 +1696,11 @@ fn a_linked_codeowners_gets_the_approvers_block_and_a_link() {
         s.codeowners_scope = ocgen::claude::CodeownersScope::All
     });
     assert_eq!(read(dir.path(), OWNERS), block("* @alice @org/architects"));
+    let skill = read(dir.path(), INTENT_SKILL);
+    assert!(
+        skill.contains("`.github/CODEOWNERS` (`* @alice @org/architects`)"),
+        "{skill}"
+    );
 }
 
 #[test]
@@ -1731,12 +1740,22 @@ fn the_codeowners_block_goes_and_your_file_stays() {
         s.codeowners_scope = ocgen::claude::CodeownersScope::Off
     });
     assert_eq!(read(dir.path(), OWNERS), MINE, "scope off");
+    // No block, so the /intent skill doesn't point at one.
+    assert!(
+        !read(dir.path(), INTENT_SKILL).contains(OWNERS),
+        "scope off"
+    );
     edit_intent(dir.path(), link);
     edit_intent(dir.path(), |s| s.approvers.clear());
     assert_eq!(read(dir.path(), OWNERS), MINE, "no approvers");
+    assert!(
+        !read(dir.path(), INTENT_SKILL).contains(OWNERS),
+        "no approvers"
+    );
     edit_intent(dir.path(), link);
     edit_intent(dir.path(), |s| s.codeowners.clear());
     assert_eq!(read(dir.path(), OWNERS), MINE, "unlinked");
+    assert!(!read(dir.path(), INTENT_SKILL).contains(OWNERS), "unlinked");
     assert!(fs::symlink_metadata(dir.path().join(".claude/CODEOWNERS")).is_err());
 }
 
@@ -1749,10 +1768,50 @@ fn a_root_codeowners_can_be_linked() {
     });
     assert_eq!(read(dir.path(), "CODEOWNERS"), block("/docs/adr/ @alice"));
     assert!(!dir.path().join(OWNERS).exists());
-    #[cfg(unix)]
-    assert_eq!(
-        fs::read_link(dir.path().join(".claude/CODEOWNERS")).unwrap(),
-        Path::new("../CODEOWNERS")
+    assert!(fs::symlink_metadata(dir.path().join(".claude/CODEOWNERS")).is_err());
+    let skill = read(dir.path(), INTENT_SKILL);
+    assert!(
+        skill.contains("`CODEOWNERS` (`/docs/adr/ @alice`)"),
+        "{skill}"
+    );
+}
+
+/// ocgen 0.7.1 and older kept a symbolic link at `.claude/CODEOWNERS`: the next
+/// run removes it, linked or not, and leaves a link or file of yours there alone.
+#[cfg(unix)]
+#[test]
+fn an_old_codeowners_link_goes_and_yours_stays() {
+    use std::os::unix::fs::symlink;
+    let dir = with_codeowners("co-old-link", OWNERS);
+    let link = dir.path().join(".claude/CODEOWNERS");
+    symlink("../.github/CODEOWNERS", &link).unwrap();
+    let notice = edit_intent(dir.path(), |s| {
+        s.approvers = vec!["@alice".into()];
+        s.codeowners = OWNERS.into();
+    });
+    assert!(fs::symlink_metadata(&link).is_err(), "linked");
+    assert!(
+        !notice.iter().any(|l| l.contains(".claude/CODEOWNERS")),
+        "{notice:?}"
+    );
+    assert_eq!(read(dir.path(), OWNERS), block("/docs/adr/ @alice"));
+
+    // Not linked any more: an old link to the root CODEOWNERS goes too.
+    symlink("../CODEOWNERS", &link).unwrap();
+    edit_intent(dir.path(), |s| s.codeowners.clear());
+    assert!(fs::symlink_metadata(&link).is_err(), "unlinked");
+
+    // A link of yours to somewhere else, and a file of yours, stay.
+    symlink("../OWNERS", &link).unwrap();
+    edit_intent(dir.path(), |s| s.codeowners = OWNERS.into());
+    assert_eq!(fs::read_link(&link).unwrap(), Path::new("../OWNERS"));
+    fs::remove_file(&link).unwrap();
+    fs::write(&link, "notes\n").unwrap();
+    let notice = edit_intent(dir.path(), |s| s.approvers.push("@bob".into()));
+    assert_eq!(read(dir.path(), ".claude/CODEOWNERS"), "notes\n");
+    assert!(
+        !notice.iter().any(|l| l.contains(".claude/CODEOWNERS")),
+        "{notice:?}"
     );
 }
 

@@ -1454,14 +1454,7 @@ fn print_intent(project: &Project, root: &Path) {
             } else {
                 format!("no block: scope {}", s.codeowners_scope.as_str())
             };
-            format!(
-                "{} {}",
-                s.codeowners,
-                ui::muted(&format!(
-                    "(via {}) — {block}",
-                    ocgen::claude::CODEOWNERS_LINK
-                ))
-            )
+            format!("{} {}", s.codeowners, ui::muted(&format!("— {block}")))
         },
     );
     for (label, rel) in [

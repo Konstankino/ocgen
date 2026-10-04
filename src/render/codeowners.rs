@@ -1,7 +1,8 @@
 //! ocgen's block in the project's CODEOWNERS: the /intent approvers as required
 //! reviewers. ocgen links a CODEOWNERS the project already has (`ocgen edit
-//! intent --codeowners`) — it never creates one — keeps a symbolic link to it at
-//! `.claude/CODEOWNERS`, and only ever touches the lines between its markers.
+//! intent --codeowners`) — it never creates one — and only ever touches the lines
+//! between its markers. The /intent skill names the file; nothing in `.claude/`
+//! points at it (an older ocgen's symbolic link there is removed).
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -11,7 +12,7 @@ use anyhow::{bail, Result};
 use regex::Regex;
 
 use super::{plain_rel, Fence, Project};
-use crate::claude::{CodeownersScope, CODEOWNERS_LINK, CODEOWNERS_PATHS};
+use crate::claude::{CodeownersScope, CODEOWNERS_PATHS, OLD_CODEOWNERS_LINK};
 use crate::target::Target;
 
 /// Opens ocgen's block; `# ocgen: end` closes it.
@@ -131,16 +132,23 @@ pub(super) fn remove_block(fence: &Fence, rel: &str) -> Option<(PathBuf, String)
     with_block(&old, None).map(|new| (path, new))
 }
 
-/// What the link at `.claude/CODEOWNERS` points at: `../<rel>`.
+/// What an older ocgen's link at `.claude/CODEOWNERS` pointed at: `../<rel>`.
 fn link_target(rel: &str) -> PathBuf {
     let up = Path::new("..");
     rel.split('/')
         .fold(up.to_path_buf(), |p, part| p.join(part))
 }
 
-/// Whether `t` is a link ocgen made (`../` and one of GitHub's locations).
-fn ours(t: &Path) -> bool {
-    CODEOWNERS_PATHS.iter().any(|p| t == link_target(p))
+/// Remove the symbolic link an older ocgen (0.7.1 and before) kept at
+/// `.claude/CODEOWNERS` — nothing read it. Only a link to `../` and one of
+/// GitHub's locations is ocgen's; a link or file of the user's there stays.
+pub(super) fn remove_old_link(target: &Path) {
+    let link = target.join(OLD_CODEOWNERS_LINK);
+    let ours =
+        fs::read_link(&link).is_ok_and(|t| CODEOWNERS_PATHS.iter().any(|p| t == link_target(p)));
+    if ours {
+        let _ = fs::remove_file(&link);
+    }
 }
 
 impl Project {
@@ -177,35 +185,8 @@ impl Project {
         Some((path, rel, old, new))
     }
 
-    /// Make `.claude/CODEOWNERS` the link to the linked CODEOWNERS, or remove
-    /// ocgen's link when nothing is linked. Something else there is left alone.
-    pub(super) fn sync_codeowners_link(&self, target: &Path) {
-        let link = target.join(CODEOWNERS_LINK);
-        let want = self
-            .codeowners_block()
-            .filter(|_| self.claude.workflow.intent && self.claude.output.project)
-            .map(|(rel, _)| link_target(&rel));
-        let current = fs::symlink_metadata(&link)
-            .ok()
-            .map(|m| (m.file_type().is_symlink(), fs::read_link(&link).ok()));
-        match (current, want) {
-            (Some((true, Some(t))), Some(w)) if t == w => {}
-            (Some((true, Some(t))), w) if ours(&t) => {
-                let _ = fs::remove_file(&link);
-                if let Some(w) = w {
-                    make_link(&w, &link);
-                }
-            }
-            (None, Some(w)) if Fence::new(target).path(Path::new(CODEOWNERS_LINK)).is_ok() => {
-                make_link(&w, &link);
-            }
-            _ => {} // nothing to do, or not ocgen's: left alone (reported)
-        }
-    }
-
-    /// What to tell the user about the linked CODEOWNERS: a file left alone, a
-    /// link that couldn't be made, and the user's rules after ocgen's block that
-    /// take precedence over it.
+    /// What to tell the user about the linked CODEOWNERS: a file left alone, and
+    /// the user's rules after ocgen's block that take precedence over it.
     pub fn codeowners_report(&self, target: &Path) -> Vec<String> {
         let Some((rel, rule)) = self.codeowners_block() else {
             return Vec::new();
@@ -231,23 +212,6 @@ impl Project {
                 "CODEOWNERS: {rel} isn't UTF-8 text, so ocgen left it alone — {relink}"
             )];
         };
-        let link = target.join(CODEOWNERS_LINK);
-        match fs::symlink_metadata(&link) {
-            Ok(m) if !m.file_type().is_symlink() => notes.push(format!(
-                "CODEOWNERS: {CODEOWNERS_LINK} is a file of yours, so ocgen keeps no link there"
-            )),
-            Ok(_) if fs::read_link(&link).is_ok_and(|t| t != link_target(&rel) && !ours(&t)) => {
-                notes.push(format!(
-                    "CODEOWNERS: {CODEOWNERS_LINK} is a link of yours, so ocgen left it alone"
-                ))
-            }
-            Err(_) if self.claude.workflow.intent && self.claude.output.project => {
-                notes.push(format!(
-                    "CODEOWNERS: couldn't make the link {CODEOWNERS_LINK} (symbolic links aren't available here) — the block in {rel} is kept up to date all the same"
-                ))
-            }
-            _ => {}
-        }
         if rule.is_some() {
             let sample = match self.claude.intent.codeowners_scope {
                 CodeownersScope::Intents => Some(format!(
@@ -267,13 +231,6 @@ impl Project {
         }
         notes
     }
-}
-
-fn make_link(to: &Path, link: &Path) {
-    #[cfg(unix)]
-    let _ = std::os::unix::fs::symlink(to, link);
-    #[cfg(windows)]
-    let _ = std::os::windows::fs::symlink_file(to, link);
 }
 
 /// The rules after ocgen's block that match `sample` (any rule, without one):

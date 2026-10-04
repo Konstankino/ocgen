@@ -400,7 +400,7 @@ const CLAUDE_FIELDS: &[Field] = &[
     Field {
         label: "CODEOWNERS",
         detail: "The project's existing CODEOWNERS (.github/CODEOWNERS, CODEOWNERS or \
-                 docs/CODEOWNERS — ocgen never creates one), linked at .claude/CODEOWNERS. ocgen \
+                 docs/CODEOWNERS — ocgen never creates one); the /intent skill names it. ocgen \
                  keeps a marked block there that makes the approvers code owners of the intent \
                  directory (scope intents), every file (all), or nothing (off); your own lines are \
                  never touched, and a later rule of yours that takes precedence is reported. \
