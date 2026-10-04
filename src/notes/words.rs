@@ -52,8 +52,28 @@ pub struct Words {
 /// What the issue draft's editor page says by itself.
 pub struct DraftWords {
     pub title: &'static str,
-    pub write: &'static str,
+    /// The formatted editor's name for screen readers.
+    pub editor: &'static str,
+    /// The Markdown source view.
+    pub source: &'static str,
+    /// The preview drawn the way GitHub draws the issue.
     pub preview: &'static str,
+    /// The Focus button: full screen, without the browser's toolbar. (The
+    /// dimming — all but the block being edited and the one before and after
+    /// it — is on by default either way.)
+    pub focus: &'static str,
+    /// The Focus button's tooltip.
+    pub focus_title: &'static str,
+    /// The page's two palettes, black (the default) and white, and their group.
+    pub palette: &'static str,
+    pub black: &'static str,
+    pub white: &'static str,
+    /// The keys, for the footer (HTML: it marks them up as `<kbd>`).
+    pub keys: &'static str,
+    /// Asked for by Ctrl/⌘+K.
+    pub link_prompt: &'static str,
+    /// The formatted editor couldn't open the draft: the Source view shows it.
+    pub source_only: &'static str,
     pub save: &'static str,
     pub copy_markdown: &'static str,
     pub copy_formatted: &'static str,
@@ -78,6 +98,10 @@ pub struct DraftWords {
     pub missing: &'static str,
     /// The draft still says "No approvers configured".
     pub says_none: &'static str,
+    /// Before the count of lines wrapped by hand mid-sentence.
+    pub wrapped: &'static str,
+    /// The button that joins them.
+    pub join_lines: &'static str,
     pub footer: &'static str,
 }
 
@@ -113,8 +137,17 @@ pub static ENGLISH: Words = Words {
     intent_footer: "A reading copy rendered by ocgen from the Markdown next to this file. The intent file it renders is the record.",
     draft: DraftWords {
         title: "Issue draft",
-        write: "Write",
-        preview: "Preview",
+        editor: "Issue text",
+        source: "Source",
+        preview: "GitHub preview",
+        focus: "Focus",
+        focus_title: "Full screen: hides the browser’s toolbar (Esc leaves)",
+        palette: "Palette",
+        black: "Black",
+        white: "White",
+        keys: "<kbd class=\"mod\">Ctrl</kbd>+<kbd>S</kbd> saves · <kbd>Esc</kbd> shows or hides the controls · <kbd class=\"mod\">Ctrl</kbd>+<kbd>/</kbd> shows the Markdown source · <kbd class=\"mod\">Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>.</kbd> turns the dimming off or on",
+        link_prompt: "Link address",
+        source_only: "The formatted editor couldn't open this draft, so it shows as Markdown source.",
         save: "Save",
         copy_markdown: "Copy Markdown",
         copy_formatted: "Copy formatted",
@@ -133,6 +166,8 @@ pub static ENGLISH: Words = Words {
         offline: "Editor disconnected — saving won't work. Run <code>ocgen draft</code> to reconnect.",
         missing: "GitHub notifies only the people an issue @mentions, and this draft doesn't mention these approvers — add a pending sign-off line for each under “Needs from”:",
         says_none: "It still says “No approvers configured”, but this project has approvers — remove that line.",
+        wrapped: "GitHub shows every newline in an issue as a line break. Lines wrapped by hand mid-sentence:",
+        join_lines: "Join them",
         footer: "Save writes the file named above — the one gh issue create --body-file files on GitHub.",
     },
     lenses: [
@@ -191,8 +226,17 @@ pub static UKRAINIAN: Words = Words {
     intent_footer: "Переклад для читання, який ocgen створив із Markdown-файлу поруч. Чинний запис — англійський файл наміру.",
     draft: DraftWords {
         title: "Чернетка GitHub issue",
-        write: "Редагувати",
-        preview: "Перегляд",
+        editor: "Текст задачі",
+        source: "Код Markdown",
+        preview: "Як на GitHub",
+        focus: "Фокус",
+        focus_title: "На весь екран: ховає панель браузера (Esc — вийти)",
+        palette: "Палітра",
+        black: "Чорна",
+        white: "Біла",
+        keys: "<kbd class=\"mod\">Ctrl</kbd>+<kbd>S</kbd> — зберегти · <kbd>Esc</kbd> — показати або сховати кнопки · <kbd class=\"mod\">Ctrl</kbd>+<kbd>/</kbd> — код Markdown · <kbd class=\"mod\">Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>.</kbd> — вимкнути або ввімкнути приглушення",
+        link_prompt: "Адреса посилання",
+        source_only: "Форматований редактор не зміг відкрити цю чернетку, тож її показано як код Markdown.",
         save: "Зберегти",
         copy_markdown: "Копіювати Markdown",
         copy_formatted: "Копіювати з форматуванням",
@@ -211,6 +255,8 @@ pub static UKRAINIAN: Words = Words {
         offline: "Редактор від’єднано — зберегти не вийде. Щоб під’єднатися знову, виконайте <code>ocgen draft</code>.",
         missing: "GitHub сповіщає лише тих, кого згадано через @ у задачі, а ця чернетка не згадує цих затверджувачів — додайте для кожного рядок погодження в розділі «Needs from»:",
         says_none: "У чернетці досі написано «No approvers configured», але в проєкті є затверджувачі — приберіть цей рядок.",
+        wrapped: "GitHub показує кожен перенос рядка в задачі як розрив рядка. Рядків, перенесених вручну посеред речення:",
+        join_lines: "Об’єднати їх",
         footer: "Кнопка «Зберегти» записує файл, указаний вище, — саме його подає на GitHub команда gh issue create --body-file.",
     },
     lenses: [

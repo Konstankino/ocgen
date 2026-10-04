@@ -203,6 +203,21 @@ fn run_draft(name: Option<&str>, path: &str) -> Result<()> {
             draft::approvers_for(&md).join(", ")
         );
     }
+    let wraps = std::fs::read_to_string(&md)
+        .map(|t| ocgen::intent::hard_wraps(&t))
+        .unwrap_or_default();
+    if !wraps.is_empty() {
+        let at: Vec<String> = wraps.iter().map(usize::to_string).collect();
+        println!(
+            "warning: {rel} has {} line{} wrapped by hand mid-sentence (line{} {}) — GitHub shows \
+             every newline in an issue as a line break. Join them in the editor (Join them), or \
+             ask Claude to write each paragraph on one line.",
+            wraps.len(),
+            if wraps.len() == 1 { "" } else { "s" },
+            if wraps.len() == 1 { "" } else { "s" },
+            at.join(", ")
+        );
+    }
     Ok(())
 }
 

@@ -1220,7 +1220,8 @@ impl<'a> Hook<'a> {
     /// or an issue draft, check it against the approvers in the project's state
     /// now — not the list the session's /intent skill was generated with — and
     /// tell Claude what is missing, so it fixes the file before anyone files it.
-    /// Never fails a write.
+    /// A draft is also checked for lines wrapped by hand ([`intent::hard_wraps`]):
+    /// GitHub shows each newline in an issue as a line break. Never fails a write.
     fn intent_approvers(&self) -> Outcome {
         use crate::intent;
         let path = self
@@ -1236,7 +1237,7 @@ impl<'a> Hook<'a> {
             return Outcome::allow();
         };
         let s = &project.claude.intent;
-        if !project.claude.workflow.intent || s.approvers.is_empty() {
+        if !project.claude.workflow.intent {
             return Outcome::allow();
         }
         let file = match Path::new(path) {
@@ -1249,26 +1250,50 @@ impl<'a> Hook<'a> {
         let Some(kind) = intent::kind(s, &rel) else {
             return Outcome::allow();
         };
-        let Some(gaps) = intent::check_file(&file, kind, &s.approvers) else {
+        let mut reasons = Vec::new();
+        if let Some(gaps) = (!s.approvers.is_empty())
+            .then(|| intent::check_file(&file, kind, &s.approvers))
+            .flatten()
+        {
+            let fix = match kind {
+                intent::Kind::Intent => {
+                    "Name each one in its Approvers: line and give each a pending line in its Sign-off"
+                }
+                intent::Kind::Draft => {
+                    "Name them in the \"Needs from\" heading with one pending sign-off line each \
+                     (`- [ ] @handle — pending`)"
+                }
+            };
+            reasons.push(format!(
+                "ocgen: {rel} {} — but this project's approvers are now {} (`ocgen edit intent`; \
+                 the list can change while /intent runs, so trust this one over your \
+                 instructions). {fix}, and drop \"{}\": their @mentions are how GitHub notifies \
+                 them. Fix the file now.",
+                gaps.describe(),
+                s.approvers.join(", "),
+                intent::NO_APPROVERS
+            ));
+        }
+        if kind == intent::Kind::Draft {
+            let wraps = std::fs::read_to_string(&file)
+                .map(|t| intent::hard_wraps(&t))
+                .unwrap_or_default();
+            if !wraps.is_empty() {
+                let at: Vec<String> = wraps.iter().map(usize::to_string).collect();
+                reasons.push(format!(
+                    "ocgen: {rel} has lines wrapped by hand mid-sentence (lines {}): GitHub shows \
+                     every newline in an issue as a line break, so they read as broken lines \
+                     there. Write each paragraph and each list item on one line, and keep a break \
+                     only where the reader should see one (like the **Blocks prod?** and \
+                     **Depends on…** lines). Fix the file now.",
+                    at.join(", ")
+                ));
+            }
+        }
+        if reasons.is_empty() {
             return Outcome::allow();
-        };
-        let fix = match kind {
-            intent::Kind::Intent => {
-                "Name each one in its Approvers: line and give each a pending line in its Sign-off"
-            }
-            intent::Kind::Draft => {
-                "Name them in the \"Needs from\" heading with one pending sign-off line each \
-                 (`- [ ] @handle — pending`)"
-            }
-        };
-        let reason = format!(
-            "ocgen: {rel} {} — but this project's approvers are now {} (`ocgen edit intent`; the \
-             list can change while /intent runs, so trust this one over your instructions). {fix}, \
-             and drop \"{}\": their @mentions are how GitHub notifies them. Fix the file now.",
-            gaps.describe(),
-            s.approvers.join(", "),
-            intent::NO_APPROVERS
-        );
+        }
+        let reason = reasons.join("\n\n");
         let out = serde_json::json!({ "decision": "block", "reason": reason });
         Outcome {
             code: 0,

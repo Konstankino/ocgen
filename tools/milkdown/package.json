@@ -1,0 +1,28 @@
+{
+  "name": "ocgen-draft-editor",
+  "private": true,
+  "description": "The Milkdown bundle ocgen's /intent draft editor embeds (src/notes/milkdown/). Not part of the Cargo build.",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "node fidelity.mjs"
+  },
+  "dependencies": {
+    "@milkdown/core": "7.22.2",
+    "@milkdown/ctx": "7.22.2",
+    "@milkdown/plugin-clipboard": "7.22.2",
+    "@milkdown/plugin-history": "7.22.2",
+    "@milkdown/preset-commonmark": "7.22.2",
+    "@milkdown/preset-gfm": "7.22.2",
+    "@milkdown/prose": "7.22.2",
+    "@milkdown/transformer": "7.22.2",
+    "@milkdown/utils": "7.22.2",
+    "mdast-util-to-markdown": "2.2.0",
+    "unist-util-visit": "5.1.0"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "jsdom": "30.1.2"
+  }
+}

@@ -184,6 +184,10 @@ Draft it following the writing standard; write it only after the tone check (ste
   intent file, its full evidence). Leave the Plan as the template's outline
   until the intent is agreed (step 6).{% if adversary %} Name every UNRESOLVED adversary finding, with its evidence, so the
   approvers decide with it in view.{% endif %}
+- **One line per paragraph:** GitHub shows every newline in an issue as a line break, so write each
+  paragraph and each list item of the description on one line — never wrap it by hand. Break a line
+  only where the reader should see one, like the **Blocks prod?** and **Depends on the platform
+  view** lines. ocgen flags lines wrapped mid-sentence after every write to the draft.
 - **Needs from the approvers:** {% if approvers %}name them in that heading ({{ approvers }}), then one pending checklist
   line per approver, as @mentions — GitHub notifies them when I file the issue{% else %}"No approvers configured"{% endif %}. That is the only
   notice: **Never email**, message or otherwise contact anyone. Don't use `--assignee` for approvers —
@@ -204,8 +208,8 @@ Draft it following the writing standard; write it only after the tone check (ste
   file; make sure `.claude/intent/drafts/.gitignore` exists and holds `*` (drafts stay out of git). Show
   me the intent file's path, the title and the description in separate fenced blocks, one line on what
   the check changed, and:
-  - **The browser review:** "Type `draft` to review it in your browser — edit the Markdown, preview it
-    the way GitHub shows it, and copy it." That word, sent alone, makes ocgen open the newest draft
+  - **The browser review:** "Type `draft` to review it in your browser — edit it as formatted text or
+    as Markdown, preview it the way GitHub shows it, and copy it." That word, sent alone, makes ocgen open the newest draft
     (its hook adds a note saying what it did): reply in one line and wait — it is not a request to
     write a draft. If no note came, tell me to run `ocgen draft` in a terminal.
   - **The command** for me to run: `gh issue create --title "<title>" --body-file .claude/intent/drafts/<name>.md`

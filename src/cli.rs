@@ -153,8 +153,9 @@ pub enum Command {
         #[command(subcommand)]
         action: NotesAction,
     },
-    /// Open an /intent issue draft in your browser: edit the Markdown and save it
-    /// back to the file, preview it the way GitHub shows it, and copy it.
+    /// Open an /intent issue draft in your browser: edit it as formatted text or as
+    /// Markdown and save it back to the file, preview it the way GitHub shows it,
+    /// and copy it.
     ///
     /// /intent writes the GitHub issue description to .claude/intent/drafts/<name>.md.
     /// Typing `draft` on its own in Claude Code opens the newest one the same way.

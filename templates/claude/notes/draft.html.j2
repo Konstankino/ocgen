@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="{{ w.lang }}">
+<html lang="{{ w.lang }}" data-palette="black">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -9,22 +9,129 @@
 <style>
 {% include "page.css" %}
 [hidden] { display: none !important; }
-.draft .toolbar { display: flex; flex-wrap: wrap; gap: 12px; justify-content: space-between; align-items: center; margin: 0 0 14px; }
-.draft .tabs { padding: 0; margin: 0; border: 0; }
-.draft .actions { display: flex; flex-wrap: wrap; gap: 8px; }
-.draft .actions button, .banner button { font: inherit; font-size: 14px; font-weight: 600; color: var(--text); background: var(--surface);
-  border: 1px solid var(--border); border-radius: 8px; padding: 7px 14px; cursor: pointer; box-shadow: var(--shadow); }
-.draft .actions button:hover, .banner button:hover { border-color: var(--border-strong); }
-.draft button.primary { background: var(--accent); border-color: var(--accent); color: var(--on-color); }
-.draft .pane { padding: 18px 22px; }
-.draft textarea { display: block; width: 100%; min-height: 62vh; resize: vertical; border: 0; outline: none; background: transparent; color: var(--text);
-  font: 14px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; tab-size: 4; }
-.status.warn { color: var(--c-orange); font-weight: 600; }
-.status.bad { color: var(--c-red); font-weight: 600; }
-.banner { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; border-left: 4px solid var(--c-orange); background: var(--note-bg);
-  padding: 12px 16px; border-radius: 0 10px 10px 0; margin: 0 0 16px; }
-.banner span { flex: 1 1 260px; }
+/* ---- Zen: this page only. Two calm palettes, black (the default) and white, whatever
+   the system's setting: page.css's own dark and light tokens, set here for this page,
+   and the quieter Zen tokens made from them. ---- */
+html[data-palette="black"] {
+  color-scheme: dark;
+  --bg: #121212; --surface: #1a1a1a; --surface-2: #222222; --text: #e6e6e6; --muted: #a3a3a3; --faint: #7a7a7a;
+  --border: #2e2e2e; --border-strong: #454545; --code: #dedede; --accent: #6aa8ff;
+  --c-orange: #ff7a4d; --c-red: #ff7070; --on-color: #121212; --note-bg: #332c14; --note-border: #a68a2d; --shadow: none;
+  --z-text: color-mix(in oklab, var(--text) 86%, var(--bg));
+  --z-select: #3a3a3a;
+}
+html[data-palette="white"] {
+  color-scheme: light;
+  --bg: #fcfcfc; --surface: #ffffff; --surface-2: #f0f0f0; --text: #1b1b1b; --muted: #666666; --faint: #8b8b8b;
+  --border: #e3e3e3; --border-strong: #c9c9c9; --code: #2b2b2b; --accent: #0b6fd8;
+  --c-orange: #f0592a; --c-red: #d93636; --on-color: #ffffff; --note-bg: #fff8e1; --note-border: #f2c94c;
+  --shadow: 0 1px 2px rgba(0,0,0,.04);
+  --z-text: color-mix(in oklab, var(--text) 88%, var(--bg));
+  --z-select: #dcdcdc;
+}
+body.zen {
+  --z-bg: var(--bg);
+  --z-muted: var(--muted);
+  --z-faint: var(--faint);
+  --z-line: var(--border);
+  --z-tint: var(--surface-2);
+  --z-warn: color-mix(in oklab, var(--bg) 90%, var(--c-orange));
+  --z-serif: Charter, "Bitstream Charter", "Iowan Old Style", "Sitka Text", Cambria, Georgia, serif;
+  --z-sans: "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, Helvetica, Arial, sans-serif;
+  --z-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  --col: 44rem;
+  background: var(--z-bg); color: var(--z-text);
+}
+.zen main { max-width: none; padding: 0 16px; }
+.zen :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* the header, controls and status: they fade while you type */
+.zen .bar { position: sticky; top: 0; z-index: 3; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+  gap: 4px 20px; padding: 12px 24px; background: var(--z-bg); font: 13.5px/1.4 var(--z-sans); }
+.zen .where { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; min-width: 0; margin: 0;
+  font: inherit; letter-spacing: 0; color: var(--z-faint); }
+.zen .where code { font-size: 12.5px; color: var(--z-muted); overflow-wrap: anywhere; }
+.zen .tools { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; }
+.zen .tools button { font: inherit; color: var(--z-muted); background: transparent; border: 0; border-radius: 6px; padding: 5px 9px; cursor: pointer; }
+.zen .tools button:hover { color: var(--z-text); background: var(--z-tint); }
+.zen .tools button[aria-pressed="true"] { color: var(--z-text); background: var(--z-tint); }
+.zen .tools button.save.on { color: var(--accent); font-weight: 600; }
+.zen .tools .palette { display: inline-flex; gap: 2px; }
+.zen .tools .sep { width: 1px; height: 14px; background: var(--z-line); margin: 0 6px; }
+.zen .status { margin-right: 8px; font-size: 13px; color: var(--z-faint); }
+.zen .status.warn { color: var(--z-muted); }
+.zen .status.bad { color: var(--c-red); }
+/* full screen (the Focus button): no menu but that button, alone in the corner; banners stay */
+body.full .bar { position: fixed; top: 0; right: 0; padding: 10px 16px; background: transparent; }
+body.full .where, body.full .tools > :not(#focus-mode), body.full footer { display: none; }
+body.full main { padding-top: 52px; }
+.chrome { transition: opacity .6s ease; }
+body.quiet .chrome { opacity: 0; }
+body.quiet .chrome:hover, body.quiet .chrome:focus-within { opacity: 1; transition-duration: .15s; }
+/* banners never fade */
+.zen .banner { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; max-width: var(--col); margin: 6px auto 22px;
+  padding: 10px 14px; border-left: 2px solid var(--c-orange); border-radius: 0 6px 6px 0; background: var(--z-warn);
+  color: var(--z-text); font: 14.5px/1.5 var(--z-sans); }
+.zen .banner span { flex: 1 1 260px; }
+.zen .banner button { font: inherit; font-size: 13.5px; color: var(--z-text); background: transparent; border: 1px solid var(--z-line);
+  border-radius: 6px; padding: 4px 10px; cursor: pointer; box-shadow: none; }
+.zen .banner button:hover { border-color: var(--z-muted); }
+/* the column */
+.zen .pane { max-width: var(--col); margin: 0 auto; padding: 18px 0 32vh; }
+.zen .zen-editor:focus-visible { outline: none; }
+.zen-editor { min-height: 55vh; outline: none; font: 400 18.5px/1.7 var(--z-serif); color: var(--z-text); caret-color: var(--z-text);
+  font-kerning: normal; overflow-wrap: break-word; }
+.zen-editor ::selection, .zen-source::selection { background: var(--z-select); }
+.zen-editor > *, .zen-editor li > p { margin: 0 0 1em; }
+.zen-editor li > p { margin-bottom: .2em; }
+.zen-editor > :first-child { margin-top: 0; }
+.zen-editor h1, .zen-editor h2, .zen-editor h3, .zen-editor h4, .zen-editor h5, .zen-editor h6 {
+  font-family: inherit; font-weight: 600; line-height: 1.3; letter-spacing: 0; margin: 1.7em 0 .45em; color: var(--z-text); }
+.zen-editor h1 { font-size: 1.5em; } .zen-editor h2 { font-size: 1.27em; } .zen-editor h3 { font-size: 1.1em; }
+.zen-editor h4, .zen-editor h5, .zen-editor h6 { font-size: 1em; }
+.zen-editor strong { font-weight: 650; }
+.zen-editor a { color: inherit; text-decoration: underline; text-decoration-color: var(--z-faint); text-underline-offset: .16em; }
+.zen-editor ul, .zen-editor ol { padding-left: 1.45em; }
+.zen-editor li::marker { color: var(--z-faint); }
+.zen-editor li[data-item-type="task"] { list-style: none; position: relative; }
+.zen-editor li[data-item-type="task"]::before { content: ""; position: absolute; left: -1.4em; top: .42em; width: .85em; height: .85em;
+  border: 1.5px solid var(--z-faint); border-radius: 3px; cursor: pointer; }
+.zen-editor li[data-item-type="task"][data-checked="true"]::before { background: var(--z-muted); border-color: var(--z-muted); }
+.zen-editor li[data-item-type="task"][data-checked="true"]::after { content: ""; position: absolute; left: -1.1em; top: .55em; width: .25em; height: .45em;
+  border: solid var(--z-bg); border-width: 0 2px 2px 0; transform: rotate(45deg); pointer-events: none; }
+.zen-editor blockquote { padding-left: 1em; border-left: 2px solid var(--z-line); color: var(--z-muted); }
+.zen-editor code { font: .84em/1.4 var(--z-mono); color: inherit; background: var(--z-tint); padding: .1em .32em; border-radius: 4px; }
+.zen-editor pre { font: 14.5px/1.6 var(--z-mono); background: var(--z-tint); padding: .85em 1.05em; border-radius: 6px; white-space: pre-wrap; }
+.zen-editor pre code { font: inherit; background: transparent; padding: 0; }
+.zen-editor table { display: block; max-width: 100%; overflow-x: auto; width: auto; border-collapse: collapse; font-size: .88em; }
+.zen-editor th, .zen-editor td { padding: .35em .75em; border: 1px solid var(--z-line); vertical-align: top; }
+.zen-editor th { font: inherit; font-weight: 600; text-transform: none; letter-spacing: 0; color: var(--z-text); }
+.zen-editor th p, .zen-editor td p { margin: 0; }
+.zen-editor .selectedCell { background: var(--z-select); }
+.zen-editor hr { border: 0; border-top: 1px solid var(--z-line); width: 30%; margin: 2.2em auto; }
+/* raw HTML, comments and images: shown as text, never live */
+.zen-editor [data-type="html"], .zen-editor .md-image { font: .76em/1.6 var(--z-mono); color: var(--z-faint); white-space: pre-wrap;
+  border: 1px dashed var(--z-line); border-radius: 4px; padding: 0 .25em; }
+.zen-editor p > [data-type="html"]:only-child, .zen-editor p > .md-image:only-child { display: inline-block; max-width: 100%; }
+.zen-editor [data-type="html"][data-value^="<!--"] { font-style: italic; border-color: transparent; }
+.zen-editor .ProseMirror-selectednode { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* ProseMirror's own needs */
+.ProseMirror { position: relative; white-space: pre-wrap; white-space: break-spaces; font-variant-ligatures: none; font-feature-settings: "liga" 0; }
+.ProseMirror pre { white-space: pre-wrap; }
+.ProseMirror li { position: relative; }
+.ProseMirror-hideselection *::selection { background: transparent; }
+.ProseMirror-hideselection { caret-color: transparent; }
+.ProseMirror [draggable][contenteditable=false] { user-select: text; }
+img.ProseMirror-separator { display: inline !important; border: none !important; margin: 0 !important; }
+/* focus mode (on by default): the block you are in, the one before and the one after stay; the rest steps back */
+.zen-editor > * { transition: opacity .25s ease, filter .25s ease; }
+body.focus .zen-editor > :not(.is-current):not(.is-near) { opacity: .3; }
+/* on white, grey text stays crisp: it fades further and softens, the way dimmed text looks on black */
+html[data-palette="white"] body.focus .zen-editor > :not(.is-current):not(.is-near) { opacity: .2; filter: blur(.6px); }
+/* the Markdown source */
+.zen-source { display: block; width: 100%; min-height: 70vh; field-sizing: content; resize: none; border: 0; outline: none; padding: 0;
+  background: transparent; color: var(--z-text); font: 15px/1.7 var(--z-mono); tab-size: 4; }
 /* the preview, close to how GitHub draws an issue */
+.zen .preview { font-family: var(--z-sans); }
 .markdown-body { font-size: 16px; line-height: 1.6; overflow-wrap: anywhere; }
 .markdown-body > :first-child { margin-top: 0; }
 .markdown-body > :last-child { margin-bottom: 0; }
@@ -41,7 +148,7 @@
 .markdown-body input[type="checkbox"] { margin: 0 .3em .2em -1.4em; vertical-align: middle; }
 .markdown-body summary { cursor: pointer; }
 .markdown-body details > :not(summary):first-of-type { margin-top: 12px; }
-.markdown-body table { width: auto; border-collapse: collapse; }
+.markdown-body table { display: block; max-width: 100%; overflow-x: auto; width: auto; border-collapse: collapse; }
 .markdown-body th, .markdown-body td { padding: 6px 13px; border: 1px solid var(--border); }
 .markdown-body th { text-transform: none; letter-spacing: 0; font-size: 15px; font-weight: 600; color: var(--text); }
 .markdown-body blockquote { padding: 0 1em; color: var(--muted); border-left: .25em solid var(--border-strong); }
@@ -50,22 +157,44 @@
 .markdown-body hr { border: 0; border-top: 1px solid var(--border); margin: 24px 0; }
 .markdown-body kbd { font: 12px ui-monospace, Menlo, Consolas, monospace; padding: 2px 5px; border: 1px solid var(--border-strong);
   border-bottom-width: 2px; border-radius: 6px; background: var(--surface-2); }
+.zen footer { max-width: var(--col); margin: 0 auto; padding: 0 0 40px; color: var(--z-faint); font: 12.5px/1.7 var(--z-sans); }
+.zen footer kbd { font: 11.5px var(--z-mono); padding: 0 4px; border: 1px solid var(--z-line); border-radius: 4px; }
+@media (max-width: 600px) {
+  .zen .bar { padding: 10px 16px; }
+  .zen .tools { margin-left: -9px; }
+  .zen-editor { font-size: 17.5px; }
+  .zen .pane { padding-top: 10px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .chrome, .zen-editor > * { transition: none; }
+}
 </style>
 </head>
-<body data-rev="{{ rev }}" data-approvers="{{ approvers }}">
+<body class="zen focus" data-view="edit" data-rev="{{ rev }}" data-approvers="{{ approvers }}">
 <div class="offline">{{ w.offline }}</div>
 <div id="words" hidden data-saved="{{ w.saved }}" data-unsaved="{{ w.unsaved }}" data-saving="{{ w.saving }}"
   data-save-failed="{{ w.save_failed }}" data-copied="{{ w.copied }}" data-copy-failed="{{ w.copy_failed }}"
-  data-updated="{{ w.updated }}" data-changed="{{ w.changed }}" data-conflict="{{ w.conflict }}"></div>
+  data-updated="{{ w.updated }}" data-changed="{{ w.changed }}" data-conflict="{{ w.conflict }}"
+  data-editor="{{ w.editor }}" data-link-prompt="{{ w.link_prompt }}"></div>
+<header class="bar chrome">
+  <h1 class="where"><span>/intent · {{ w.title }}</span> <code>{{ source }}</code></h1>
+  <nav class="tools" aria-label="{{ w.title }}">
+    <span class="status" id="status" role="status">{{ w.saved }}</span>
+    <button type="button" id="save" class="save" title="Ctrl+S / ⌘S">{{ w.save }}</button>
+    <button type="button" id="copy-md">{{ w.copy_markdown }}</button>
+    <button type="button" id="copy-html">{{ w.copy_formatted }}</button>
+    <span class="sep" aria-hidden="true"></span>
+    <button type="button" id="view-source" aria-pressed="false" aria-controls="pane-source" title="Ctrl+/ / ⌘/">{{ w.source }}</button>
+    <button type="button" id="view-preview" aria-pressed="false" aria-controls="pane-preview">{{ w.preview }}</button>
+    <button type="button" id="focus-mode" aria-pressed="false" title="{{ w.focus_title }}">{{ w.focus }}</button>
+    <span class="sep" aria-hidden="true"></span>
+    <span class="palette" role="group" aria-label="{{ w.palette }}">
+      <button type="button" id="palette-black" aria-pressed="true">{{ w.black }}</button>
+      <button type="button" id="palette-white" aria-pressed="false">{{ w.white }}</button>
+    </span>
+  </nav>
+</header>
 <main class="draft">
-  <header>
-    <div class="eyebrow">/intent · {{ w.title }}</div>
-    <h1><code>{{ name }}</code></h1>
-    <div class="pills">
-      <span class="pill"><code>{{ source }}</code></span>
-      <span class="pill status" id="status" role="status">{{ w.saved }}</span>
-    </div>
-  </header>
   <div class="banner" id="approvers" role="alert"{% if not gaps %} hidden{% endif %}>
     <span><span id="missing-text"{% if not missing %} hidden{% endif %}>{{ w.missing }} <strong id="missing-list">{{ missing }}</strong></span>
     <span id="says-none"{% if not says_none %} hidden{% endif %}>{{ w.says_none }}</span></span>
@@ -76,45 +205,50 @@
     <button type="button" id="keep-mine">{{ w.keep_mine }}</button>
     <button type="button" id="overwrite">{{ w.overwrite }}</button>
   </div>
-  <div class="toolbar">
-    <nav class="tabs" role="tablist">
-      <button type="button" role="tab" id="tab-write" aria-controls="pane-write" aria-selected="false">{{ w.write }}</button>
-      <button type="button" role="tab" id="tab-preview" aria-controls="pane-preview" aria-selected="true">{{ w.preview }}</button>
-    </nav>
-    <div class="actions">
-      <button type="button" id="save" class="primary" title="Ctrl+S / ⌘S">{{ w.save }}</button>
-      <button type="button" id="copy-md">{{ w.copy_markdown }}</button>
-      <button type="button" id="copy-html">{{ w.copy_formatted }}</button>
-    </div>
+  <div class="banner" id="wraps" role="status"{% if not wraps %} hidden{% endif %}>
+    <span>{{ w.wrapped }} <strong id="wraps-count">{{ wraps }}</strong></span>
+    <button type="button" id="join-lines">{{ w.join_lines }}</button>
   </div>
-  <section class="card pane" id="pane-write" role="tabpanel" hidden>
-    <textarea id="text" spellcheck="true" aria-label="{{ w.write }}">
+  <p class="banner" id="source-only" role="status" hidden>{{ w.source_only }}</p>
+  <section class="pane" id="pane-edit">
+    <div id="editor" class="zen-text"></div>
+  </section>
+  <section class="pane" id="pane-source" hidden>
+    <textarea id="source" class="zen-source" spellcheck="false" aria-label="{{ w.source }}">
 {{ text }}</textarea>
   </section>
-  <section class="card pane markdown-body" id="pane-preview" role="tabpanel">{{ preview }}</section>
-  <footer>{{ w.footer }}</footer>
+  <section class="pane preview markdown-body" id="pane-preview" aria-label="{{ w.preview }}" hidden>{{ preview }}</section>
+  <footer class="chrome">{{ w.footer }}<br>{{ w.keys }}</footer>
 </main>
 <script nonce="{{ nonce }}">
+{{ editor }}
 (function () {
   "use strict";
   var $ = function (id) { return document.getElementById(id); };
   var words = $("words").dataset;
-  var text = $("text"), preview = $("pane-preview"), status = $("status");
+  var page = document.body;
+  var source = $("source"), preview = $("pane-preview"), status = $("status"), saveButton = $("save");
   var slug = decodeURIComponent(location.pathname.split("/").pop().replace(/\.html$/, ""));
   // `saved` is the text the file holds as far as this page knows, at revision `rev`.
-  var rev = document.body.getAttribute("data-rev");
-  var saved = text.value, previewed = text.value;
-  var saving = false, laterRev = null, disk = null, flash = null;
+  var rev = page.getAttribute("data-rev");
+  var saved = source.value, previewed = source.value;
+  var saving = false, laterRev = null, disk = null, flash = null, later = 0;
+  // The formatted editor (once it is up); what the page shows ("edit",
+  // "source" or "preview"); where the edits are ("edit" or "source"); and the
+  // text the editor and the source last agreed on.
+  var ed = null, view = "edit", writing = "edit", synced = source.value;
 
-  function dirty() { return text.value !== saved; }
+  // The Markdown Save writes: the source's while edits go there, else the
+  // editor's (the file's own text for every block left as it was).
+  function text() { return writing === "source" || !ed ? source.value : ed.markdown(); }
+  function dirty() { return text() !== saved; }
 
   // Every approver the project has now must be @mentioned: that is how GitHub
   // notifies them (the same rule ocgen applies after each write).
-  var approvers = (document.body.getAttribute("data-approvers") || "").split(" ").filter(Boolean);
+  var approvers = (page.getAttribute("data-approvers") || "").split(" ").filter(Boolean);
   function quote(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
-  function checkApprovers() {
+  function checkApprovers(t) {
     if (!approvers.length) return;
-    var t = text.value;
     var missing = approvers.filter(function (a) {
       return !new RegExp("(^|[^\\w])@" + quote(a.replace(/^@/, "")) + "($|[^\\w/-])", "i").test(t);
     });
@@ -127,32 +261,113 @@
   function say(msg, kind) {
     clearTimeout(flash);
     status.textContent = msg;
-    status.className = "pill status" + (kind ? " " + kind : "");
+    status.className = "status" + (kind ? " " + kind : "");
   }
-  function settle() { say(dirty() ? words.unsaved : words.saved, dirty() ? "warn" : ""); }
+  function settle() {
+    var d = dirty();
+    say(d ? words.unsaved : words.saved, d ? "warn" : "");
+    saveButton.classList.toggle("on", d);
+  }
+  function refresh() { clearTimeout(later); settle(); var t = text(); checkApprovers(t); checkWraps(t); }
+  // GitHub shows every newline in an issue as a line break: lines wrapped by
+  // hand mid-sentence read as broken lines there (the same rule ocgen applies
+  // after each write). Join them: only those newlines change.
+  function checkWraps(t) {
+    if (!ed) return;
+    var n = ed.wraps(t).length;
+    $("wraps-count").textContent = n;
+    $("wraps").hidden = !n;
+  }
+  $("join-lines").addEventListener("click", function () {
+    if (!ed) return;
+    var t = ed.unwrap(text());
+    if (writing === "source") source.value = t; else ed.load(t);
+    refresh();
+  });
+  // After an edit: soon, not on every key.
+  function edited() { clearTimeout(later); later = setTimeout(refresh, 150); hush(true); }
 
-  // Write / Preview
-  function current() { return $("pane-write").hidden ? "preview" : "write"; }
-  function show(pane) {
-    ["write", "preview"].forEach(function (p) {
-      $("pane-" + p).hidden = p !== pane;
-      $("tab-" + p).setAttribute("aria-selected", p === pane ? "true" : "false");
-    });
-    if (pane === "preview") render(); else text.focus();
+  // The controls step back while you type, and come back on a mouse move, on
+  // focus, or with Esc. Not while the system asks for less motion.
+  var still = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)");
+  function hush(typing) { if (!(typing && still && still.matches)) page.classList.add("quiet"); }
+  function wake() { page.classList.remove("quiet"); }
+  var mx = -1, my = -1;
+  document.addEventListener("mousemove", function (e) {
+    if (mx >= 0 && Math.abs(e.screenX - mx) + Math.abs(e.screenY - my) > 4) wake();
+    mx = e.screenX; my = e.screenY;
+  });
+  function outside(e) { if (!$("editor").contains(e.target) && e.target !== source) wake(); }
+  document.addEventListener("focusin", outside);
+  // A touch screen has no mouse to move and no Esc: a tap outside the text.
+  document.addEventListener("pointerdown", outside);
+
+  // Edit (formatted) / Source / GitHub preview
+  function show(next) {
+    if (next === "edit" && !ed) next = "source";
+    // The text moves between the editor and the source with the view.
+    if (next === "source" && writing === "edit" && ed) { source.value = ed.markdown(); synced = source.value; }
+    if (next === "edit" && writing === "source" && source.value !== synced) { ed.load(source.value); synced = source.value; }
+    if (next !== "preview") writing = next;
+    view = next;
+    $("pane-edit").hidden = next !== "edit";
+    $("pane-source").hidden = next !== "source";
+    preview.hidden = next !== "preview";
+    $("view-source").setAttribute("aria-pressed", String(next === "source"));
+    $("view-preview").setAttribute("aria-pressed", String(next === "preview"));
+    page.setAttribute("data-view", next);
+    if (next === "preview") render();
+    else if (next === "source") source.focus();
+    else ed.focus();
   }
+  function toggle(which) { show(view === which ? (which === "preview" ? writing : "edit") : which); }
   function outward() {
     preview.querySelectorAll("a[href]").forEach(function (a) { a.target = "_blank"; a.rel = "noopener noreferrer"; });
   }
   function render() {
-    if (text.value === previewed) return Promise.resolve();
-    var asked = text.value;
+    var asked = text();
+    if (asked === previewed) return Promise.resolve();
     return fetch("render", { method: "POST", body: asked, headers: { "Content-Type": "text/plain;charset=UTF-8" } })
       .then(function (r) { if (!r.ok) throw new Error(r.status); return r.text(); })
       .then(function (html) { previewed = asked; preview.innerHTML = html; outward(); })
       .catch(function () {});
   }
-  $("tab-write").addEventListener("click", function () { show("write"); });
-  $("tab-preview").addEventListener("click", function () { show("preview"); });
+  $("view-source").addEventListener("click", function () { toggle("source"); });
+  $("view-preview").addEventListener("click", function () { toggle("preview"); });
+  // Focus: the page full screen, without the browser's toolbar and with no menu
+  // but this button (it, or Esc, leaves); the dimming goes on with it. Where a
+  // page can't go full screen, the button turns the dimming off or on instead.
+  var root = document.documentElement, focusButton = $("focus-mode");
+  var canFull = !!(document.fullscreenEnabled || document.webkitFullscreenEnabled);
+  function isFull() { return !!(document.fullscreenElement || document.webkitFullscreenElement); }
+  function ignore(p) { if (p && p.catch) p.catch(function () {}); }
+  function dim(on) {
+    page.classList.toggle("focus", on);
+    if (!canFull) focusButton.setAttribute("aria-pressed", String(on));
+  }
+  function fullScreen() {
+    if (!canFull) { dim(!page.classList.contains("focus")); return; }
+    if (isFull()) { ignore((document.exitFullscreen || document.webkitExitFullscreen).call(document)); return; }
+    dim(true);
+    ignore(root.requestFullscreen ? root.requestFullscreen({ navigationUI: "hide" }) : root.webkitRequestFullscreen());
+  }
+  function fullChanged() {
+    var full = isFull();
+    page.classList.toggle("full", full);
+    focusButton.setAttribute("aria-pressed", String(full));
+    if (view === "edit" && ed) ed.focus(); else if (view === "source") source.focus();
+  }
+  document.addEventListener("fullscreenchange", fullChanged);
+  document.addEventListener("webkitfullscreenchange", fullChanged);
+  focusButton.addEventListener("click", fullScreen);
+  if (!canFull) { focusButton.removeAttribute("title"); focusButton.setAttribute("aria-pressed", "true"); }
+  // Black (the default) or white.
+  function palette(p) {
+    document.documentElement.setAttribute("data-palette", p);
+    ["black", "white"].forEach(function (q) { $("palette-" + q).setAttribute("aria-pressed", String(q === p)); });
+  }
+  $("palette-black").addEventListener("click", function () { palette("black"); });
+  $("palette-white").addEventListener("click", function () { palette("white"); });
 
   // The banner: the file changed on disk, or a save was refused because of it.
   function banner(msg, conflict) {
@@ -164,8 +379,11 @@
   function unbanner() { $("banner").hidden = true; }
   function take(t, r) {
     // The editor gives its text back with LF line endings, whatever the file has.
-    text.value = t; saved = text.value; rev = r; unbanner(); checkApprovers();
-    if (current() === "preview") render();
+    source.value = t;
+    saved = synced = source.value; rev = r;
+    if (ed) ed.load(saved);
+    unbanner(); checkApprovers(saved);
+    if (view === "preview") render();
   }
   $("load-disk").addEventListener("click", function () { if (disk) take(disk.text, disk.rev); settle(); });
   // Keep mine: the next save replaces the newer file.
@@ -175,7 +393,7 @@
   // Save, only over the version this page last saw.
   function save() {
     if (saving) return;
-    var body = text.value;
+    var body = text();
     // The editor takes at most 1 MiB (GitHub takes far less).
     if (new Blob([body]).size > 1048576) { say(words.saveFailed, "bad"); return; }
     saving = true;
@@ -189,19 +407,26 @@
         if (x.code === 200) { rev = x.j.rev; saved = body; unbanner(); settle(); }
         else if (x.code === 409) { disk = x.j; banner(words.conflict, true); say(words.unsaved, "warn"); }
         else say(words.saveFailed, "bad");
-        var later = laterRev; laterRev = null;
-        if (later) changed(later);
+        var next = laterRev; laterRev = null;
+        if (next) changed(next);
       })
       .catch(function () { saving = false; say(words.saveFailed, "bad"); });
   }
-  $("save").addEventListener("click", save);
+  saveButton.addEventListener("click", save);
   document.addEventListener("keydown", function (e) {
-    if ((e.metaKey || e.ctrlKey) && !e.altKey && (e.key === "s" || e.key === "S")) { e.preventDefault(); save(); }
+    var mod = (e.metaKey || e.ctrlKey) && !e.altKey;
+    if (mod && (e.key === "s" || e.key === "S")) { e.preventDefault(); save(); }
+    else if (mod && !e.shiftKey && (e.code === "Slash" || e.key === "/")) { e.preventDefault(); toggle("source"); }
+    else if (mod && e.shiftKey && (e.code === "Period" || e.key === "." || e.key === ">")) { e.preventDefault(); dim(!page.classList.contains("focus")); }
+    else if (e.key === "Escape" && !e.defaultPrevented) {
+      if (page.classList.contains("quiet")) wake();
+      else { hush(false); if (document.activeElement === document.body && ed && view === "edit") ed.focus(); }
+    }
   });
-  text.addEventListener("input", function () { settle(); checkApprovers(); });
+  source.addEventListener("input", edited);
   window.addEventListener("beforeunload", function (e) { if (dirty()) { e.preventDefault(); e.returnValue = ""; } });
 
-  // Copy: the Markdown as it is in the editor, or the preview with its formatting.
+  // Copy: the Markdown Save would write, or the preview with its formatting.
   function copied(p) {
     p.then(function () { say(words.copied); flash = setTimeout(settle, 1600); },
            function () { say(words.copyFailed, "bad"); });
@@ -216,12 +441,16 @@
     return ok ? Promise.resolve() : Promise.reject(new Error("copy"));
   }
   $("copy-md").addEventListener("click", function () {
-    if (navigator.clipboard && window.isSecureContext) { copied(navigator.clipboard.writeText(text.value)); return; }
-    var wasHidden = $("pane-write").hidden;
-    $("pane-write").hidden = false;
-    text.select();
+    var t = text();
+    if (navigator.clipboard && window.isSecureContext) { copied(navigator.clipboard.writeText(t)); return; }
+    var area = document.createElement("textarea");
+    area.value = t;
+    area.className = "zen-source";
+    area.style.position = "fixed"; area.style.opacity = "0";
+    document.body.appendChild(area);
+    area.select();
     var ok = document.execCommand("copy");
-    $("pane-write").hidden = wasHidden;
+    area.remove();
     copied(ok ? Promise.resolve() : Promise.reject(new Error("copy")));
   });
   $("copy-html").addEventListener("click", function () {
@@ -257,11 +486,30 @@
   var errors = 0;
   var es = new EventSource("events?topic=" + encodeURIComponent(slug) + "&rev=" + encodeURIComponent(rev));
   es.addEventListener("changed", function (e) { changed(e.data); });
-  es.onopen = function () { errors = 0; document.body.removeAttribute("data-viewer"); };
-  es.onerror = function () { if (++errors > 5) document.body.setAttribute("data-viewer", "offline"); };
+  es.onopen = function () { errors = 0; page.removeAttribute("data-viewer"); };
+  es.onerror = function () { if (++errors > 5) page.setAttribute("data-viewer", "offline"); };
 
-  outward();
-  show(text.value.trim() ? "preview" : "write");
+  // The keys as this computer names them.
+  if (/Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent)) {
+    document.querySelectorAll("kbd.mod").forEach(function (k) { k.textContent = "⌘"; });
+  }
+
+  // The formatted editor; the Source view stands in for anything it can't show.
+  function sourceOnly() {
+    $("view-source").disabled = true;
+    $("source-only").hidden = false;
+    show("source");
+  }
+  var start = window.OcgenDraft && window.OcgenDraft.create
+    ? window.OcgenDraft.create({ root: $("editor"), text: source.value, label: words.editor, onChange: edited })
+    : Promise.reject(new Error("no editor"));
+  start.then(function (api) {
+    if (!api.spans() && source.value.trim()) { api.destroy(); throw new Error("blocks not located"); }
+    ed = api;
+    synced = source.value;
+    refresh();
+    if (view === "edit") ed.focus();
+  }).catch(sourceOnly);
 })();
 </script>
 </body>

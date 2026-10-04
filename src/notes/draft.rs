@@ -1,9 +1,16 @@
 //! The /intent issue draft's browser review. /intent writes the GitHub issue
 //! description to `.claude/intent/drafts/<name>.md`; `ocgen draft` — or the word
 //! `draft` sent alone in Claude Code, caught by the `intent-draft` hook — opens
-//! it in a local editor run by the live viewer ([`super::viewer`]): the raw
-//! Markdown to edit and save back to the file, a preview drawn the way GitHub
-//! draws an issue, and buttons that copy it.
+//! it in a local editor run by the live viewer ([`super::viewer`]): the text
+//! formatted, with the Markdown syntax hidden (Milkdown, [`EDITOR_JS`]), the
+//! Markdown source, a preview drawn the way GitHub draws an issue, and buttons
+//! that copy it. Save writes the file back as plain Markdown: unedited, byte
+//! for byte; edited, with the original text of every block left untouched.
+//!
+//! The editor is a prebuilt bundle (built by `tools/milkdown`, never by Cargo)
+//! inlined into the page's one nonce-tagged script, so the page's policy still
+//! allows nothing from outside. In the editor a draft's raw HTML is text, and
+//! images are shown as their Markdown.
 //!
 //! The preview is made safe here, after pulldown-cmark parses it: raw HTML keeps
 //! only a few tags GitHub allows (`<details>`, `<summary>`, `<kbd>`…), without
@@ -31,6 +38,13 @@ pub const DIR: &str = ".claude/intent/drafts";
 pub const WORD: &str = "draft";
 /// The editor page.
 pub const TEMPLATE: &str = "claude/notes/draft.html.j2";
+/// The Milkdown release the editor bundle is built from (pinned in
+/// `tools/milkdown/package.json`).
+pub const MILKDOWN_VERSION: &str = "7.22.2";
+/// The formatted editor: Milkdown with CommonMark and GitHub Markdown, built by
+/// `cd tools/milkdown && npm ci && npm run build` (licenses: `milkdown/LICENSES.txt`).
+/// It defines `window.OcgenDraft`.
+pub const EDITOR_JS: &str = include_str!("milkdown/editor.min.js");
 
 /// Whether a prompt is the one word that opens the draft (any case, nothing else).
 pub fn is_prompt(prompt: &str) -> bool {
@@ -316,10 +330,13 @@ pub fn page(
         nonce => safe(nonce),
         text => safe(md),
         preview => Value::from_safe_string(preview(md)),
+        // Ours, built to be inlined (nothing in it ends the script).
+        editor => Value::from_safe_string(EDITOR_JS.to_string()),
         approvers => safe(&approvers.join(" ")),
         missing => safe(&gaps.missing.join(", ")),
         says_none => gaps.says_none,
         gaps => !gaps.is_empty(),
+        wraps => crate::intent::hard_wraps(md).len(),
     };
     let mut page = env
         .get_template("draft.html")?
@@ -337,8 +354,16 @@ fn words_value(w: &'static Words) -> Value {
     m.insert("lang", Value::from(w.lang));
     for (k, v) in [
         ("title", d.title),
-        ("write", d.write),
+        ("editor", d.editor),
+        ("source", d.source),
         ("preview", d.preview),
+        ("focus", d.focus),
+        ("focus_title", d.focus_title),
+        ("palette", d.palette),
+        ("black", d.black),
+        ("white", d.white),
+        ("link_prompt", d.link_prompt),
+        ("source_only", d.source_only),
         ("save", d.save),
         ("copy_markdown", d.copy_markdown),
         ("copy_formatted", d.copy_formatted),
@@ -356,12 +381,15 @@ fn words_value(w: &'static Words) -> Value {
         ("updated", d.updated),
         ("missing", d.missing),
         ("says_none", d.says_none),
+        ("wrapped", d.wrapped),
+        ("join_lines", d.join_lines),
         ("footer", d.footer),
     ] {
         m.insert(k, Value::from(v));
     }
-    // Ours, not the draft's: it names a command in markup.
+    // Ours, not the draft's: they name a command or keys in markup.
     m.insert("offline", Value::from_safe_string(d.offline.to_string()));
+    m.insert("keys", Value::from_safe_string(d.keys.to_string()));
     Value::from(m)
 }
 

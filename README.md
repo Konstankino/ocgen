@@ -901,12 +901,40 @@ comments stay in the template and out of the draft.
 
 **Review the draft in your browser.** When `/intent` shows the draft it suggests this. Type
 **`draft`** (the word alone, as your whole message) and the newest issue draft opens in your
-browser, in a local editor where you can:
+browser, in a quiet local editor: one centered column of text on a black page (a **White** palette
+is one click away), with the controls fading while you type. There you can:
 
-- **Write:** edit the raw Markdown. **Save** (or ⌘S / Ctrl+S) writes it back to the draft file.
-- **Preview:** see it the way GitHub shows an issue — task lists, tables, the collapsible Plan,
-  comments hidden, a single newline kept as a line break.
-- **Copy:** **Copy Markdown** for GitHub's issue form, or **Copy formatted** for chat or email.
+- **Edit it as text:** headings, bold, lists, task lists and tables show formatted, with the
+  Markdown syntax hidden ([Milkdown](https://milkdown.dev)). Type Markdown as you go (`## ` makes a
+  heading, `- [ ] ` a task) or use the usual keys (⌘B, ⌘I, ⌘K for a link); click a box to tick it.
+  Raw HTML (`<details>`, `<kbd>`, comments) shows as greyed text to keep or delete. **Save** (or
+  ⌘S / Ctrl+S) writes the file back as plain Markdown.
+- **Source** (⌘/ / Ctrl+/): the exact Markdown, to edit raw HTML or anything else by hand.
+- **GitHub preview:** see it the way GitHub shows an issue — task lists, tables, the collapsible
+  Plan, comments hidden, a single newline kept as a line break.
+- **Copy:** **Copy Markdown** (exactly what Save writes) for GitHub's issue form, or **Copy
+  formatted** for chat or email.
+- **Focus:** full screen. The browser's toolbar and the page's menu go away, all but the Focus
+  button, which brings them back (so does Esc). Where the browser can't go full screen (iPhone
+  Safari), the button turns the dimming off or on instead.
+- **Dimming** (on from the start; ⌘⇧. / Ctrl+Shift+. turns it off or on): the block you are in,
+  the one before it and the one after it stay bright; the rest dims (on white it also softens, so it
+  steps back as far as on black). Esc shows or hides the controls.
+
+**One line per paragraph.** GitHub shows every newline in an issue as a line break, so a draft
+wrapped by hand at 100 columns reads as broken lines once filed — and in the editor, which shows it
+the way GitHub will. `/intent` writes each paragraph and each list item on one line, and the
+`intent-approvers` hook checks every write of a draft for lines that end mid-sentence (a line ending
+in `,` or `;`, or followed by one that goes on in lowercase), so Claude joins them at once. Breaks
+that are meant — the **Blocks prod?** and **Depends on…** lines, a label or a URL on its own line —
+stay. A draft that still has some shows a banner in the editor with **Join them**, which joins only
+those lines (every other byte stays), and `ocgen draft` warns with their line numbers.
+
+Save changes only what you edited. Opened and saved without an edit, the file is written back byte
+for byte. After an edit, every block you didn't touch keeps its exact text. An edited block is
+written the way Milkdown writes Markdown: a table's columns are re-padded, and a
+`[text][ref]` link becomes `[text](url)` (its definition stays). Bullets (`*` or `-`), `*`/`_`
+emphasis, bare URLs, @mentions and `#123` stay as you wrote them.
 
 Claude re-reads the draft before using it again, so your edits stay yours. Browser edits skip the
 tone check, so if one drops or softens a flaw of Medium or higher, Claude tells you once and lets
@@ -919,7 +947,10 @@ A `UserPromptSubmit` hook (`intent-draft`) catches the word and starts the edito
 Claude Code's Bash sandbox, where a local server can start; inside the sandbox it can't. Any other
 prompt passes through untouched. The editor is the same loopback viewer as `/inquire`'s pages,
 behind a random token and same-origin checks for saving. The draft's text can't run scripts or load
-anything: raw HTML is limited to a few tags without attributes, and images become links. It needs
+anything: in the editor raw HTML is only text and images show as their Markdown; in the preview raw
+HTML is limited to a few tags without attributes, and images become links. Pasted HTML becomes
+Markdown, without scripts or event attributes. The editor is built into the binary and runs inside
+the page's one script, so the page loads nothing from the network. It needs
 the ocgen binary on `PATH`; without it the word reaches Claude, which tells you to run
 `ocgen draft`. `ocgen verify` checks the hook.
 
@@ -945,7 +976,7 @@ was told:
 
 | When | What checks | What happens |
 |---|---|---|
-| Claude writes a pending intent file or an issue draft | the `intent-approvers` hook (`PostToolUse`) | Claude is told who is missing, and that this list wins over its instructions; it fixes the file then |
+| Claude writes a pending intent file or an issue draft | the `intent-approvers` hook (`PostToolUse`) | Claude is told who is missing, and that this list wins over its instructions; it fixes the file then (for a draft, also any lines wrapped by hand) |
 | You review a draft | the `draft` editor, `ocgen draft`, the `draft` note | A banner (live, as you type) or a warning names the approvers it doesn't @mention |
 | The approvers change | `ocgen edit intent` (and `--show`) | Lists every pending intent and draft that misses one, and how to fix it (`/intent ADR-0007`) |
 | Any time, CI | `ocgen verify` | "/intent approvers in drafts" warns with the files |
@@ -1487,7 +1518,7 @@ for a plugin; `--team` is off by default. (The `--base-url` flag is OpenCode-onl
 | `ocgen verify [dir] --run-check` | Also run the project's committed check command, as you and unsandboxed (only on a repository you trust). |
 | `ocgen notes open [topic]` | Show an `/inquire` ledger's HTML page: refresh the tab that shows it, or open one ([details](#the-visual-ledger)). |
 | `ocgen notes render <file.md>…` | Render `/inquire` ledgers (`.claude/notes/<topic-slug>.md`) and `/intent` reading copies (`.claude/intent/view/<name>.md`) to their HTML pages without opening them; any other file is refused. |
-| `ocgen draft [name] [-p dir]` | Open an `/intent` issue draft (`.claude/intent/drafts/<name>.md`) in a local browser editor: edit and save the Markdown, preview it as GitHub shows it, and copy it. With no name, the newest; `ADR-0007` picks by intent. Typing `draft` in Claude Code does the same ([details](#from-findings-to-a-github-issue-intent)). |
+| `ocgen draft [name] [-p dir]` | Open an `/intent` issue draft (`.claude/intent/drafts/<name>.md`) in a local browser editor: edit it as formatted text (Markdown syntax hidden) or as Markdown source, save it back as plain Markdown (untouched blocks keep their exact text), preview it as GitHub shows it, and copy it. A calm black page by default (white on request), the text around the cursor dimmed, and a Focus button for full screen. With no name, the newest; `ADR-0007` picks by intent. Typing `draft` in Claude Code does the same ([details](#from-findings-to-a-github-issue-intent)). |
 | `ocgen managed-settings` | Print a recommended organisation policy (`managed-settings.json`): no bypass mode, secrets unreadable, high-impact commands always ask, strict sandbox. |
 | `ocgen fields` (alias `reference`) | Explain every configurable field, including the Claude-specific ones (alias, tools, skills, output/plugin, agent teams). |
 
@@ -1553,7 +1584,8 @@ claude/commands/*.md.j2         # multi / intake / refine / deliver / inquire / 
 claude/intent/*.md              # default /intent issue and intent-file templates (copied into new projects)
 claude/notes/ledger.html.j2     # the /inquire ledger's HTML page
 claude/notes/intent.html.j2     # the /intent reading copy's HTML page
-claude/notes/draft.html.j2      # the /intent issue draft's editor (`draft`, `ocgen draft`)
+claude/notes/draft.html.j2      # the /intent issue draft's editor (`draft`, `ocgen draft`): its layout, palettes and script;
+                                # the Milkdown editor itself is built into the binary (tools/milkdown, not a template)
 claude/notes/page.css           # the style the pages share
 claude/skill/SKILL.md.j2        # one generic skill
 claude/skill-presets.toml       # add-skill presets (command / knowledge / forked-research)

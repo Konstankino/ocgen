@@ -3,7 +3,9 @@ GitHub issue template for /intent. The title goes outside this file: imperative 
 actionable, at most 72 characters. Keep the description within the configured word
 limit (`ocgen edit intent --max-words`). The sections are a guide, not a form: keep
 their order and what each is for, adapt the wording to the topic, and leave these
-comments out of the draft. Edit this structure freely — it's yours.
+comments out of the draft. GitHub shows every newline in an issue as a line break, so
+write each paragraph and each list item on one line; never wrap it by hand. Edit this
+structure freely — it's yours.
 -->
 <!--
 House style — /intent reads this block and follows it in every draft. Tune it for your team.
@@ -32,7 +34,7 @@ could potentially / in theory (when the evidence shows it happens); nice-to-have
 cosmetic for a security, correctness or data-loss problem.
 -->
 ## Intent
-<!-- 2-3 lines. What should be true afterwards, and why it matters. No solution yet.
+<!-- 2-3 sentences, in one paragraph. What should be true afterwards, and why it matters. No solution yet.
 Link the intent file when there is one. A flaw behind it (Medium or higher) goes here or in
 an option's "what can go wrong": when [trigger], [impact] — severity, and its evidence (F#)
 or a link to it in the intent file. -->

@@ -112,8 +112,36 @@ over two lines -->
 
 // ---------------------------------------------------------------- page --
 
+/// Every element /intent drafts use: raw HTML, comments, task lists, tables,
+/// code, links, @mentions and issue numbers.
+const EVERYTHING: &str = include_str!("fixtures/intent-draft-everything.md");
+
+/// The page without its one script (the editor bundle and the page's code).
+fn markup(page: &str) -> String {
+    let start = page.find("<script").expect("a script");
+    let end = page[start..].find("</script>").expect("its end") + start;
+    format!("{}{}", &page[..start], &page[end..])
+}
+
+/// The Source view's text, as the browser reads it.
+fn source_text(page: &str) -> String {
+    let open = page
+        .find(r#"<textarea id="source""#)
+        .expect("the Source view");
+    let body = &page[open..];
+    // The parser drops the newline that follows the start tag.
+    let start = body.find(">\n").expect("start tag") + 2;
+    let end = body.find("</textarea>").expect("end tag");
+    body[start..end]
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&amp;", "&")
+}
+
 #[test]
-fn page_holds_the_raw_text_the_preview_and_the_controls() {
+fn page_holds_the_editor_the_source_the_preview_and_the_controls() {
     let page = draft::page(
         "# Title & <b>\n",
         ".claude/intent/drafts/adr-0001-cache.md",
@@ -123,34 +151,165 @@ fn page_holds_the_raw_text_the_preview_and_the_controls() {
         &[],
     )
     .unwrap();
-    // The raw Markdown, escaped inside the editor.
+    // The formatted editor mounts here; the Source view holds the raw
+    // Markdown, escaped.
+    assert!(page.contains(r#"<div id="editor""#), "{}", markup(&page));
     assert!(
-        page.contains("<textarea") && page.contains("# Title &amp; &lt;b&gt;"),
-        "{page}"
+        page.contains(r#"<textarea id="source""#) && page.contains("# Title &amp; &lt;b&gt;"),
+        "{}",
+        markup(&page)
     );
-    // Write, Preview, Save and Copy, and the one script, nonce-tagged.
+    // The GitHub preview, Save, Copy, Source, Focus; the file it saves.
     for part in [
-        "Write",
-        "Preview",
+        r#"id="pane-preview""#,
+        "GitHub preview",
         "Save",
         "Copy Markdown",
-        r#"<script nonce="n0nce">"#,
+        "Copy formatted",
+        "Source",
+        "Focus",
+        r#"id="palette-black" aria-pressed="true">Black<"#,
+        r#"id="palette-white" aria-pressed="false">White<"#,
         "0123456789abcdef",
         ".claude/intent/drafts/adr-0001-cache.md",
     ] {
         assert!(page.contains(part), "page misses {part}");
     }
+    // One script, nonce-tagged, and nothing loaded from anywhere.
     assert_eq!(
         page.matches("<script").count(),
         1,
         "only the page's own script"
     );
+    assert!(page.contains(r#"<script nonce="n0nce">"#));
+    // The dimming is on from the start; the Focus button takes the page full
+    // screen (no browser toolbar), which only a click can do.
+    assert!(page.contains(r#"<body class="zen focus""#));
+    assert!(page.contains(
+        r#"id="focus-mode" aria-pressed="false" title="Full screen: hides the browser’s toolbar (Esc leaves)">Focus<"#
+    ));
+    for api in ["requestFullscreen", "exitFullscreen", "fullscreenchange"] {
+        assert!(page.contains(api), "the page doesn't use {api}");
+    }
+    // In full screen the menu goes too, all but the Focus button.
+    assert!(page.contains(
+        "body.full .where, body.full .tools > :not(#focus-mode), body.full footer { display: none; }"
+    ));
+    // Black by default, whatever the system's setting; white on request.
+    assert!(page.contains(r#"<html lang="en" data-palette="black">"#));
+    for palette in [
+        r#"html[data-palette="black"]"#,
+        r#"html[data-palette="white"]"#,
+    ] {
+        assert!(page.contains(palette), "no {palette} palette");
+    }
+    let html = markup(&page);
+    for bad in [" src=", "<link", "<iframe", "<object", "<embed", "@import"] {
+        assert!(!html.contains(bad), "{bad} in the page:\n{html}");
+    }
 
     // The page's own words follow the answer language; the draft doesn't change.
     let uk = draft::page("Text\n", "d.md", "r", "n", "Ukrainian", &[]).unwrap();
+    for part in [
+        r#"lang="uk""#,
+        "Зберегти",
+        "Код Markdown",
+        "Як на GitHub",
+        "Фокус",
+        "На весь екран: ховає панель браузера (Esc — вийти)",
+        "Чорна",
+        "Біла",
+    ] {
+        assert!(uk.contains(part), "Ukrainian page misses {part}");
+    }
+    // No Russian in the Ukrainian words.
+    let words = markup(&uk);
+    for letter in ['ы', 'э', 'ъ', 'ё', 'Ы', 'Э', 'Ъ', 'Ё'] {
+        assert!(!words.contains(letter), "{letter} in the Ukrainian page");
+    }
+}
+
+#[test]
+fn page_carries_the_original_markdown_verbatim() {
+    let page = draft::page(EVERYTHING, "d.md", "r", "n", "English", &[]).unwrap();
+    assert_eq!(source_text(&page), EVERYTHING);
+    // A leading newline and quotes survive too.
+    let odd = "\n  indented \"quoted\" 'single' & <tag>\n\n";
+    let page = draft::page(odd, "d.md", "r", "n", "English", &[]).unwrap();
+    assert_eq!(source_text(&page), odd);
+}
+
+#[test]
+fn page_embeds_the_pinned_milkdown_bundle() {
+    let version = draft::MILKDOWN_VERSION;
     assert!(
-        uk.contains(r#"lang="uk""#) && uk.contains("Зберегти"),
-        "{uk}"
+        version.split('.').count() == 3 && version.split('.').all(|p| p.parse::<u32>().is_ok()),
+        "an exact version: {version}"
+    );
+    // The bundle says which Milkdown it is and how it was built.
+    let js = draft::EDITOR_JS;
+    let head: String = js.lines().take(3).collect::<Vec<_>>().join("\n");
+    assert!(
+        head.starts_with(&format!(
+            "/*! ocgen /intent draft editor — Milkdown {version} "
+        )),
+        "{head}"
+    );
+    assert!(head.contains("npm ci && npm run build"), "{head}");
+    assert!(js.contains("OcgenDraft"), "the editor's entry point");
+    // Safe to inline: nothing ends the script or opens an HTML comment, and
+    // nothing needs eval.
+    for bad in ["</script", "</SCRIPT", "<!--", "new Function("] {
+        assert!(!js.contains(bad), "{bad} in the bundle");
+    }
+
+    // The page inlines it in its one script.
+    let page = draft::page("Text\n", "d.md", "r", "n0nce", "English", &[]).unwrap();
+    let script = &page[page.find(r#"<script nonce="n0nce">"#).unwrap()..];
+    assert!(script.contains(head.lines().next().unwrap()));
+
+    // The build recipe pins the same version, exactly, and its lockfile too.
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let pkg: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(root.join("tools/milkdown/package.json")).unwrap(),
+    )
+    .unwrap();
+    let deps = pkg["dependencies"].as_object().unwrap();
+    let milkdown: Vec<_> = deps
+        .keys()
+        .filter(|k| k.starts_with("@milkdown/"))
+        .collect();
+    assert!(milkdown.len() >= 4, "{milkdown:?}");
+    for (name, v) in deps
+        .iter()
+        .chain(pkg["devDependencies"].as_object().unwrap())
+    {
+        let v = v.as_str().unwrap();
+        assert!(
+            v.chars().next().unwrap().is_ascii_digit(),
+            "{name} is not pinned: {v}"
+        );
+        if name.starts_with("@milkdown/") {
+            assert_eq!(v, version, "{name}");
+        }
+    }
+    let lock: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(root.join("tools/milkdown/package-lock.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        lock["packages"]["node_modules/@milkdown/core"]["version"],
+        version
+    );
+
+    // Milkdown's license ships with it.
+    let licenses = fs::read_to_string(root.join("src/notes/milkdown/LICENSES.txt")).unwrap();
+    assert!(
+        licenses.contains(&format!("@milkdown/core@{version} — MIT"))
+            && licenses.contains("Copyright (c) 2020-present Mirone")
+            && licenses.contains("Permission is hereby granted, free of charge"),
+        "{}",
+        &licenses[..licenses.len().min(600)]
     );
 }
 
@@ -412,6 +571,7 @@ fn ocgen_draft_opens_the_newest_draft_in_a_local_editor() {
     );
     assert_eq!(code, 200);
     assert!(page.contains("Deploys keep the cache warm."), "{page}");
+    assert!(page.contains(draft::EDITOR_JS.lines().next().unwrap()));
     let csp = head
         .lines()
         .find(|l| {
@@ -423,6 +583,12 @@ fn ocgen_draft_opens_the_newest_draft_in_a_local_editor() {
     assert!(csp.contains("script-src 'nonce-"), "{csp}");
     assert!(!csp.contains("'unsafe-inline' https"), "{csp}");
     assert!(csp.contains("img-src data:;"), "no remote images: {csp}");
+    // The editor bundle is inline: the policy stays as strict as before.
+    assert!(csp.contains("default-src 'none'"), "{csp}");
+    assert!(csp.contains("connect-src 'self'"), "{csp}");
+    for loose in ["unsafe-eval", "https:", "http:", "cdn"] {
+        assert!(!csp.contains(loose), "{loose}: {csp}");
+    }
 
     // Asking again while the tab is open doesn't open a second one.
     let (_, rev) = load(&info);
@@ -433,6 +599,25 @@ fn ocgen_draft_opens_the_newest_draft_in_a_local_editor() {
         String::from_utf8_lossy(&out.stdout).contains("already open"),
         "{out:?}"
     );
+}
+
+#[test]
+fn ocgen_draft_warns_about_lines_wrapped_by_hand() {
+    let p = Project::new();
+    let wrapped = include_str!("fixtures/intent-draft-wrapped.md");
+    fs::write(p.md(), wrapped).unwrap();
+    let out = p.draft(&[]);
+    let said = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        said.contains(
+            "has 9 lines wrapped by hand mid-sentence (lines 3, 4, 5, 8, 9, 10, 11, 19, 23)"
+        ) && said.contains("GitHub shows every newline in an issue as a line break"),
+        "{said}"
+    );
+    // The convention's own line breaks are meant: no warning.
+    fs::write(p.md(), DRAFT).unwrap();
+    let said = String::from_utf8_lossy(&p.draft(&[]).stdout).into_owned();
+    assert!(!said.contains("wrapped by hand"), "{said}");
 }
 
 #[test]

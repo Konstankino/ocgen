@@ -78,6 +78,58 @@ pub fn gaps(text: &str, approvers: &[String]) -> Gaps {
     }
 }
 
+/// Where an issue draft is wrapped by hand: the 1-based numbers of the lines
+/// that end mid-sentence inside a paragraph, a list item or a quote. GitHub
+/// shows every newline in an issue as a line break, so a draft wrapped at 100
+/// columns reads as broken lines once filed. A line counts when it ends in `,`
+/// or `;`, or the next one goes on in lowercase — not a sentence over another
+/// (the template's **Blocks prod?** and **Depends on…** lines), a label or a
+/// URL on its own line, a hard break (two spaces, `\`, `<br>`), or code. The
+/// draft editor applies the same rule (`tools/milkdown/src/editor.js`).
+pub fn hard_wraps(text: &str) -> Vec<usize> {
+    use pulldown_cmark::{Event, Options, Parser};
+    let opts = Options::ENABLE_TABLES
+        | Options::ENABLE_STRIKETHROUGH
+        | Options::ENABLE_TASKLISTS
+        | Options::ENABLE_GFM;
+    let mut lines = Vec::new();
+    for (event, range) in Parser::new_ext(text, opts).into_offset_iter() {
+        if event != Event::SoftBreak {
+            continue;
+        }
+        let Some(nl) = text[range.start..].find('\n').map(|i| range.start + i) else {
+            continue;
+        };
+        let prev = text[..nl].rsplit('\n').next().unwrap_or("");
+        let next = text[nl + 1..].split('\n').next().unwrap_or("");
+        if mid_sentence(prev, next) {
+            lines.push(text[..nl].matches('\n').count() + 1);
+        }
+    }
+    lines
+}
+
+/// Whether the break between source lines `prev` and `next` falls mid-sentence.
+fn mid_sentence(prev: &str, next: &str) -> bool {
+    let end = prev.trim_end_matches(|c: char| c.is_whitespace() || "*_~`".contains(c));
+    if end.ends_with(',') || end.ends_with(';') {
+        return true;
+    }
+    let start = next.trim_start_matches(|c: char| c.is_whitespace() || c == '>');
+    let lower = start.to_ascii_lowercase();
+    if ["http://", "https://", "www."]
+        .iter()
+        .any(|p| lower.starts_with(p))
+    {
+        return false;
+    }
+    start
+        .trim_start_matches(|c: char| "*_~`[(\"'“‘".contains(c))
+        .chars()
+        .next()
+        .is_some_and(char::is_lowercase)
+}
+
 /// What a project file is to /intent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
