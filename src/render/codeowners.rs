@@ -15,6 +15,9 @@ use super::{plain_rel, Fence, Project};
 use crate::claude::{CodeownersScope, CODEOWNERS_PATHS, OLD_CODEOWNERS_LINK};
 use crate::target::Target;
 
+/// GitHub doesn't load a CODEOWNERS of this size or more ("under 3 MB").
+const MAX_BYTES: usize = 3_000_000;
+
 /// Opens ocgen's block; `# ocgen: end` closes it.
 const MARK: &str = "# ocgen: /intent approvers (ocgen edit intent --approver / --codeowners-scope)";
 const END: &str = "# ocgen: end";
@@ -68,9 +71,37 @@ pub(super) fn repo_prefix(root: &Path) -> Option<String> {
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
 }
 
+/// How `rel` (`.github/CODEOWNERS`) is spelled on disk in `root`: exactly
+/// `rel` when that exists, else the first entry at each step that differs only
+/// in letter case; `None` when there's neither. GitHub's file system is
+/// case-sensitive, a Mac's or Windows's usually isn't, and Linux's holds both.
+fn on_disk(root: &Path, rel: &str) -> Option<String> {
+    let mut dir = root.to_path_buf();
+    let mut found = Vec::new();
+    for part in rel.split('/') {
+        let names: Vec<String> = fs::read_dir(&dir)
+            .ok()?
+            .filter_map(|e| e.ok()?.file_name().into_string().ok())
+            .collect();
+        let name = names
+            .iter()
+            .find(|n| *n == part)
+            .or_else(|| names.iter().find(|n| n.eq_ignore_ascii_case(part)))?;
+        dir.push(name);
+        found.push(name.clone());
+    }
+    Some(found.join("/"))
+}
+
+/// Whether `rel` exists in `root` under exactly that name, as GitHub needs.
+fn exact(root: &Path, rel: &str) -> bool {
+    on_disk(root, rel).as_deref() == Some(rel)
+}
+
 /// `typed` (`.github/CODEOWNERS`) as a CODEOWNERS ocgen may link in the project
-/// at `root`: an existing text file where GitHub reads it, inside the project,
-/// and not shadowed by one GitHub reads first. Returns the path to store.
+/// at `root`: an existing text file where GitHub reads it, named exactly so,
+/// inside the project, and not shadowed by one GitHub reads first. Returns the
+/// path to store.
 pub fn check_link(root: &Path, typed: &str) -> Result<String> {
     let rel = typed.trim().replace('\\', "/");
     let rel = rel.trim_start_matches("./").to_string();
@@ -91,11 +122,18 @@ pub fn check_link(root: &Path, typed: &str) -> Result<String> {
             "this project is in a folder of its repository ({prefix}), and GitHub reads CODEOWNERS only at the repository's top, outside the project — add the approvers there by hand"
         );
     }
+    match on_disk(root, &rel) {
+        None => bail!(
+            "{rel} doesn't exist — ocgen links the CODEOWNERS you have; create it first (.github/CODEOWNERS, which GitHub reads first, is the safest place)"
+        ),
+        Some(actual) if actual != rel => bail!(
+            "{actual} isn't {rel}: GitHub reads only the exact name (its file system is case-sensitive) — rename it to {rel}"
+        ),
+        Some(_) => {}
+    }
     let path = root.join(&rel);
     match fs::symlink_metadata(&path) {
-        Err(_) => {
-            bail!("{rel} doesn't exist — ocgen links the CODEOWNERS you have; create it first")
-        }
+        Err(_) => bail!("{rel} doesn't exist"),
         Ok(m) if m.file_type().is_symlink() => {
             bail!("{rel} is a symbolic link — link the real file")
         }
@@ -109,7 +147,7 @@ pub fn check_link(root: &Path, typed: &str) -> Result<String> {
     if let Some(first) = CODEOWNERS_PATHS
         .iter()
         .take_while(|p| **p != rel)
-        .find(|p| fs::symlink_metadata(root.join(p)).is_ok())
+        .find(|p| exact(root, p))
     {
         bail!("GitHub reads {first} first, so {rel} would be ignored — link {first} instead");
     }
@@ -117,11 +155,11 @@ pub fn check_link(root: &Path, typed: &str) -> Result<String> {
 }
 
 /// The CODEOWNERS GitHub would read in `root` (the first of its locations that
-/// exists), for a hint.
+/// exists under exactly that name), for a hint.
 pub fn found(root: &Path) -> Option<&'static str> {
     CODEOWNERS_PATHS
         .into_iter()
-        .find(|p| root.join(p).is_file())
+        .find(|p| exact(root, p) && root.join(p).is_file())
 }
 
 /// Remove ocgen's block from `rel` in `root` (a file it was linked to before):
@@ -168,15 +206,15 @@ impl Project {
 
     /// The linked CODEOWNERS: (path, relative path, current text, new text when
     /// it changes). `None` when nothing is linked, or the file is left alone (gone,
-    /// a link, not text, or kept by the user) — [`Project::codeowners_report`]
-    /// says why.
+    /// renamed in another case, a link, not text, or kept by the user) —
+    /// [`Project::codeowners_report`] says why.
     pub(super) fn codeowners_change(
         &self,
         fence: &Fence,
         keep: &BTreeSet<String>,
     ) -> Option<(PathBuf, String, String, Option<String>)> {
         let (rel, rule) = self.codeowners_block()?;
-        if keep.contains(&rel) {
+        if keep.contains(&rel) || !exact(fence.target, &rel) {
             return None;
         }
         let path = fence.path(Path::new(&rel)).ok()?;
@@ -185,8 +223,10 @@ impl Project {
         Some((path, rel, old, new))
     }
 
-    /// What to tell the user about the linked CODEOWNERS: a file left alone, and
-    /// the user's rules after ocgen's block that take precedence over it.
+    /// What to tell the user about the linked CODEOWNERS, by GitHub's rules: a
+    /// file left alone or renamed, one GitHub reads first, a file too big to
+    /// load, an intent folder in another case, the user's rules after ocgen's
+    /// block that take precedence over it, and CODEOWNERS files nobody owns.
     pub fn codeowners_report(&self, target: &Path) -> Vec<String> {
         let Some((rel, rule)) = self.codeowners_block() else {
             return Vec::new();
@@ -194,6 +234,19 @@ impl Project {
         let relink = "re-link it with `ocgen edit intent --codeowners <path>`, or unlink it with `--codeowners off`";
         let path = target.join(&rel);
         let mut notes = Vec::new();
+        match on_disk(target, &rel) {
+            None => {
+                return vec![format!(
+                    "CODEOWNERS: {rel} is gone, and ocgen never creates one — {relink}"
+                )]
+            }
+            Some(actual) if actual != rel => {
+                return vec![format!(
+                    "CODEOWNERS: {rel} is {actual} on disk, and GitHub reads only the exact name (its file system is case-sensitive), so ocgen left it alone — rename it to {rel}, or {relink}"
+                )]
+            }
+            Some(_) => {}
+        }
         match fs::symlink_metadata(&path) {
             Err(_) => {
                 return vec![format!(
@@ -212,7 +265,30 @@ impl Project {
                 "CODEOWNERS: {rel} isn't UTF-8 text, so ocgen left it alone — {relink}"
             )];
         };
+        if let Some(first) = CODEOWNERS_PATHS
+            .iter()
+            .take_while(|p| **p != rel)
+            .find(|p| exact(target, p))
+        {
+            notes.push(format!(
+                "CODEOWNERS: GitHub reads {first} first, so it ignores {rel} and ocgen's block in it — move your rules into {first} and link it (`ocgen edit intent --codeowners {first}`)"
+            ));
+        }
+        if text.len() >= MAX_BYTES {
+            notes.push(format!(
+                "CODEOWNERS: {rel} is {:.1} MB, and GitHub doesn't load a CODEOWNERS of 3 MB or more — no code owner is requested at all until it's smaller",
+                text.len() as f64 / 1e6
+            ));
+        }
         if rule.is_some() {
+            let dir = self.claude.intent.dir.trim_matches('/');
+            if self.claude.intent.codeowners_scope == CodeownersScope::Intents {
+                if let Some(actual) = on_disk(target, dir).filter(|a| a != dir) {
+                    notes.push(format!(
+                        "CODEOWNERS: the intent folder is {actual} on disk, but ocgen's block names /{dir}/, and GitHub matches paths case-sensitively — rename the folder to {dir}, or set `ocgen edit intent --dir {actual}`"
+                    ));
+                }
+            }
             let sample = match self.claude.intent.codeowners_scope {
                 CodeownersScope::Intents => Some(format!(
                     "{}/{}-x.md",
@@ -228,9 +304,44 @@ impl Project {
                     later.iter().map(|r| format!("`{r}`")).collect::<Vec<_>>().join(", ")
                 ));
             }
+            // GitHub's advice: own the CODEOWNERS file — and here also those it
+            // reads first, since adding one hides the linked file.
+            let unowned: Vec<&str> = std::iter::once(rel.as_str())
+                .chain(CODEOWNERS_PATHS.into_iter().take_while(|p| *p != rel))
+                .filter(|p| owners_of(&text, p).is_empty())
+                .collect();
+            if !unowned.is_empty() {
+                let lines: Vec<String> = unowned
+                    .iter()
+                    .map(|p| match p.strip_suffix("CODEOWNERS") {
+                        Some(".github/") => "`/.github/ @owner`".to_string(),
+                        _ => format!("`/{p} @owner`"),
+                    })
+                    .collect();
+                notes.push(format!(
+                    "CODEOWNERS: nothing owns {} (so a pull request can change who reviews without a code owner's review) — GitHub's advice: own them, e.g. {} in {rel}, with an owner you trust (GitHub suggests the repository's owner)",
+                    unowned.join(", "),
+                    lines.join(", ")
+                ));
+            }
         }
         notes
     }
+}
+
+/// The owners GitHub gives `path` under `text`: the last rule that matches it
+/// decides — no owners when that rule names none, or when no rule matches.
+fn owners_of<'a>(text: &'a str, path: &str) -> Vec<&'a str> {
+    text.lines()
+        .rev()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .find_map(|l| {
+            let mut words = l.split_whitespace();
+            let pattern = words.next()?;
+            matches(pattern, path).then(|| words.take_while(|w| !w.starts_with('#')).collect())
+        })
+        .unwrap_or_default()
 }
 
 /// The rules after ocgen's block that match `sample` (any rule, without one):
@@ -365,6 +476,31 @@ mod tests {
         ] {
             assert!(!matches(no, p), "{no}");
         }
+    }
+
+    #[test]
+    fn the_last_matching_rule_decides_the_owners() {
+        let text = "* @all\n/.github/ @lead # the leads\n/docs/\n";
+        assert_eq!(owners_of(text, ".github/CODEOWNERS"), ["@lead"]);
+        assert_eq!(owners_of(text, "CODEOWNERS"), ["@all"]);
+        // A rule without owners leaves the file unowned.
+        assert!(owners_of(text, "docs/CODEOWNERS").is_empty());
+        assert!(owners_of("/src/ @dev\n", "CODEOWNERS").is_empty());
+    }
+
+    #[test]
+    fn the_spelling_on_disk_is_found_in_any_case() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".GitHub")).unwrap();
+        fs::write(dir.path().join(".GitHub/codeowners"), "").unwrap();
+        assert_eq!(
+            on_disk(dir.path(), ".github/CODEOWNERS").as_deref(),
+            Some(".GitHub/codeowners")
+        );
+        assert!(!exact(dir.path(), ".github/CODEOWNERS"));
+        assert_eq!(on_disk(dir.path(), "docs/CODEOWNERS"), None);
+        fs::write(dir.path().join("CODEOWNERS"), "").unwrap();
+        assert!(exact(dir.path(), "CODEOWNERS"));
     }
 
     #[test]

@@ -1444,7 +1444,10 @@ fn print_intent(project: &Project, root: &Path) {
                         "— found {f}; link it with `ocgen edit intent --codeowners {f}`"
                     ))
                 ),
-                None => format!("not linked {}", ui::muted("— none in the project")),
+                None => format!(
+                    "not linked {}",
+                    ui::muted("— none in the project (GitHub reads .github/CODEOWNERS first: create it there, then link it)")
+                ),
             }
         } else {
             let block = if s.codeowners_rule().is_some() {

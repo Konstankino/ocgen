@@ -18,9 +18,11 @@ Settings for this project (change them with `ocgen edit intent`):
 {% if approvers -%}
 - Approvers: {{ approvers }} — they decide, and their sign-off is required before any work starts.
   GitHub notifies them through the @mentions in the issue; never contact them any other way.{% if codeowners %}
-  They are code owners through ocgen's block in `{{ codeowners }}` (`{{ codeowners_rule }}`): GitHub
-  requests their review on pull requests that touch those files, and requires it once branch
-  protection asks for code-owner review. Never edit that block — `ocgen edit intent` keeps it.{% endif %}
+  They are code owners through ocgen's block in `{{ codeowners }}` (`{{ codeowners_rule }}`): once
+  it is on a pull request's base branch, GitHub requests their review when a pull request touching
+  those files is ready for review (not while it's a draft), and requires it once branch protection
+  asks for code-owner review. Never edit that block, and never add a CODEOWNERS elsewhere (GitHub
+  reads only the first of `.github/`, the root and `docs/`) — `ocgen edit intent` keeps it.{% endif %}
 {% else -%}
 - **No approvers configured.** Say "No approvers configured" in both drafts, ask me whether to
   proceed without a sign-off, and suggest `ocgen edit intent --approver @handle`.

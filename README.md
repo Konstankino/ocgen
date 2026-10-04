@@ -366,9 +366,11 @@ delete as stale (`-`) is listed with a short diff.
 - **git pre-push hook:** it runs the installed hook as git would — it must refuse a push made under
   Claude Code and let yours through, and it fails if it isn't executable;
 - **line endings:** a generated script with CRLF endings fails, with the fix;
-- **CODEOWNERS:** the file `/intent`'s approvers are linked to is still there, and no rule of
-  yours after ocgen's block takes precedence over it (with a reminder that GitHub enforces it only
-  with "Require review from Code Owners");
+- **CODEOWNERS:** the file `/intent`'s approvers are linked to is still there under its exact
+  name, no CODEOWNERS that GitHub reads first hides it, it's under GitHub's 3 MB limit, the intent
+  folder matches its case on disk, no rule of yours after ocgen's block takes precedence over it,
+  and something owns the CODEOWNERS file itself (with a reminder that GitHub enforces it only with
+  "Require review from Code Owners" and only for owners with write access);
 - the statusline renders;
 - a compatible `ocgen` is on your `PATH`; a stale binary is flagged, and so are ignored template
   overrides;
@@ -905,6 +907,31 @@ branch → **Require a pull request before merging** → **Require review from C
 rulesets, **Settings → Rules → Rulesets → New branch ruleset** → target the branch → **Require a
 pull request before merging** → require review from code owners. `ocgen verify` reports the file
 and the block.
+
+While the block is there, **Claude asks before it edits any CODEOWNERS** — `Edit(/.github/CODEOWNERS)`,
+`Edit(/CODEOWNERS)`, `Edit(/docs/CODEOWNERS)` and `Bash(*CODEOWNERS*)` are ask rules, even without
+the permission defaults and in auto mode — so it can't quietly drop the block, add a rule after it,
+or add a CODEOWNERS that GitHub reads first. A Bash command that names CODEOWNERS asks even to read
+it (the Read tool doesn't). It's a text match, not a boundary: the review GitHub requires is.
+
+ocgen follows GitHub's rules for CODEOWNERS, and says when the project doesn't:
+
+- **One file, GitHub's order.** GitHub reads the first of `.github/CODEOWNERS`, `CODEOWNERS` and
+  `docs/CODEOWNERS` and ignores the rest. ocgen refuses to link a file another one hides, and warns
+  when one turns up later in a place GitHub reads first. `.github/CODEOWNERS` is the safest place:
+  nothing can hide it.
+- **Exact names.** GitHub's file system is case-sensitive, even when yours isn't: `.github/codeowners`
+  isn't read, and `/docs/adr/` doesn't match `docs/ADR/`. ocgen refuses a file in another case,
+  stops writing one renamed since, and warns about an intent folder spelled differently on disk.
+- **Own the CODEOWNERS file.** GitHub's advice is that someone you trust owns the CODEOWNERS file
+  (`/.github/CODEOWNERS @owner` or `/.github/ @owner`), so a pull request can't change who reviews
+  without their review. ocgen warns when nothing owns the linked file, or a place GitHub reads before
+  it, and names the lines to add (with `--codeowners-scope all` the approvers own them).
+- **Under 3 MB.** GitHub doesn't load a bigger file; ocgen warns.
+- **What ocgen can't check:** the approvers need explicit write access to the repository (a team
+  must also be visible), or GitHub assigns them nothing; the block works only once it's on a pull
+  request's base branch, so commit and merge it; and GitHub doesn't request code owners on a draft
+  pull request until it's ready for review.
 
 **Configure it with `ocgen edit intent`:**
 

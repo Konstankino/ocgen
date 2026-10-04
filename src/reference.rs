@@ -404,8 +404,13 @@ const CLAUDE_FIELDS: &[Field] = &[
                  keeps a marked block there that makes the approvers code owners of the intent \
                  directory (scope intents), every file (all), or nothing (off); your own lines are \
                  never touched, and a later rule of yours that takes precedence is reported. \
-                 GitHub enforces it only when branch protection requires a review from code \
-                 owners — ocgen can't turn that on.",
+                 While the block is there, Claude asks before it edits any CODEOWNERS. ocgen \
+                 follows GitHub's rules: only the first of .github/, the root and docs/ is read \
+                 (.github/CODEOWNERS is the safest), names are case-sensitive, the file must be \
+                 under 3 MB, and someone should own the CODEOWNERS file itself — it warns when \
+                 the project doesn't. GitHub enforces it only when branch protection requires a \
+                 review from code owners, and only for owners with write access — ocgen can't \
+                 turn that on.",
         example: "--codeowners .github/CODEOWNERS --codeowners-scope intents",
     },
 ];

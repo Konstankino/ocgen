@@ -1866,6 +1866,13 @@ impl Project {
             // /intent drafts the issue; the user files it. Kept even without the
             // permission defaults, since the workflow relies on it.
             rules.deny.push("Bash(gh issue create*)".into());
+            if matches!(self.codeowners_block(), Some((_, Some(_)))) {
+                // GitHub requires the approvers through ocgen's block: changing
+                // it, or hiding it, asks first.
+                for r in crate::claude::CODEOWNERS_ASK {
+                    rules.tighten(RuleList::Ask, r);
+                }
+            }
         }
         if self.prefers_explorer() {
             // Research goes to the shell-free `explorer`; the built-in Explore

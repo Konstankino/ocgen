@@ -649,6 +649,18 @@ pub const GATE_ASK: [&str; 8] = [
     "Bash(ocgen doctor*)",
 ];
 
+/// Asked while ocgen's block in the linked CODEOWNERS makes the /intent
+/// approvers code owners: edits to every CODEOWNERS GitHub reads (one it reads
+/// earlier than the linked file hides it), and Bash commands that name one — a
+/// redirect's target is checked against Edit allow and deny rules, not ask
+/// rules. A text match, not a boundary: GitHub's review of the change is.
+pub const CODEOWNERS_ASK: [&str; 4] = [
+    "Edit(/.github/CODEOWNERS)",
+    "Edit(/CODEOWNERS)",
+    "Edit(/docs/CODEOWNERS)",
+    "Bash(*CODEOWNERS*)",
+];
+
 /// Starter network allowlist: source hosting and the common package registries.
 pub const SANDBOX_DOMAINS: [&str; 13] = [
     "github.com",

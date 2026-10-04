@@ -1854,6 +1854,199 @@ fn a_linked_codeowners_replaced_by_a_symlink_is_left_alone() {
     );
 }
 
+/// The rules that make editing any CODEOWNERS ask first.
+const CODEOWNERS_ASK: [&str; 4] = [
+    "Edit(/.github/CODEOWNERS)",
+    "Edit(/CODEOWNERS)",
+    "Edit(/docs/CODEOWNERS)",
+    "Bash(*CODEOWNERS*)",
+];
+
+/// While ocgen's block makes the approvers code owners, Claude asks before it
+/// edits that CODEOWNERS — or adds one GitHub reads first, which would hide it —
+/// even without the permission defaults. No block, no rules.
+#[test]
+fn a_codeowners_block_makes_codeowners_edits_ask() {
+    let dir = with_codeowners("co-ask", "CODEOWNERS");
+    let ask = |d: &Path| rules(&json_at(d, SETTINGS), "ask");
+    assert!(
+        !ask(dir.path()).iter().any(|r| r.contains("CODEOWNERS")),
+        "not linked"
+    );
+    edit_intent(dir.path(), |s| {
+        s.approvers = vec!["@alice".into()];
+        s.codeowners = "CODEOWNERS".into();
+    });
+    let held = ask(dir.path());
+    for r in CODEOWNERS_ASK {
+        assert!(held.contains(&r.to_string()), "{r}: {held:?}");
+    }
+
+    let mut p = reload(dir.path());
+    p.claude.powerups.permissions = false;
+    p.apply(dir.path(), &BTreeSet::new()).unwrap();
+    let held = ask(dir.path());
+    for r in CODEOWNERS_ASK {
+        assert!(held.contains(&r.to_string()), "without the defaults, {r}");
+    }
+
+    edit_intent(dir.path(), |s| {
+        s.codeowners_scope = ocgen::claude::CodeownersScope::Off
+    });
+    assert!(
+        !ask(dir.path()).iter().any(|r| r.contains("CODEOWNERS")),
+        "scope off"
+    );
+}
+
+/// GitHub reads the first CODEOWNERS of .github/, the root and docs/: one that
+/// turns up earlier than the linked file hides ocgen's block.
+#[test]
+fn a_codeowners_github_reads_first_is_reported() {
+    let dir = with_codeowners("co-shadow", "CODEOWNERS");
+    let link = |s: &mut ocgen::claude::IntentSettings| {
+        s.approvers = vec!["@alice".into()];
+        s.codeowners = "CODEOWNERS".into();
+    };
+    let notice = edit_intent(dir.path(), link);
+    assert!(!notice.iter().any(|l| l.contains("first")), "{notice:?}");
+    fs::create_dir_all(dir.path().join(".github")).unwrap();
+    fs::write(dir.path().join(OWNERS), "* @someone\n").unwrap();
+    let notice = edit_intent(dir.path(), |s| s.approvers.push("@bob".into()));
+    assert!(
+        notice
+            .iter()
+            .any(|l| l.contains("GitHub reads .github/CODEOWNERS first")
+                && l.contains("--codeowners .github/CODEOWNERS")),
+        "{notice:?}"
+    );
+}
+
+/// GitHub's advice: own the CODEOWNERS file, so a pull request can't change who
+/// reviews — or add a CODEOWNERS GitHub reads first — without a code owner.
+#[test]
+fn codeowners_files_nobody_owns_are_reported() {
+    let dir = tempdir().unwrap();
+    claude("co-own").scaffold(dir.path(), false).unwrap();
+    fs::write(dir.path().join("CODEOWNERS"), "/src/ @dev\n").unwrap();
+    let notice = edit_intent(dir.path(), |s| {
+        s.approvers = vec!["@alice".into()];
+        s.codeowners = "CODEOWNERS".into();
+    });
+    let unowned = notice
+        .iter()
+        .find(|l| l.contains("nothing owns"))
+        .unwrap_or_else(|| panic!("{notice:?}"));
+    // The root file, and .github/CODEOWNERS, which GitHub would read first.
+    assert!(
+        unowned.contains("CODEOWNERS, .github/CODEOWNERS"),
+        "{unowned}"
+    );
+    assert!(unowned.contains("`/.github/ @owner`"), "{unowned}");
+    assert!(unowned.contains("`/CODEOWNERS @owner`"), "{unowned}");
+
+    // Owned by a rule of yours (a pattern without owners owns nothing).
+    let path = dir.path().join("CODEOWNERS");
+    let text = read(dir.path(), "CODEOWNERS");
+    fs::write(&path, format!("/.github/ @lead\n/CODEOWNERS\n{text}")).unwrap();
+    let notice = edit_intent(dir.path(), |s| s.approvers.push("@bob".into()));
+    let unowned = notice.iter().find(|l| l.contains("nothing owns")).unwrap();
+    assert!(unowned.contains("owns CODEOWNERS ("), "{unowned}");
+    fs::write(&path, format!("/.github/ @lead\n/CODEOWNERS @lead\n{text}")).unwrap();
+    let notice = edit_intent(dir.path(), |s| s.approvers.push("@carol".into()));
+    assert!(
+        !notice.iter().any(|l| l.contains("nothing owns")),
+        "{notice:?}"
+    );
+
+    // The scope `all` makes the approvers own every file, these included.
+    fs::write(&path, "/src/ @dev\n").unwrap();
+    let notice = edit_intent(dir.path(), |s| {
+        s.codeowners_scope = ocgen::claude::CodeownersScope::All
+    });
+    assert!(
+        !notice.iter().any(|l| l.contains("nothing owns")),
+        "{notice:?}"
+    );
+}
+
+/// GitHub's file system is case-sensitive: it reads only a file named exactly
+/// CODEOWNERS, in a folder named exactly .github or docs — on any platform.
+#[test]
+fn a_codeowners_named_in_another_case_is_refused_and_reported() {
+    let dir = tempdir().unwrap();
+    claude("co-case").scaffold(dir.path(), false).unwrap();
+    fs::create_dir_all(dir.path().join(".github")).unwrap();
+    fs::write(dir.path().join(".github/codeowners"), MINE).unwrap();
+    assert_eq!(ocgen::render::found_codeowners(dir.path()), None);
+    let err = format!(
+        "{:#}",
+        ocgen::render::check_codeowners_link(dir.path(), OWNERS).unwrap_err()
+    );
+    assert!(
+        err.contains(".github/codeowners") && err.contains("exact"),
+        "{err}"
+    );
+
+    // Linked, then renamed: reported, not written as if GitHub read it.
+    fs::rename(
+        dir.path().join(".github/codeowners"),
+        dir.path().join(OWNERS),
+    )
+    .unwrap();
+    edit_intent(dir.path(), |s| {
+        s.approvers = vec!["@alice".into()];
+        s.codeowners = OWNERS.into();
+    });
+    fs::rename(
+        dir.path().join(OWNERS),
+        dir.path().join(".github/codeowners"),
+    )
+    .unwrap();
+    let notice = edit_intent(dir.path(), |s| s.approvers.push("@bob".into()));
+    assert!(
+        notice
+            .iter()
+            .any(|l| l.contains(".github/codeowners") && l.contains("exact")),
+        "{notice:?}"
+    );
+    assert!(!read(dir.path(), ".github/codeowners").contains("@bob"));
+}
+
+/// CODEOWNERS paths are case-sensitive: an intent folder spelled in another case
+/// on disk isn't what ocgen's block names.
+#[test]
+fn an_intent_folder_in_another_case_is_reported() {
+    let dir = with_codeowners("co-dir-case", OWNERS);
+    let link = |s: &mut ocgen::claude::IntentSettings| {
+        s.approvers = vec!["@alice".into()];
+        s.codeowners = OWNERS.into();
+    };
+    let notice = edit_intent(dir.path(), link);
+    assert!(!notice.iter().any(|l| l.contains("docs/ADR")), "{notice:?}");
+    fs::create_dir_all(dir.path().join("docs/ADR")).unwrap();
+    let notice = edit_intent(dir.path(), |s| s.approvers.push("@bob".into()));
+    assert!(
+        notice
+            .iter()
+            .any(|l| l.contains("docs/ADR") && l.contains("/docs/adr/")),
+        "{notice:?}"
+    );
+}
+
+/// GitHub doesn't load a CODEOWNERS of 3 MB or more.
+#[test]
+fn a_codeowners_too_big_for_github_is_reported() {
+    let dir = with_codeowners("co-big", OWNERS);
+    let big = format!("{MINE}{}", "# padding padding padding\n".repeat(120_000));
+    fs::write(dir.path().join(OWNERS), big).unwrap();
+    let notice = edit_intent(dir.path(), |s| {
+        s.approvers = vec!["@alice".into()];
+        s.codeowners = OWNERS.into();
+    });
+    assert!(notice.iter().any(|l| l.contains("3 MB")), "{notice:?}");
+}
+
 #[test]
 fn an_old_state_without_approvers_loads() {
     let dir = tempdir().unwrap();

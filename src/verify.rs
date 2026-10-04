@@ -2227,7 +2227,7 @@ fn codeowners(project: &Project, root: &Path) -> Check {
     }
     let what = if s.codeowners_rule().is_some() {
         format!(
-            "the approvers review {} — GitHub requires it only with branch protection's \"Require review from Code Owners\"",
+            "the approvers review {} — GitHub requires it only with branch protection's \"Require review from Code Owners\", and assigns only owners with explicit write access to the repository (a team must also be visible)",
             match s.codeowners_scope {
                 crate::claude::CodeownersScope::All => "every change".to_string(),
                 _ => format!("{}/", s.dir.trim_matches('/')),

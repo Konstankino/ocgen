@@ -1232,6 +1232,19 @@ fn verify_reports_the_linked_codeowners() {
         "{c:?}"
     );
     assert!(!c.detail.contains(".claude/CODEOWNERS"), "{c:?}");
+    // GitHub assigns no code owner without explicit write access.
+    assert!(c.detail.contains("write access"), "{c:?}");
+
+    // Nothing owns the CODEOWNERS file itself: GitHub's advice is to.
+    fs::write(&owners, "/src/ @dev\n").unwrap();
+    p.scaffold(dir.path(), true).unwrap();
+    let unowned = verify_lib(dir.path());
+    let c = named(&unowned, "CODEOWNERS");
+    assert_eq!(c.status, Status::Warn, "{c:?}");
+    assert!(
+        c.detail.contains("nothing owns .github/CODEOWNERS"),
+        "{c:?}"
+    );
 
     fs::remove_file(&owners).unwrap();
     let gone = verify_lib(dir.path());
