@@ -16,8 +16,11 @@ Classify the goal before anything else, state the classification, and let me ove
   phase 1 using its ledger as context.
 {% endif %}
 ## 1. Sharpen the goal
-{% if intent %}If the goal names an intent file from `/intent` (or an issue that links one), read it first and
-check its sign-off: `Status: Accepted`, with every approver approved in its Sign-off section{% if approvers %}
+{% if intent %}If the goal names an intent from `/intent` — its intent file, an issue draft without one
+(`.claude/intent/drafts/issue-*.md`), or an issue that links either (an intent file's `Issue:` line, a
+draft's `<!-- Issue: … -->` line) — read it first and check its sign-off. An intent file needs
+`Status: Accepted`, with every approver approved in its Sign-off section; an issue draft needs
+`<!-- Status: Accepted -->`, with every approver ticked approved in its Needs from checklist{% if approvers %}
 (this project's approvers: {{ approvers }}){% endif %}. If not, don't start — list who is still pending and
 stop. If I insist, say plainly that starting now bypasses the approvers' sign-off, and start only after
 I confirm explicitly. Then treat its approved plan as the brief: confirm with me what changed since,

@@ -4976,6 +4976,69 @@ fn intent_names_the_approvers_and_waits_for_their_sign_off() {
 }
 
 #[test]
+fn intent_file_is_optional_and_the_draft_keeps_the_record_without_one() {
+    let dir = tempdir().unwrap();
+    let mut p = claude_default("optadr");
+    p.claude.intent.approvers = vec!["@alice".into()];
+    p.scaffold(dir.path(), false).unwrap();
+    let md = read(dir.path(), ".claude/skills/intent/SKILL.md");
+    let description = md.lines().find(|l| l.starts_with("description:")).unwrap();
+    assert!(description.contains("if I want one"), "{description}");
+
+    // Asked once the plan is approved; without one, step 4 is skipped.
+    assert!(skill_step(&md, 3).contains("ask whether to write an intent file"));
+    assert!(skill_step(&md, 4).contains("Skip this step"), "{md}");
+    // Step 5 writes the intent file only when there is one, and names the
+    // draft after it — or after the topic.
+    let step5 = skill_step(&md, 5);
+    assert!(
+        step5.contains("write the intent file (if there is one)")
+            && step5.contains("`issue-<kebab-case-slug>`"),
+        "{step5}"
+    );
+    // Without an intent file the issue draft holds the issue link, each
+    // sign-off and the status — as comments GitHub hides, and as ticks on the
+    // approver lines the draft already has.
+    let step6 = skill_step(&md, 6);
+    for part in [
+        "With no intent file",
+        "<!-- Issue: <url> -->",
+        "- [x] @handle — approved",
+        "<!-- Status: Accepted -->",
+        "<!-- Status: Rejected -->",
+    ] {
+        assert!(step6.contains(part), "step 6 misses {part}: {step6}");
+    }
+    // …and those intents can be listed and resumed by their draft's name.
+    let route = md.split("## 0. Route the arguments").nth(1).unwrap();
+    let route = route.split("\n## ").next().unwrap();
+    assert!(
+        route.contains(".claude/intent/drafts/issue-*.md") && route.contains("`issue-<slug>`"),
+        "{route}"
+    );
+
+    // /deliver checks the sign-off in whichever file holds it.
+    let deliver = read(dir.path(), ".claude/skills/deliver/SKILL.md");
+    assert!(
+        deliver.contains("an issue draft without one")
+            && deliver.contains("<!-- Status: Accepted -->")
+            && deliver.contains("Needs from"),
+        "{deliver}"
+    );
+    // /recap finds the issues those drafts were filed as.
+    let recap = read(dir.path(), ".claude/skills/recap/SKILL.md");
+    assert!(
+        recap.contains("<!-- Issue:") && recap.contains(".claude/intent/drafts/issue-*.md"),
+        "{recap}"
+    );
+    // The project's rule says the intent file is optional.
+    assert!(
+        read(dir.path(), ".claude/rules/ocgen-workflow.md").contains("optional"),
+        "workflow rule"
+    );
+}
+
+#[test]
 fn intent_without_approvers_says_so_in_both_drafts() {
     let dir = tempdir().unwrap();
     claude_default("noappr")

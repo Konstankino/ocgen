@@ -160,6 +160,52 @@ fn reason(o: &ocgen::hooks::Outcome) -> String {
 }
 
 #[test]
+fn a_draft_without_an_intent_file_keeps_its_own_status() {
+    // With no intent file, /intent records the status in the draft as a comment
+    // GitHub hides; a decided one is history, like a decided intent file.
+    let decided = format!(
+        "<!-- Issue: https://github.com/o/r/issues/7 -->\n<!-- Status: Accepted -->\n{STALE_DRAFT}"
+    );
+    let rejected = format!("<!-- Status: Rejected -->\n{STALE_DRAFT}");
+    let proposed = format!("<!-- Status: Proposed -->\n{STALE_DRAFT}");
+    assert!(!intent::pending(&decided));
+    assert!(!intent::pending(&rejected));
+    assert!(intent::pending(&proposed));
+    assert!(
+        intent::pending(STALE_DRAFT),
+        "no status: pending, as before"
+    );
+
+    let dir = tempfile::tempdir().unwrap();
+    let p = project(dir.path(), &["@alice", "@org/arch"]);
+    let drafts = ".claude/intent/drafts";
+    write(dir.path(), &format!("{drafts}/issue-done.md"), &decided);
+    write(dir.path(), &format!("{drafts}/issue-no.md"), &rejected);
+    write(dir.path(), &format!("{drafts}/issue-open.md"), &proposed);
+    write(
+        dir.path(),
+        &format!("{drafts}/adr-0001-cache.md"),
+        STALE_DRAFT,
+    );
+    let stale: Vec<String> = intent::stale(&p, dir.path())
+        .into_iter()
+        .map(|s| s.rel)
+        .collect();
+    assert_eq!(
+        stale,
+        [
+            ".claude/intent/drafts/adr-0001-cache.md",
+            ".claude/intent/drafts/issue-open.md"
+        ]
+    );
+    assert_eq!(
+        reason(&hook(dir.path(), &format!("{drafts}/issue-done.md"))),
+        ""
+    );
+    assert!(reason(&hook(dir.path(), &format!("{drafts}/issue-open.md"))).contains("@alice"));
+}
+
+#[test]
 fn the_hook_tells_claude_the_current_approvers_on_every_stale_write() {
     let dir = tempfile::tempdir().unwrap();
     project(dir.path(), &["@alice", "@org/arch"]);

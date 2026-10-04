@@ -1115,7 +1115,7 @@ fn configure_intent(
     let on = ask_confirm(
         theme,
         "Include the /intent command (plan → numbered intent file → GitHub issue draft)?",
-        "Improves your prompt, investigates, agrees a plan with you, writes an intent file (e.g. ADR-0007) and drafts an issue for you to file — Claude never files it.",
+        "Improves your prompt, investigates, agrees a plan with you, writes an intent file (e.g. ADR-0007) if you want one and drafts an issue for you to file — Claude never files it.",
         enabled,
     )?;
     if !on {

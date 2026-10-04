@@ -452,7 +452,7 @@ repo used for a plugin's marketplace and release workflow; `--team` enables
 .claude/skills/refine/SKILL.md       # /refine — propose, take reasoned push-back, iterate
 .claude/skills/deliver/SKILL.md      # /deliver — route → sharpen → requirements → plan → research → gated execution (you run it)
 .claude/skills/inquire/SKILL.md      # /inquire — understand a codebase with evidence and one hint per answer; resumable ledger with a live HTML view
-.claude/skills/intent/SKILL.md       # /intent — prompt → investigate → approved plan → numbered intent file → issue draft (you run it)
+.claude/skills/intent/SKILL.md       # /intent — prompt → investigate → approved plan → numbered intent file (optional) → issue draft (you run it)
 .claude/skills/recap/SKILL.md        # /recap — fast-forward your branches, then a per-branch report of what changed since the last recap, plus new GitHub comments and reviews (you run it)
 .claude/intent/issue-template.md     # /intent's GitHub issue structure — yours, written once
 .claude/intent/drafts/<name>.md      # /intent's issue draft — type `draft` to edit, preview and copy it in your browser (git-ignored)
@@ -862,7 +862,8 @@ GitHub issue (wizard: "Include the /intent command…"; on by default). You star
    criteria. Every statement cites its findings (F#) or is labelled an Assumption; it iterates on
    your push-back until you approve. Your approval makes the plan **approved for drafting**, not
    accepted: the **approvers** decide (below).
-4. **Intent file** (optional) — e.g. `docs/adr/ADR-0007-cache-invalidation.md`, with
+4. **Intent file** (optional: `/intent` asks once you approve the plan) — e.g.
+   `docs/adr/ADR-0007-cache-invalidation.md`, with
    `Status: Proposed`, a `Severity:` line, an `Approvers:` line and every approver pending in its
    Sign-off section. The number is one more than the highest found in the local directory **and**
    on the remote main branch (`git fetch` + `git ls-tree`), matching both `ADR-0007-…` and `0007-…`
@@ -883,7 +884,15 @@ GitHub issue (wizard: "Include the /intent command…"; on by default). You star
    The intent is then agreed: Claude fills in the draft's Plan and gives you the
    `gh issue edit <number> --body-file …` command to update the issue.
 
-`/intent` with no arguments lists intents that have no issue yet; `/intent ADR-0007` resumes one.
+   **Without an intent file** the issue draft (`.claude/intent/drafts/issue-<slug>.md`) is the
+   record: `<!-- Issue: <url> -->` as its first line, each sign-off ticked on that approver's line
+   in its **Needs from** checklist (`- [x] @alice — approved <date>: <link>`), and the status as
+   `<!-- Status: Accepted -->` (or `Rejected`). GitHub hides the comments, and after each change
+   Claude gives you the `gh issue edit` command so the issue shows the sign-offs too. A decided
+   draft, like a decided intent file, keeps its approvers.
+
+`/intent` with no arguments lists intents that have no issue yet, with or without an intent file;
+`/intent ADR-0007` (or `/intent issue-<slug>`) resumes one.
 
 **The issue convention.** The default `issue-template.md` asks for:
 
@@ -989,10 +998,10 @@ pending intent (`/intent ADR-0007`) brings its Approvers line, Sign-off and issu
 emails): GitHub notifies them through the @mentions in the issue, and neither ocgen nor Claude
 contacts anyone any other way. Every intent file and issue draft names them; with none configured,
 the drafts say "No approvers configured" and `/intent` asks whether to proceed without a sign-off.
-**`/deliver` checks the sign-off:** given an intent file (or an issue that links one) that isn't
-`Status: Accepted` with every approver approved, it lists who is still pending and stops — and if
-you insist, it says plainly that this bypasses the approvers' sign-off and waits for your explicit
-confirmation.
+**`/deliver` checks the sign-off:** given an intent file or, without one, its issue draft (or an
+issue that links either) that isn't Accepted with every approver approved, it lists who is still
+pending and stops — and if you insist, it says plainly that this bypasses the approvers' sign-off
+and waits for your explicit confirmation.
 
 Inside Claude this rule is enforced by the skills' instructions only. The hard enforcement is
 GitHub's: link the project's **existing** CODEOWNERS with `ocgen edit intent --codeowners
@@ -1084,8 +1093,8 @@ default). You start it; Claude can't, because it moves refs.
 3. **GitHub activity**: new comments and reviews since the last recap on the related issues and
    on the branches' PRs.
    - Related issues come from links that already exist: the `Issue:` lines of your `/intent`
-     files, `#123`/`GH-123` and issue links in branch names and commit subjects, a branch named
-     `123-…`, and the issues a branch's PR closes.
+     files (and of issue drafts without one), `#123`/`GH-123` and issue links in branch names and
+     commit subjects, a branch named `123-…`, and the issues a branch's PR closes.
    - Claude never runs `gh`: the sandbox withholds your GitHub login from its shell. It writes a
      request (`.claude/notes/recap/github-request.json`), and the `recap-github` hook answers it
      outside the sandbox with your own gh login: one fixed, read-only GraphQL query on the

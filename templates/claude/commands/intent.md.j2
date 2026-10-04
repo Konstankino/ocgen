@@ -1,14 +1,14 @@
 ---
-description: Turn an issue or idea into an approved intent — improve the prompt, investigate, plan, write a numbered intent file, and draft the GitHub issue for me to file
-argument-hint: "[the problem or idea | {{ prefix }}-NNNN to resume | #issue or issue URL to link — empty to list]"
+description: Turn an issue or idea into an approved intent — improve the prompt, investigate, plan, write a numbered intent file if I want one, and draft the GitHub issue for me to file
+argument-hint: "[the problem or idea | {{ prefix }}-NNNN or issue-<slug> to resume | #issue or issue URL to link — empty to list]"
 allowed-tools: {{ allowed_tools }}
 effort: xhigh
 ---
 Work out the intent for: $ARGUMENTS
 
 Be my collaborator: improve the request, investigate it with evidence, and agree a plan with me
-before anything is written. The only files you write are the intent file (step 4), the issue draft
-(step 5) and, later, the intent file's `Issue:` line and sign-off records and the draft's Plan (step 6). **Never create the GitHub issue** — I file it myself, and
+before anything is written. The only files you write are the intent file (step 4, if I want one),
+the issue draft (step 5) and, later, the `Issue:` link, the sign-off records and the draft's Plan (step 6). **Never create the GitHub issue** — I file it myself, and
 `gh issue create` is denied in this project's permissions.
 
 Settings for this project (change them with `ocgen edit intent`):
@@ -40,11 +40,16 @@ write doesn't trigger the page): ocgen renders it as a page beside it and opens 
 never write the `.html` yourself. The copy is git-ignored; the English intent file is the record.
 {% endif %}
 ## 0. Route the arguments
-- **Empty** (or `list`): list the intent files in `{{ dir }}/` that have no `Issue:` line yet — number,
-  title, status — newest first, and let me pick one to resume or start a new intent.
+- **Empty** (or `list`): list the intents that have no issue yet, newest first — the intent files in
+  `{{ dir }}/` with no `Issue:` line (number, title, status), and the issue drafts of intents without one,
+  `.claude/intent/drafts/issue-*.md` (Glob), with no `<!-- Issue: … -->` line (name, title) — and let me
+  pick one to resume or start a new intent.
 - **`{{ prefix }}-NNNN`** (or a file in `{{ dir }}/`): resume that intent — summarise it in a few lines
   and ask what we're doing next. If it is still `Status: Proposed`, bring its Approvers line, its
   Sign-off and its issue draft in line with the project's current approvers first.
+- **`issue-<slug>`** (or a file in `.claude/intent/drafts/`): resume an intent that has no intent file —
+  the issue draft is its record. Summarise it and ask what we're doing next; if it has no
+  `<!-- Status: … -->` line or says Proposed, bring its Needs-from lines in line with the current approvers first.
 - **`#123` or an issue URL**, or an approver's sign-off (`@alice approved: <link>`): go to step 6.
 - **Anything else**: a new intent — start at step 1.
 
@@ -133,7 +138,7 @@ each with a mitigation, and acceptance criteria. Every statement cites the findi
 (F#); anything that doesn't is labelled **Assumption**. **Invite push-back** and iterate until I approve.
 My approval makes the plan **approved for drafting**, not accepted: {% if approvers %}the approvers decide (step 6){% else %}with no approvers, my confirmation in step 6 decides{% endif %}.
 Do not write anything yet. Once I approve, ask whether to write an intent file (optional) — if not,
-go to step 5.
+go to step 5: the issue draft is then the intent's only record (step 6).
 
 ## Writing standard (steps 4 and 5)
 The team that wrote the code reads these drafts: keep them blameless and calm, and completely honest —
@@ -153,7 +158,8 @@ at the top of both templates and follow it: it holds the severity definitions an
   need from them explicit — approve, choose an option, or redirect. Present; don't pressure.
 
 ## 4. Intent file
-Draft it following the writing standard; write it only after the tone check (step 5).
+Skip this step if I don't want an intent file. Draft it following the writing standard; write it only
+after the tone check (step 5).
 1. **Pick the number** so it is never reused:
    - Local: the files in `{{ dir }}/` (any case) named `{{ prefix }}-NNNN…` or `NNNN-…`.
    - Remote main branch: {% if branch %}`git fetch --quiet origin {{ branch }}`{% else %}the remote's default branch
@@ -198,15 +204,16 @@ Draft it following the writing standard; write it only after the tone check (ste
   (a) **Blame and alarm** — banned words, people as subjects, names from git history, judgmental framing.
   (b) **Softening and omission** (the more important) — every Verified finding of Medium or higher
   appears with its trigger, behavior, impact and evidence (in full in the intent file, and in the issue
-  at least as the line above); no severity is lower than the evidence supports; no hedge
+  at least as the line above — in full there too with no intent file); no severity is lower than the evidence supports; no hedge
   contradicts a Verified finding.
-  (c) **Approvers** — every configured approver is listed in both drafts with a pending sign-off.{% if adversary %}
+  (c) **Approvers** — every configured approver is listed in both drafts (in the issue draft, with no
+  intent file) with a pending sign-off.{% if adversary %}
   (d) **Unresolved** — every UNRESOLVED adversary finding appears in both drafts with its evidence.{% endif %}
-  Fix everything it reports. Then write the intent file, and write the description with the Write tool
+  Fix everything it reports. Then write the intent file (if there is one), and write the description with the Write tool
   to the **issue draft** `.claude/intent/drafts/<name>.md` — `<name>` is the intent file's name
   lowercased (e.g. `{{ example|lower }}-cache-invalidation`), or `issue-<kebab-case-slug>` with no intent
-  file; make sure `.claude/intent/drafts/.gitignore` exists and holds `*` (drafts stay out of git). Show
-  me the intent file's path, the title and the description in separate fenced blocks, one line on what
+  file (pick a slug no draft has yet); make sure `.claude/intent/drafts/.gitignore` exists and holds `*` (drafts stay out of git). Show
+  me the intent file's path (if any), the title and the description in separate fenced blocks, one line on what
   the check changed, and:
   - **The browser review:** "Type `draft` to review it in your browser — edit it as formatted text or
     as Markdown, preview it the way GitHub shows it, and copy it." That word, sent alone, makes ocgen open the newest draft
@@ -228,9 +235,19 @@ when I report it with evidence (e.g. `@alice approved: <link>`), one Sign-off li
 - **changes requested** — the date, the link and their feedback, quoted; then go back to step 3 with it;
 - **rejected** — the date and the link; set `Status: Rejected`.
 
-Set `Status: Accepted` only when every approver has approved and I confirm{% if not approvers %} (with no approvers,
+**With no intent file**, the issue draft is the record, kept the same way: add
+`<!-- Issue: <url> -->` as its first line (GitHub hides comments), and record each reported sign-off
+on that approver's line in its Needs-from checklist:
+`- [x] @handle — approved <date>: <link>`,
+`- [ ] @handle — changes requested <date>: <link>` with their feedback quoted, or
+`- [ ] @handle — rejected <date>: <link>`.
+Keep the status on the line after the Issue line: `<!-- Status: Rejected -->` or
+`<!-- Status: Accepted -->`. After each change, tell me to run
+`gh issue edit <number> --body-file .claude/intent/drafts/<name>.md` so the issue shows it — I run it.
+
+Set `Status: Accepted` (in a draft, `<!-- Status: Accepted -->`) only when every approver has approved and I confirm{% if not approvers %} (with no approvers,
 once I confirm I'm proceeding without a sign-off){% endif %}. The intent is then agreed: re-read the issue draft, fill in
 its Plan (changes, how we know it worked, revert) from the approved plan, and tell me to type `draft`
 to review it and to run `gh issue edit <number> --body-file .claude/intent/drafts/<name>.md` to update
 the issue — I run it. Then keep working on it with me — refine the plan as the issue discussion
-evolves, or hand off to `/deliver` with the intent file as the brief.
+evolves, or hand off to `/deliver` with the intent file (or, with none, the issue draft) as the brief.

@@ -160,20 +160,29 @@ pub fn kind(s: &IntentSettings, rel: &str) -> Option<Kind> {
     named.then_some(Kind::Intent)
 }
 
-/// Whether an intent file is still pending — `Status: Proposed`, or no status
-/// yet. A decided one (Accepted, Rejected…) is history and keeps its approvers.
+/// Whether an intent is still pending — `Status: Proposed`, or no status yet.
+/// A decided one (Accepted, Rejected…) is history and keeps its approvers. An
+/// issue draft with no intent file keeps its status as `<!-- Status: … -->`,
+/// which GitHub hides.
 pub fn pending(text: &str) -> bool {
     text.lines()
-        .find_map(|l| l.trim().strip_prefix("Status:"))
+        .find_map(|l| {
+            let l = l.trim();
+            let l = l
+                .strip_prefix("<!--")
+                .and_then(|c| c.strip_suffix("-->"))
+                .unwrap_or(l);
+            l.trim().strip_prefix("Status:")
+        })
         .map(str::trim)
         .is_none_or(|s| s.to_ascii_lowercase().starts_with("proposed"))
 }
 
-/// The gaps of file `path` (of `kind`) against `approvers`; `None` when it is
-/// fine, decided, or unreadable.
-pub fn check_file(path: &Path, kind: Kind, approvers: &[String]) -> Option<Gaps> {
+/// The gaps of file `path` against `approvers`; `None` when it is fine,
+/// decided, or unreadable.
+pub fn check_file(path: &Path, approvers: &[String]) -> Option<Gaps> {
     let text = fs::read_to_string(path).ok()?;
-    if kind == Kind::Intent && !pending(&text) {
+    if !pending(&text) {
         return None;
     }
     Some(gaps(&text, approvers)).filter(|g| !g.is_empty())
@@ -242,7 +251,7 @@ pub fn stale(project: &Project, root: &Path) -> Vec<Stale> {
             if self::kind(s, &rel) != Some(kind) {
                 continue;
             }
-            if let Some(gaps) = check_file(&path, kind, &s.approvers) {
+            if let Some(gaps) = check_file(&path, &s.approvers) {
                 out.push(Stale { rel, kind, gaps });
             }
         }

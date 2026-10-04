@@ -1031,8 +1031,8 @@ pub struct Workflow {
     /// ledger under `.claude/notes/`) and route `/deliver` "understand" goals to it.
     pub inquire: bool,
     /// Emit the `/intent` workflow: improve the prompt, investigate, agree a plan,
-    /// write a numbered intent file and draft the GitHub issue (which the user
-    /// files — `gh issue create` is denied). See [`IntentSettings`].
+    /// optionally write a numbered intent file, and draft the GitHub issue (which
+    /// the user files — `gh issue create` is denied). See [`IntentSettings`].
     pub intent: bool,
     /// Emit the `/recap` daily recap: sync branches with the remote (fast-forward
     /// only, new remote branches tracked locally), analyze each branch changed

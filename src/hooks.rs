@@ -1252,7 +1252,7 @@ impl<'a> Hook<'a> {
         };
         let mut reasons = Vec::new();
         if let Some(gaps) = (!s.approvers.is_empty())
-            .then(|| intent::check_file(&file, kind, &s.approvers))
+            .then(|| intent::check_file(&file, &s.approvers))
             .flatten()
         {
             let fix = match kind {

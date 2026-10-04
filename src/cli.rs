@@ -363,9 +363,9 @@ pub enum EditWhat {
     /// project's issue / intent-file templates (Claude projects only).
     ///
     /// /intent improves your prompt, investigates, agrees a plan with you, writes
-    /// a numbered intent file (e.g. docs/adr/ADR-0007-slug.md, the number checked
-    /// against the remote main branch so it is never reused) and drafts an
-    /// actionable GitHub issue for you to file. Claude never files it:
+    /// a numbered intent file if you want one (e.g. docs/adr/ADR-0007-slug.md, the
+    /// number checked against the remote main branch so it is never reused) and
+    /// drafts an actionable GitHub issue for you to file. Claude never files it:
     /// `gh issue create` is denied.
     ///
     /// The two templates live in the project (.claude/intent/) and are yours:

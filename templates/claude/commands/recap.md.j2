@@ -142,6 +142,8 @@ it with my login.
 {%- if intent_dir %}
    - the `Issue:` lines of the intent files in `{{ intent_dir }}/` (Grep `^Issue:`), except
      intents whose `Status:` is Rejected or Superseded;
+   - the `<!-- Issue: … -->` lines of the issue drafts of intents without an intent file,
+     `.claude/intent/drafts/issue-*.md` (Glob, then Read), except those with `<!-- Status: Rejected -->`;
 {%- endif %}
    - `#123`, `GH-123` or a link to this repository's issues or PRs in the branch names and commit
      subjects you read, and a branch name that starts with a number (`123-fix-login`, as GitHub
