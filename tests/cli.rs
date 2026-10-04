@@ -62,6 +62,18 @@ fn fields_reference_runs() {
 }
 
 #[test]
+fn landscape_lists_the_recap_workflow() {
+    let dir = tempdir().unwrap();
+    scaffold_claude(dir.path());
+    ocgen()
+        .arg("landscape")
+        .arg(dir.path())
+        .assert()
+        .success()
+        .stdout(contains("/recap"));
+}
+
+#[test]
 fn landscape_on_project() {
     let dir = tempdir().unwrap();
     scaffold_default(dir.path());
@@ -553,6 +565,7 @@ fn claude_landscape_plugin_opus_and_no_workflow_no_subagents() {
         deliver: false,
         inquire: false,
         intent: false,
+        recap: false,
         loop_guard_max: 0,
         check_cmd: String::new(),
         subagent_confidence: 0,

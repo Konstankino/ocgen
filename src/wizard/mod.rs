@@ -643,6 +643,12 @@ fn build_claude_project(
         "Sharpens your questions, answers with file:line evidence, ends with one hint toward the next, keeps a git-ignored ledger in .claude/notes/ with an HTML view that refreshes in your browser.",
         true,
     )?;
+    p.claude.workflow.recap = ask_confirm(
+        theme,
+        "Include the /recap daily branch recap command?",
+        "Syncs your branches with the remote (fast-forward only, new remote branches tracked locally), then reports what changed on each branch since your last recap; keeps each report in .claude/notes/recap/.",
+        true,
+    )?;
     let (intent, intent_settings) =
         configure_intent(theme, true, &ocgen::claude::IntentSettings::default(), None)?;
     p.claude.workflow.intent = intent;

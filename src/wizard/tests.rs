@@ -514,7 +514,7 @@ fn new_claude_answers<'a>(sandbox: &[&'a str]) -> Vec<&'a str> {
         "", // CLAUDE.md
         "", // power-user defaults
         "", "", // extra hooks, formatter
-        "", "", "", "", "", "", "", // intake … inquire
+        "", "", "", "", "", "", "", "", // intake … inquire, recap
         "", "", "", "", "", "", "", // /intent, its settings and approvers
         "", "", "", // subagent confidence, check command, loop guard
         "", "", "", "", "", "", "", // Agent Teams and its gates
@@ -577,6 +577,20 @@ fn new_with_the_gate_on_sandboxes_by_default() {
         s["sandbox"]["credentials"]["files"].is_array(),
         "credentials withheld: {s}"
     );
+}
+
+#[test]
+fn new_can_leave_out_recap() {
+    // Seven answers before the workflow group, then intake, improve-prompt,
+    // fanout, verify-todos, prefer-explorer, deliver, inquire — then recap.
+    let mut answers = new_claude_answers(&[""]);
+    assert_eq!(answers[14], "");
+    answers[14] = "n";
+    script(&answers);
+    let p = build_new(true, false);
+    assert_eq!(script_remaining(), 0);
+    assert!(!p.claude.workflow.recap);
+    assert!(p.claude.workflow.inquire, "only recap is off");
 }
 
 #[test]

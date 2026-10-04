@@ -1256,6 +1256,23 @@ impl Project {
                 .context("rendering inquire command")?,
             ));
         }
+        if self.claude.workflow.recap {
+            components.push((
+                "commands/recap.md".to_string(),
+                env.render_str(
+                    &templates::load("claude/commands/recap.md.j2")?,
+                    context! {
+                        allowed_tools => crate::claude::RECAP_TOOLS.join(", "),
+                        // The gate holds every `git merge`: /recap prints the
+                        // current branch's fast-forward instead of running it.
+                        approval_gate => self.claude.team.enabled && self.claude.team.approval_gate,
+                        answer_language => canonical_language(self.response_language()),
+                        english_answers => self.response_language().eq_ignore_ascii_case("English"),
+                    },
+                )
+                .context("rendering recap command")?,
+            ));
+        }
 
         let skill_tmpl = templates::load("claude/skill/SKILL.md.j2")?;
         for skill in &self.skills {
@@ -1368,8 +1385,15 @@ impl Project {
         // Workflow commands ship as skills (`.claude/commands` is legacy): same
         // templates, rendered to skills/<name>/SKILL.md with a `name` and — for the
         // side-effecting ones — `disable-model-invocation`.
+        // A user skill that has a workflow skill's name keeps its file (`issues()`
+        // warns about the clash); otherwise one would silently overwrite the other.
         let mut components: Vec<(String, String)> = components
             .into_iter()
+            .filter(|(rel, _)| {
+                !rel.strip_prefix("commands/")
+                    .and_then(|r| r.strip_suffix(".md"))
+                    .is_some_and(|name| self.skills.iter().any(|s| s.name == name))
+            })
             .map(|(rel, c)| {
                 match rel
                     .strip_prefix("commands/")

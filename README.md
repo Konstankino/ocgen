@@ -193,6 +193,8 @@ When the two languages differ:
   copy** of the intent file to `.claude/intent/view/<name, lowercased>.md`, which is git-ignored. ocgen
   renders it as a page with the same look as the ledger page, linking the English original, and opens
   it once.
+- **`/recap`:** the report, in chat and in its saved copy, is written in the answer language.
+  Branch names, paths, SHAs and commands stay as they are.
 - **Other languages:** the pages have built-in words for English and Ukrainian. Any other answer
   language shows English labels.
 
@@ -405,7 +407,7 @@ refuses to change a project a newer one wrote, so it can't drop settings it does
 > tooling. Everything built on Claude Code's own mechanisms is **Claude-only**, and the OpenCode
 > target keeps its current feature set:
 > - governance gates, the loop guard and the approval gate (hooks);
-> - skills and the workflow skills (`/deliver`, `/inquire`, `/intent`, …);
+> - skills and the workflow skills (`/deliver`, `/inquire`, `/intent`, `/recap`, …);
 > - MCP, the statusline, subagent controls, and plugin output.
 >
 > OpenCode has no hook system, so the gates can't be ported.
@@ -437,6 +439,7 @@ repo used for a plugin's marketplace and release workflow; `--team` enables
 .claude/skills/deliver/SKILL.md      # /deliver — route → sharpen → requirements → plan → research → gated execution (you run it)
 .claude/skills/inquire/SKILL.md      # /inquire — understand a codebase with evidence and one hint per answer; resumable ledger with a live HTML view
 .claude/skills/intent/SKILL.md       # /intent — prompt → investigate → approved plan → numbered intent file → issue draft (you run it)
+.claude/skills/recap/SKILL.md        # /recap — fast-forward your branches, then a per-branch report of what changed since the last recap (you run it)
 .claude/intent/issue-template.md     # /intent's GitHub issue structure — yours, written once
 .claude/intent/intent-template.md    # /intent's intent-file (ADR) structure — yours, written once
 .claude/skills/fanout/SKILL.md       # /fanout — worktree-isolated parallel writers (you run it)
@@ -490,13 +493,16 @@ Teams without an adversary render exactly as before. To add one to an existing p
 
 **Workflow commands are skills.** Claude Code merged commands into skills, so ocgen renders
 its workflows as `.claude/skills/<name>/SKILL.md`. You still type `/deliver`, `/inquire` and so on.
-- **You start the side-effecting ones:** `/multi`, `/fanout`, `/deliver`, `/intent`, `/team` and
-  `/team-plan` carry `disable-model-invocation: true`, so Claude can't start them on its own.
+- **You start the side-effecting ones:** `/multi`, `/fanout`, `/deliver`, `/intent`, `/recap`,
+  `/team` and `/team-plan` carry `disable-model-invocation: true`, so Claude can't start them on
+  its own.
 - **Claude may use the rest when relevant:** `/inquire`, `/intake`, `/refine` and
   `/improve-prompt`.
 - **Upgrading:** `ocgen doctor` removes the old generated `.claude/commands/*.md`. Files you
   wrote yourself are kept.
-- **Reserved names:** a skill of your own can't take a workflow name.
+- **Reserved names:** a skill of your own can't take a workflow name. A skill made before its
+  name was reserved (say, your own `recap`) keeps its file: ocgen skips the generated one and
+  `ocgen landscape` warns you to rename yours.
 
 **Extra hooks** (offered with the power-user defaults; apart from the config audit's guard, none
 of them ever block Claude):
@@ -957,6 +963,56 @@ A project created before the writing standard and the approvers keeps its copies
 (severity, background, decision requested, approvers and sign-off sections, and the house-style
 comment block).
 
+#### Daily recap (`/recap`)
+
+**`/recap`** catches you up on a repository in one command: it brings your branches up to date
+with the remote, then reports, branch by branch, what changed since your last recap (wizard:
+"Include the /recap daily branch recap command?"; on by default). You start it; Claude can't,
+because it moves refs.
+
+1. **Sync, fast-forward only.**
+   - It fetches `origin` (`git fetch --prune --no-tags --no-recurse-submodules origin`).
+   - It moves every local branch that is only behind its upstream in one `git fetch . …` call;
+     git itself refuses anything that isn't a fast-forward.
+   - The current branch moves only with a clean working tree, and only when the update touches
+     nothing under `.claude/` or `.mcp.json` (that would change the running session's own
+     configuration: you fast-forward it in a terminal and restart).
+   - Each new remote branch gets a local tracking branch.
+   - Diverged branches, branches checked out in another worktree, and branches whose upstream
+     is gone are left alone and listed under **Needs your attention**.
+   - It never forces, rebases, resets, stashes, deletes a branch or pushes, and the report
+     lists every move as old → new SHAs, so you can undo any of them.
+2. **Analyze each changed remote branch**, your teammates' included, by reading the diffs, not
+   just the commit messages. Feature branches leave out the default branch's commits merged
+   into them; the default branch is read one merged change at a time (`--first-parent`). A
+   force-pushed branch is flagged, and `git range-diff` tells "rebased, unchanged" from real
+   edits. Branches deleted on the remote are reported as merged or unmerged.
+3. **Report**: an overview table (status, commits, authors, ahead/behind the default branch),
+   one section per changed branch (summary, changes by area, notable changes such as API,
+   schema, config, dependencies, CI or security, risks), then **Needs your attention**.
+
+**Since when?** After each report, `/recap` records every remote branch's tip in
+`.claude/notes/recap/state.json`, so the next recap covers exactly what changed in between,
+even if you pulled by hand. The first recap looks at the last 24 hours. `--since "3 days ago"`
+looks further back without moving the baseline, and `--no-fetch` skips the fetch when you have
+fetched yourself. Each report is also saved as `.claude/notes/recap/<date>.md`. The folder
+ignores itself (a `.gitignore` with `*`), so your own `.gitignore` isn't touched.
+
+**Permissions.** The skill pre-approves read-only git commands, the exact fetch and the exact
+current-branch fast-forward. The local fast-forward batch and each new tracking branch still
+ask you first: no permission rule can tell a safe `git fetch . a:b` from a forced `+a:b`, so
+the prompt is your confirmation. With the approval gate on, `/recap` doesn't run the
+current-branch merge at all; it prints the command for you.
+
+**When it stops.** A failed fetch stops the recap rather than reporting stale branches as new.
+A private remote, for example, needs credentials the sandbox withholds by default. Fetch in your
+own terminal, then run `/recap --no-fetch`. Inside a linked worktree, `/recap` stops too (a
+fetch there moves refs the main checkout shares, and the saved state would be lost with the
+worktree). The only exception is a report-only `/recap --no-fetch --since …`.
+
+To add `/recap` to an existing project, re-render it with `ocgen doctor [dir]`. Projects created
+by older versions get it switched on automatically.
+
 #### Agent Teams
 
 [Agent Teams](https://code.claude.com/docs/en/agent-teams) coordinate several parallel
@@ -1246,7 +1302,7 @@ defaults to `.`.
 
 | Command | What it does |
 |---|---|
-| `ocgen new [dir] --target claude` | Scaffold a new Claude project (agents, `/multi` `/intake` `/refine` `/deliver` `/inquire` `/intent`, `CLAUDE.md`, `settings.json`). |
+| `ocgen new [dir] --target claude` | Scaffold a new Claude project (agents, `/multi` `/intake` `/refine` `/deliver` `/inquire` `/intent` `/recap`, `CLAUDE.md`, `settings.json`). |
 | `ocgen new [dir] --target claude --output plugin` | Emit a distributable plugin instead of the project tree. |
 | `ocgen new [dir] --target claude --output both --repo <owner/repo>` | Emit both the project **and** a plugin (marketplace + release workflow). |
 | `ocgen new [dir] --target claude --team` | Also enable Agent Teams (env flag + `/team` + hooks + guidance). With the approval gate on, the sandbox question defaults to yes (macOS, Linux/WSL2). |
@@ -1346,7 +1402,7 @@ opencode/commands/multi.md.j2     # a command that fans out to the subagents
 seeds.toml               # blank-agent seed text (body + external prompt)
 claude/agent.md.j2              # one generic Claude subagent
 claude/CLAUDE.md.j2             # project instructions + roster
-claude/commands/*.md.j2         # multi / intake / refine / deliver / inquire / intent… (rendered as skills)
+claude/commands/*.md.j2         # multi / intake / refine / deliver / inquire / intent / recap… (rendered as skills)
 claude/intent/*.md              # default /intent issue and intent-file templates (copied into new projects)
 claude/notes/ledger.html.j2     # the /inquire ledger's HTML page
 claude/notes/intent.html.j2     # the /intent reading copy's HTML page

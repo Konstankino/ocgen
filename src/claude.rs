@@ -791,7 +791,7 @@ impl Default for HooksExtra {
 
 /// The workflow skills ocgen generates (formerly `.claude/commands/`). A user
 /// skill with one of these names would collide with the generated one.
-pub const WORKFLOW_SKILLS: [&str; 10] = [
+pub const WORKFLOW_SKILLS: [&str; 11] = [
     "multi",
     "intake",
     "refine",
@@ -800,13 +800,45 @@ pub const WORKFLOW_SKILLS: [&str; 10] = [
     "deliver",
     "inquire",
     "intent",
+    "recap",
     "team",
     "team-plan",
 ];
 
 /// Workflow skills with side effects: only the user starts them (`/name`).
-pub const USER_RUN_WORKFLOWS: [&str; 6] =
-    ["multi", "fanout", "deliver", "intent", "team", "team-plan"];
+pub const USER_RUN_WORKFLOWS: [&str; 7] = [
+    "multi",
+    "fanout",
+    "deliver",
+    "intent",
+    "recap",
+    "team",
+    "team-plan",
+];
+
+/// Tools /recap may use without asking while it runs (skill `allowed-tools`).
+/// The fetch and the current branch's fast-forward are pinned to one exact
+/// command each, so no prefix can carry `+`, `--force` or `--upload-pack`. The
+/// local fast-forward batch (`git fetch . …`) and new tracking branches are left
+/// out on purpose: their permission prompt is the user's confirmation.
+pub const RECAP_TOOLS: [&str; 16] = [
+    "Read",
+    "Grep",
+    "Glob",
+    "Edit(./.claude/notes/recap/**)",
+    "Bash(git rev-parse:*)",
+    "Bash(git for-each-ref:*)",
+    "Bash(git rev-list:*)",
+    "Bash(git log:*)",
+    "Bash(git diff:*)",
+    "Bash(git show:*)",
+    "Bash(git range-diff:*)",
+    "Bash(git status:*)",
+    "Bash(git remote)",
+    "Bash(git config --get-all remote.origin.fetch)",
+    "Bash(git fetch --prune --no-tags --no-recurse-submodules origin)",
+    "Bash(git merge --ff-only --no-overwrite-ignore @{u})",
+];
 
 /// One project MCP server (`.mcp.json` entry).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -1034,6 +1066,10 @@ pub struct Workflow {
     /// write a numbered intent file and draft the GitHub issue (which the user
     /// files — `gh issue create` is denied). See [`IntentSettings`].
     pub intent: bool,
+    /// Emit the `/recap` daily recap: sync branches with the remote (fast-forward
+    /// only, new remote branches tracked locally), analyze each branch changed
+    /// since the last recap, and report per branch. User-run only — it moves refs.
+    pub recap: bool,
     /// Minimum confidence (0–100) a subagent that wrote files must state before it
     /// may stop, enforced by a `SubagentStop` hook. `0` disables. This pairs with
     /// worktree isolation to give isolated writes + enforced per-worker confidence.
@@ -1060,6 +1096,7 @@ impl Default for Workflow {
             deliver: true,
             inquire: true,
             intent: true,
+            recap: true,
             subagent_confidence: 96,
             loop_guard_max: 3,
             check_cmd: String::new(),
