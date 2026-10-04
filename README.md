@@ -923,6 +923,22 @@ with its evidence, no severity below what the evidence supports, no hedge that c
 finding), plus every approver listed as pending. The severity definitions and the banned words live
 in a comment block at the top of both templates, so your team can tune its house style there.
 
+**The drafts always name the current approvers.** `/intent` gets the approver list when the
+skill is generated. A session that started before you changed it keeps the old list: it once wrote
+"No approvers configured" a day after an approver was added, and an issue filed from that notifies
+nobody. So ocgen checks the files against the project's state as it is now, whatever the session
+was told:
+
+| When | What checks | What happens |
+|---|---|---|
+| Claude writes a pending intent file or an issue draft | the `intent-approvers` hook (`PostToolUse`) | Claude is told who is missing, and that this list wins over its instructions; it fixes the file then |
+| You review a draft | the `draft` editor, `ocgen draft`, the `draft` note | A banner (live, as you type) or a warning names the approvers it doesn't @mention |
+| The approvers change | `ocgen edit intent` (and `--show`) | Lists every pending intent and draft that misses one, and how to fix it (`/intent ADR-0007`) |
+| Any time, CI | `ocgen verify` | "/intent approvers in drafts" warns with the files |
+
+An intent that is already Accepted or Rejected is history and keeps its approvers. Resuming a
+pending intent (`/intent ADR-0007`) brings its Approvers line, Sign-off and issue draft up to date.
+
 **Approvers who must sign off.** Name the architects and managers who decide with
 `ocgen edit intent --approver @alice --approver @org/architects` — GitHub users or teams only (no
 emails): GitHub notifies them through the @mentions in the issue, and neither ocgen nor Claude
@@ -1150,15 +1166,17 @@ and inside the ocgen binary (`ocgen hook <name>`). The generated hook command us
 binary when a compatible ocgen is installed, and the script otherwise:
 
 ```sh
-if [ "$(ocgen hook --check 2>/dev/null)" = "ocgen-hooks 10" ]; then ocgen hook team-approval-gate; else sh ".../team-approval-gate.sh"; fi
+if [ "$(ocgen hook --check 2>/dev/null)" = "ocgen-hooks 11" ]; then ocgen hook team-approval-gate; else sh ".../team-approval-gate.sh"; fi
 ```
 
 - **The binary gives you** real JSON parsing instead of `grep`, and hooks that work on
   **native Windows**.
 - **The scripts keep the project working** for teammates and CI machines without ocgen.
-  The exceptions are `inquire-notes`, which renders `/inquire`'s HTML view, and `intent-draft`,
-  which opens `/intent`'s issue draft in the browser: their scripts do nothing, so without ocgen
-  the ledgers stay Markdown only and `draft` reaches Claude as typed.
+  The exceptions are `inquire-notes`, which renders `/inquire`'s HTML view, `intent-draft`,
+  which opens `/intent`'s issue draft in the browser, and `intent-approvers`, which checks drafts
+  against the current approvers: their scripts do nothing, so without ocgen the ledgers stay
+  Markdown only, `draft` reaches Claude as typed, and only `ocgen verify` and `ocgen edit intent`
+  report a draft that misses an approver.
   They need only a POSIX `sh` (Git Bash on Windows): `jq` is used when present and is never
   required (without it, JSON escapes are decoded, and a command holding a `\b`, `\f` or `\u`
   escape is treated as high-impact), and Windows paths (`C:\Users\...`) are handled in both
@@ -1418,7 +1436,7 @@ for a plugin; `--team` is off by default. (The `--base-url` flag is OpenCode-onl
 |---|---|
 | `ocgen landscape [dir]` (alias `horizon`) | Read-only overview: agents (alias/tools/colour), skills, workflow/output/team setup, delegation topology, and a **Checks** section. |
 | `ocgen doctor [dir] [--dry-run] [--yes]` | Repair the project and rewrite files (invalid models, colours, empty roles, bad enum values, older state files). Shows a per-file plan with diffs, flags hand edits, offers to keep hand-added permission rules and MCP servers, removes files ocgen no longer generates, asks first, and backs up to `.ocgen-backup/`. |
-| `ocgen verify [dir] [--no-claude]` | Check the project works: up to date, settings valid, no local/user/managed setting turns hooks off or weakens a gate, hooks run (in bash; Git Bash present on Windows), every gate is ocgen's own and the approval gate blocks, http:// WebFetch is blocked, a no-op `cd` is dropped, `/inquire` ledgers get their HTML view, `draft` opens the `/intent` issue draft, the sandbox is on behind the gate, the pre-push hook blocks Claude and lets you through, scripts use LF, the statusline renders, ocgen on PATH is current, Claude Code validation passes. Runs only what ocgen generates. Exits 1 on failure. |
+| `ocgen verify [dir] [--no-claude]` | Check the project works: up to date, settings valid, no local/user/managed setting turns hooks off or weakens a gate, hooks run (in bash; Git Bash present on Windows), every gate is ocgen's own and the approval gate blocks, http:// WebFetch is blocked, a no-op `cd` is dropped, `/inquire` ledgers get their HTML view, `draft` opens the `/intent` issue draft, pending intents and drafts name the current approvers, the sandbox is on behind the gate, the pre-push hook blocks Claude and lets you through, scripts use LF, the statusline renders, ocgen on PATH is current, Claude Code validation passes. Runs only what ocgen generates. Exits 1 on failure. |
 | `ocgen approve [dir] [--minutes N] [--status] [--revoke]` | You approve high-impact actions for 1–1440 minutes (default 30). Refuses to run under Claude Code or without a terminal. |
 | `ocgen verify [dir] --run-check` | Also run the project's committed check command, as you and unsandboxed (only on a repository you trust). |
 | `ocgen notes open [topic]` | Show an `/inquire` ledger's HTML page: refresh the tab that shows it, or open one ([details](#the-visual-ledger)). |

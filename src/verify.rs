@@ -231,6 +231,7 @@ pub fn verify(project: &Project, root: &Path, opts: &Options) -> Vec<Check> {
     }
     out.push(mcp_json(root));
     out.push(codeowners(project, root));
+    out.push(intent_approvers(project, root));
     out.push(ocgen_on_path());
     out.extend(ignored_overrides());
     out.push(git_tracking(root));
@@ -1756,6 +1757,38 @@ fn notes_view(p: &Probe) -> Check {
             "the hook ran but wrote no HTML page — run `ocgen doctor`",
         ),
     }
+}
+
+/// /intent's pending intent files and issue drafts @mention every approver the
+/// project has now: one drafted before the approvers changed keeps the old list,
+/// and an issue filed from it notifies nobody.
+fn intent_approvers(project: &Project, root: &Path) -> Check {
+    let name = "/intent approvers in drafts";
+    let s = &project.claude.intent;
+    if !project.claude.workflow.intent {
+        return check(name, Status::Skip, "/intent not enabled");
+    }
+    if s.approvers.is_empty() {
+        return check(name, Status::Skip, "no approvers configured");
+    }
+    let stale = crate::intent::stale(project, root);
+    if stale.is_empty() {
+        return check(
+            name,
+            Status::Pass,
+            format!("pending intents and drafts name {}", s.approvers.join(", ")),
+        );
+    }
+    let list: Vec<String> = stale
+        .iter()
+        .take(3)
+        .map(|f| format!("{} {} ({})", f.rel, f.gaps.describe(), f.fix(s)))
+        .collect();
+    let more = match stale.len() {
+        n if n > 3 => format!("; {} more", n - 3),
+        _ => String::new(),
+    };
+    check(name, Status::Warn, format!("{}{more}", list.join("; ")))
 }
 
 /// The /intent draft review: the word `draft` gets a note for Claude about

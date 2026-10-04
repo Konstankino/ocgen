@@ -26,7 +26,11 @@ Settings for this project (change them with `ocgen edit intent`):
 {% else -%}
 - **No approvers configured.** Say "No approvers configured" in both drafts, ask me whether to
   proceed without a sign-off, and suggest `ocgen edit intent --approver @handle`.
-{% endif %}{% if reading_copies %}
+{% endif -%}
+- **The approvers can change while you work** (`ocgen edit intent`), and this list is as of when this
+  skill was generated. After every write to an intent file or issue draft, ocgen checks it against
+  the project's current approvers and tells you what is missing: its list wins — fix the file at once.
+{% if reading_copies %}
 **Languages.** Write the intent file and the GitHub issue draft in English, even though we talk in
 {{ answer_language }}: they are the shared record and GitHub's. After every write to an intent file
 (steps 4 and 6), also write its **reading copy**: `.claude/intent/view/<the intent file's name,
@@ -39,7 +43,8 @@ never write the `.html` yourself. The copy is git-ignored; the English intent fi
 - **Empty** (or `list`): list the intent files in `{{ dir }}/` that have no `Issue:` line yet — number,
   title, status — newest first, and let me pick one to resume or start a new intent.
 - **`{{ prefix }}-NNNN`** (or a file in `{{ dir }}/`): resume that intent — summarise it in a few lines
-  and ask what we're doing next.
+  and ask what we're doing next. If it is still `Status: Proposed`, bring its Approvers line, its
+  Sign-off and its issue draft in line with the project's current approvers first.
 - **`#123` or an issue URL**, or an approver's sign-off (`@alice approved: <link>`): go to step 6.
 - **Anything else**: a new intent — start at step 1.
 

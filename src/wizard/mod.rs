@@ -1526,6 +1526,18 @@ fn print_intent(project: &Project, root: &Path) {
             "Edit the templates with `ocgen edit intent --issue-template` / `--intent-template`."
         )
     );
+    // Drafts written before the approvers changed keep the old list: name them.
+    let stale = ocgen::intent::stale(project, root);
+    if !stale.is_empty() {
+        ui::warning(&format!(
+            "{} file(s) don't name the approvers ({}) — GitHub notifies only the people an issue @mentions:",
+            stale.len(),
+            s.approvers.join(", ")
+        ));
+        for f in &stale {
+            println!("    {} {} — {}", f.rel, f.gaps.describe(), f.fix(s));
+        }
+    }
 }
 
 /// Tell the user when their rule meets a generated copy in another list: a looser

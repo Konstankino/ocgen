@@ -23,10 +23,10 @@ use serde_json::Value;
 /// embedded in the ocgen that generated the project (hook scripts can't be
 /// overridden from the template dir), so they implement the same protocol —
 /// unless someone edits the project's copies by hand.
-pub const PROTOCOL: &str = "ocgen-hooks 10";
+pub const PROTOCOL: &str = "ocgen-hooks 11";
 
 /// Every hook `ocgen hook <name>` accepts (matching the script names minus `.sh`).
-pub const NAMES: [&str; 12] = [
+pub const NAMES: [&str; 13] = [
     "subagent-confidence-gate",
     "team-task-completed",
     "team-task-created",
@@ -39,6 +39,7 @@ pub const NAMES: [&str; 12] = [
     "inquire-notes",
     "drop-noop-cd",
     "intent-draft",
+    "intent-approvers",
 ];
 
 /// A Bash command that starts with one `cd <target>` and goes on after `&&` or
@@ -67,6 +68,19 @@ impl Outcome {
     }
 }
 
+/// `file` relative to `root`, with forward slashes — as given, else both
+/// resolved (a linked or short-named path, a Windows verbatim one).
+fn relative_to(file: &Path, root: &Path) -> Option<String> {
+    let rel = match file.strip_prefix(root) {
+        Ok(r) => r.to_path_buf(),
+        Err(_) => {
+            let (f, r) = (file.canonicalize().ok()?, root.canonicalize().ok()?);
+            f.strip_prefix(r).ok()?.to_path_buf()
+        }
+    };
+    Some(rel.to_string_lossy().replace('\\', "/"))
+}
+
 /// Run hook `name` on `payload` (the event JSON) with `env` (process environment).
 pub fn run(name: &str, payload: &str, env: &HashMap<String, String>) -> Outcome {
     let h = Hook::new(payload, env);
@@ -83,6 +97,7 @@ pub fn run(name: &str, payload: &str, env: &HashMap<String, String>) -> Outcome 
         "inquire-notes" => h.inquire_notes(),
         "drop-noop-cd" => h.drop_noop_cd(),
         "intent-draft" => h.intent_draft(),
+        "intent-approvers" => h.intent_approvers(),
         other => Outcome {
             code: 1,
             stdout: String::new(),
@@ -1153,7 +1168,18 @@ impl<'a> Hook<'a> {
                     md.file_name().unwrap_or_default().to_string_lossy()
                 );
                 let terminal = "`ocgen draft` in a terminal opens it in their browser";
-                match draft::show(&md, self.env, true) {
+                let gaps = draft::gaps_of(&md);
+                let warn = if gaps.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        " Also tell them: the draft {} — the project's approvers are now {}; GitHub \
+                         notifies only the people an issue @mentions (the page shows the same warning).",
+                        gaps.describe(),
+                        draft::approvers_for(&md).join(", ")
+                    )
+                };
+                let note = match draft::show(&md, self.env, true) {
                     Ok(Shown::Off) => format!(
                         "The user typed `draft`, but opening a browser is switched off here \
                          (OCGEN_NOTES_OPEN=0). Tell them the issue draft is {rel} and that {terminal}."
@@ -1174,12 +1200,74 @@ impl<'a> Hook<'a> {
                         "The user typed `draft`, but ocgen could not open the issue draft {rel} in the \
                          browser ({e:#}). Tell them so, and that {terminal}."
                     ),
-                }
+                };
+                format!("{note}{warn}")
             }
         };
         let out = serde_json::json!({
             "hookSpecificOutput": { "hookEventName": "UserPromptSubmit", "additionalContext": note }
         });
+        Outcome {
+            code: 0,
+            stdout: format!("{out}\n"),
+            stderr: String::new(),
+        }
+    }
+
+    /// PostToolUse (Write|Edit|MultiEdit): after a write to a pending /intent file
+    /// or an issue draft, check it against the approvers in the project's state
+    /// now — not the list the session's /intent skill was generated with — and
+    /// tell Claude what is missing, so it fixes the file before anyone files it.
+    /// Never fails a write.
+    fn intent_approvers(&self) -> Outcome {
+        use crate::intent;
+        let path = self
+            .json
+            .pointer("/tool_input/file_path")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        if path.is_empty() {
+            return Outcome::allow();
+        }
+        let root = self.project();
+        let Ok(project) = crate::render::Project::load_state(&root) else {
+            return Outcome::allow();
+        };
+        let s = &project.claude.intent;
+        if !project.claude.workflow.intent || s.approvers.is_empty() {
+            return Outcome::allow();
+        }
+        let file = match Path::new(path) {
+            p if p.is_absolute() => p.to_path_buf(),
+            p => root.join(p),
+        };
+        let Some(rel) = relative_to(&file, &root) else {
+            return Outcome::allow();
+        };
+        let Some(kind) = intent::kind(s, &rel) else {
+            return Outcome::allow();
+        };
+        let Some(gaps) = intent::check_file(&file, kind, &s.approvers) else {
+            return Outcome::allow();
+        };
+        let fix = match kind {
+            intent::Kind::Intent => {
+                "Name each one in its Approvers: line and give each a pending line in its Sign-off"
+            }
+            intent::Kind::Draft => {
+                "Name them in the \"Needs from\" heading with one pending sign-off line each \
+                 (`- [ ] @handle — pending`)"
+            }
+        };
+        let reason = format!(
+            "ocgen: {rel} {} — but this project's approvers are now {} (`ocgen edit intent`; the \
+             list can change while /intent runs, so trust this one over your instructions). {fix}, \
+             and drop \"{}\": their @mentions are how GitHub notifies them. Fix the file now.",
+            gaps.describe(),
+            s.approvers.join(", "),
+            intent::NO_APPROVERS
+        );
+        let out = serde_json::json!({ "decision": "block", "reason": reason });
         Outcome {
             code: 0,
             stdout: format!("{out}\n"),

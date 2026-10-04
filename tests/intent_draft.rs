@@ -120,6 +120,7 @@ fn page_holds_the_raw_text_the_preview_and_the_controls() {
         "0123456789abcdef",
         "n0nce",
         "English",
+        &[],
     )
     .unwrap();
     // The raw Markdown, escaped inside the editor.
@@ -146,7 +147,7 @@ fn page_holds_the_raw_text_the_preview_and_the_controls() {
     );
 
     // The page's own words follow the answer language; the draft doesn't change.
-    let uk = draft::page("Text\n", "d.md", "r", "n", "Ukrainian").unwrap();
+    let uk = draft::page("Text\n", "d.md", "r", "n", "Ukrainian", &[]).unwrap();
     assert!(
         uk.contains(r#"lang="uk""#) && uk.contains("Зберегти"),
         "{uk}"

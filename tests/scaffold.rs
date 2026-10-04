@@ -5070,6 +5070,11 @@ fn intent_writes_the_issue_draft_to_a_file_and_offers_the_browser_review() {
     assert!(md.contains("re-read the draft"), "{md}");
     // …but a flaw I cut doesn't vanish unnoticed: browser edits skip the tone check.
     assert!(md.contains("skip the tone check"), "{md}");
+    // The approvers baked in here can go stale: ocgen's check after each write wins.
+    assert!(
+        md.contains("can change while you work") && md.contains("its list wins"),
+        "{md}"
+    );
 
     // The word is caught by a UserPromptSubmit hook, which runs outside the
     // sandbox: the binary when it speaks this protocol, else its script.
@@ -5522,7 +5527,7 @@ fn inquire_registers_the_notes_hook() {
     assert_eq!(notes["matcher"], "Write|Edit|MultiEdit");
     let cmd = notes["hooks"][0]["command"].as_str().unwrap();
     assert!(
-        cmd.contains("ocgen hook inquire-notes") && cmd.contains("ocgen-hooks 10"),
+        cmd.contains("ocgen hook inquire-notes") && cmd.contains("ocgen-hooks 11"),
         "{cmd}"
     );
     assert_eq!(notes["hooks"][0]["shell"], "bash");

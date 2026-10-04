@@ -22,6 +22,7 @@ pub mod diff;
 pub mod docs;
 pub mod gitcheck;
 pub mod hooks;
+pub mod intent;
 pub mod manifest;
 pub mod notes;
 pub mod paths;

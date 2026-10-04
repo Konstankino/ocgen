@@ -74,6 +74,10 @@ pub struct DraftWords {
     pub overwrite: &'static str,
     /// The banner shown when the editor stops (HTML: it names a command).
     pub offline: &'static str,
+    /// Before the approvers the draft doesn't @mention.
+    pub missing: &'static str,
+    /// The draft still says "No approvers configured".
+    pub says_none: &'static str,
     pub footer: &'static str,
 }
 
@@ -127,6 +131,8 @@ pub static ENGLISH: Words = Words {
         keep_mine: "Keep my edits",
         overwrite: "Save mine anyway",
         offline: "Editor disconnected — saving won't work. Run <code>ocgen draft</code> to reconnect.",
+        missing: "GitHub notifies only the people an issue @mentions, and this draft doesn't mention these approvers — add a pending sign-off line for each under “Needs from”:",
+        says_none: "It still says “No approvers configured”, but this project has approvers — remove that line.",
         footer: "Save writes the file named above — the one gh issue create --body-file files on GitHub.",
     },
     lenses: [
@@ -203,6 +209,8 @@ pub static UKRAINIAN: Words = Words {
         keep_mine: "Залишити мої зміни",
         overwrite: "Усе одно зберегти мої",
         offline: "Редактор від’єднано — зберегти не вийде. Щоб під’єднатися знову, виконайте <code>ocgen draft</code>.",
+        missing: "GitHub сповіщає лише тих, кого згадано через @ у задачі, а ця чернетка не згадує цих затверджувачів — додайте для кожного рядок погодження в розділі «Needs from»:",
+        says_none: "У чернетці досі написано «No approvers configured», але в проєкті є затверджувачі — приберіть цей рядок.",
         footer: "Кнопка «Зберегти» записує файл, указаний вище, — саме його подає на GitHub команда gh issue create --body-file.",
     },
     lenses: [

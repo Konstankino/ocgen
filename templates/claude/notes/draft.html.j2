@@ -52,7 +52,7 @@
   border-bottom-width: 2px; border-radius: 6px; background: var(--surface-2); }
 </style>
 </head>
-<body data-rev="{{ rev }}">
+<body data-rev="{{ rev }}" data-approvers="{{ approvers }}">
 <div class="offline">{{ w.offline }}</div>
 <div id="words" hidden data-saved="{{ w.saved }}" data-unsaved="{{ w.unsaved }}" data-saving="{{ w.saving }}"
   data-save-failed="{{ w.save_failed }}" data-copied="{{ w.copied }}" data-copy-failed="{{ w.copy_failed }}"
@@ -66,6 +66,10 @@
       <span class="pill status" id="status" role="status">{{ w.saved }}</span>
     </div>
   </header>
+  <div class="banner" id="approvers" role="alert"{% if not gaps %} hidden{% endif %}>
+    <span><span id="missing-text"{% if not missing %} hidden{% endif %}>{{ w.missing }} <strong id="missing-list">{{ missing }}</strong></span>
+    <span id="says-none"{% if not says_none %} hidden{% endif %}>{{ w.says_none }}</span></span>
+  </div>
   <div class="banner" id="banner" role="alert" hidden>
     <span id="banner-text"></span>
     <button type="button" id="load-disk">{{ w.load_disk }}</button>
@@ -103,6 +107,23 @@
   var saving = false, laterRev = null, disk = null, flash = null;
 
   function dirty() { return text.value !== saved; }
+
+  // Every approver the project has now must be @mentioned: that is how GitHub
+  // notifies them (the same rule ocgen applies after each write).
+  var approvers = (document.body.getAttribute("data-approvers") || "").split(" ").filter(Boolean);
+  function quote(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
+  function checkApprovers() {
+    if (!approvers.length) return;
+    var t = text.value;
+    var missing = approvers.filter(function (a) {
+      return !new RegExp("(^|[^\\w])@" + quote(a.replace(/^@/, "")) + "($|[^\\w/-])", "i").test(t);
+    });
+    var none = /no approvers configured/i.test(t);
+    $("missing-list").textContent = missing.join(", ");
+    $("missing-text").hidden = !missing.length;
+    $("says-none").hidden = !none;
+    $("approvers").hidden = !missing.length && !none;
+  }
   function say(msg, kind) {
     clearTimeout(flash);
     status.textContent = msg;
@@ -143,7 +164,7 @@
   function unbanner() { $("banner").hidden = true; }
   function take(t, r) {
     // The editor gives its text back with LF line endings, whatever the file has.
-    text.value = t; saved = text.value; rev = r; unbanner();
+    text.value = t; saved = text.value; rev = r; unbanner(); checkApprovers();
     if (current() === "preview") render();
   }
   $("load-disk").addEventListener("click", function () { if (disk) take(disk.text, disk.rev); settle(); });
@@ -177,7 +198,7 @@
   document.addEventListener("keydown", function (e) {
     if ((e.metaKey || e.ctrlKey) && !e.altKey && (e.key === "s" || e.key === "S")) { e.preventDefault(); save(); }
   });
-  text.addEventListener("input", settle);
+  text.addEventListener("input", function () { settle(); checkApprovers(); });
   window.addEventListener("beforeunload", function (e) { if (dirty()) { e.preventDefault(); e.returnValue = ""; } });
 
   // Copy: the Markdown as it is in the editor, or the preview with its formatting.

@@ -1462,10 +1462,13 @@ impl Project {
             let body = templates::load_embedded("claude/hooks/inquire-notes.sh")?;
             components.push(("hooks/inquire-notes.sh".to_string(), body));
         }
-        // The word `draft` opens /intent's issue draft in a browser editor.
+        // The word `draft` opens /intent's issue draft in a browser editor, and
+        // every write to an intent file or draft is checked against the approvers.
         if self.claude.workflow.intent {
-            let body = templates::load_embedded("claude/hooks/intent-draft.sh")?;
-            components.push(("hooks/intent-draft.sh".to_string(), body));
+            for script in ["intent-draft.sh", "intent-approvers.sh"] {
+                let body = templates::load_embedded(&format!("claude/hooks/{script}"))?;
+                components.push((format!("hooks/{script}"), body));
+            }
         }
         // Shared loop guard, sourced by every blocking hook so no gate can hold an
         // agent forever.
@@ -2221,6 +2224,13 @@ impl Project {
             push(
                 "UserPromptSubmit",
                 json!({ "hooks": [ command_hook(hook_cmd(prefix, dir, "intent-draft.sh")) ] }),
+            );
+            // The approvers are baked into the /intent skill, so a session started
+            // before they changed drafts with the old list: check each write
+            // against the state instead.
+            push(
+                "PostToolUse",
+                json!({ "matcher": "Write|Edit|MultiEdit", "hooks": [ command_hook(hook_cmd(prefix, dir, "intent-approvers.sh")) ] }),
             );
         }
         // Deterministic line for every WebFetch: HTTPS, trusted docs sites only.

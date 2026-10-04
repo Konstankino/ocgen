@@ -887,6 +887,7 @@ impl Server {
             &super::rev(text.as_bytes()),
             &nonce,
             &language,
+            &super::draft::approvers_for(&path),
         ) {
             Ok(page) => respond(
                 &mut s,

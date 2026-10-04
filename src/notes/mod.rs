@@ -83,7 +83,7 @@ pub fn intent_view_target(path: &str) -> Option<String> {
 }
 
 /// The ocgen project containing `path`: its root and state.
-fn project_of(path: &Path) -> Option<(PathBuf, crate::render::Project)> {
+pub(crate) fn project_of(path: &Path) -> Option<(PathBuf, crate::render::Project)> {
     let abs = absolute(path);
     let root = abs.ancestors().find(|a| {
         crate::target::Target::state_files()

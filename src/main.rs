@@ -194,6 +194,15 @@ fn run_draft(name: Option<&str>, path: &str) -> Result<()> {
             println!("Opened {}", p.display())
         }
     }
+    let gaps = draft::gaps_of(&md);
+    if !gaps.is_empty() {
+        println!(
+            "warning: {rel} {} — the project's approvers are {}. GitHub notifies only the people \
+             an issue @mentions: name each under \"Needs from\" with a pending sign-off line.",
+            gaps.describe(),
+            draft::approvers_for(&md).join(", ")
+        );
+    }
     Ok(())
 }
 

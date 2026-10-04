@@ -287,8 +287,16 @@ pub fn preview(md: &str) -> String {
 // ---------------------------------------------------------------- page --
 
 /// The editor page for draft text `md` (revision `rev`, at `source`), whose one
-/// script carries `nonce`; its own words in `language`.
-pub fn page(md: &str, source: &str, rev: &str, nonce: &str, language: &str) -> Result<String> {
+/// script carries `nonce`; its own words in `language`. It warns while the text
+/// doesn't @mention every one of `approvers` (the project's, now).
+pub fn page(
+    md: &str,
+    source: &str,
+    rev: &str,
+    nonce: &str,
+    language: &str,
+    approvers: &[String],
+) -> Result<String> {
     let w = words::for_language(language);
     let mut env = Environment::new();
     env.set_auto_escape_callback(|_| AutoEscape::Html);
@@ -297,6 +305,7 @@ pub fn page(md: &str, source: &str, rev: &str, nonce: &str, language: &str) -> R
     env.add_template_owned("draft.html", templates::load(TEMPLATE)?)
         .context("parsing the draft editor template")?;
     let name = source.rsplit('/').next().unwrap_or(source).to_string();
+    let gaps = crate::intent::gaps(md, approvers);
     // Escaped here: minijinja's own escaping also turns `/` into `&#x2f;`.
     let safe = |s: &str| Value::from_safe_string(escape(s));
     let ctx = minijinja::context! {
@@ -307,6 +316,10 @@ pub fn page(md: &str, source: &str, rev: &str, nonce: &str, language: &str) -> R
         nonce => safe(nonce),
         text => safe(md),
         preview => Value::from_safe_string(preview(md)),
+        approvers => safe(&approvers.join(" ")),
+        missing => safe(&gaps.missing.join(", ")),
+        says_none => gaps.says_none,
+        gaps => !gaps.is_empty(),
     };
     let mut page = env
         .get_template("draft.html")?
@@ -341,6 +354,8 @@ fn words_value(w: &'static Words) -> Value {
         ("keep_mine", d.keep_mine),
         ("overwrite", d.overwrite),
         ("updated", d.updated),
+        ("missing", d.missing),
+        ("says_none", d.says_none),
         ("footer", d.footer),
     ] {
         m.insert(k, Value::from(v));
@@ -351,6 +366,23 @@ fn words_value(w: &'static Words) -> Value {
 }
 
 // ---------------------------------------------------------------- show --
+
+/// The approvers of the project containing draft `md`, as its state has them
+/// now (none when /intent is off or there is no project).
+pub fn approvers_for(md: &Path) -> Vec<String> {
+    super::project_of(md)
+        .filter(|(_, p)| p.claude.workflow.intent)
+        .map(|(_, p)| p.claude.intent.approvers)
+        .unwrap_or_default()
+}
+
+/// How draft `md` falls short of its project's current approvers.
+pub fn gaps_of(md: &Path) -> crate::intent::Gaps {
+    let approvers = approvers_for(md);
+    fs::read_to_string(md)
+        .map(|t| crate::intent::gaps(&t, &approvers))
+        .unwrap_or_default()
+}
 
 /// Open draft `md` in the browser editor: tell an open tab, or open one.
 /// `explicit` is a user's request (`ocgen draft`, the `draft` word): it opens a
