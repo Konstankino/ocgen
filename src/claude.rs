@@ -1036,7 +1036,9 @@ pub struct Workflow {
     pub intent: bool,
     /// Emit the `/recap` daily recap: sync branches with the remote (fast-forward
     /// only, new remote branches tracked locally), analyze each branch changed
-    /// since the last recap, and report per branch. User-run only — it moves refs.
+    /// since the last recap, and report per branch, plus new GitHub comments and
+    /// reviews on the related issues and PRs (fetched by the `recap-github` hook).
+    /// User-run only — it moves refs.
     pub recap: bool,
     /// Minimum confidence (0–100) a subagent that wrote files must state before it
     /// may stop, enforced by a `SubagentStop` hook. `0` disables. This pairs with

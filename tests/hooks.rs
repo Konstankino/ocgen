@@ -75,6 +75,8 @@ fn sh(
         "OCGEN_NO_JQ",
         "OCGEN_NOTES_OPEN",
         "OCGEN_NOTES_BROWSER",
+        "OCGEN_RECAP_GH",
+        "OCGEN_RECAP_GH_TIMEOUT",
     ] {
         cmd.env_remove(k);
     }
@@ -982,7 +984,7 @@ fn inquire_notes_renders_the_view_and_the_script_is_a_no_op() {
     assert_eq!(o.code, 0);
     assert!(o.stderr.starts_with("inquire-notes:"), "{o:?}");
     assert!(ocgen::hooks::NAMES.contains(&"inquire-notes"));
-    assert_eq!(ocgen::hooks::PROTOCOL, "ocgen-hooks 11");
+    assert_eq!(ocgen::hooks::PROTOCOL, "ocgen-hooks 12");
 }
 
 // ---------------------------------------------------------- intent-draft --
@@ -1038,6 +1040,66 @@ fn intent_approvers_parity() {
             step("not json", none),
         ],
     );
+}
+
+// ---------------------------------------------------------- recap-github --
+
+fn write_recap_state(dir: &Path) {
+    let notes = dir.join(".claude/notes/recap");
+    fs::create_dir_all(&notes).unwrap();
+    fs::write(notes.join("state.json"), r#"{"version":1}"#).unwrap();
+}
+
+#[test]
+fn recap_github_parity() {
+    let step = |payload: &'static str, setup: fn(&Path)| Step {
+        hook: "recap-github",
+        env: &[],
+        setup,
+        payload,
+    };
+    // Only writes the hook ignores: answering a request needs the binary, and
+    // the script then does nothing (/recap reports GitHub as not checked).
+    check(
+        "recap-github",
+        &[
+            step(
+                r#"{"tool_name":"Write","tool_input":{"file_path":"{dir}/src/main.rs"}}"#,
+                none,
+            ),
+            step(
+                r#"{"tool_name":"Write","tool_input":{"file_path":"{dir}/.claude/notes/recap/state.json"}}"#,
+                write_recap_state,
+            ),
+            step(
+                r#"{"tool_name":"Write","tool_input":{"file_path":"{dir}/sub/.claude/notes/recap/github-request.json"}}"#,
+                none,
+            ),
+            step("not json", none),
+        ],
+    );
+}
+
+#[test]
+fn recap_github_script_is_a_no_op() {
+    let dir = project();
+    let file = dir.path().join(ocgen::recap::REQUEST);
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
+    fs::write(&file, r#"{"branches":["feat/x"]}"#).unwrap();
+    let mut env = HashMap::new();
+    env.insert(
+        "CLAUDE_PROJECT_DIR".to_string(),
+        ocgen::paths::for_shell(dir.path()),
+    );
+    let payload = serde_json::json!({
+        "tool_name": "Write",
+        "tool_input": { "file_path": ocgen::paths::for_shell(&file) }
+    })
+    .to_string();
+    let (code, out, _) = sh(dir.path(), "recap-github", &env, &payload);
+    assert_eq!((code, out.as_str()), (0, ""));
+    assert!(!dir.path().join(ocgen::recap::RESULT).exists());
+    assert!(ocgen::hooks::NAMES.contains(&"recap-github"));
 }
 
 /// The context line the hook hands to the model, if any.

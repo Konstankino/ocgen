@@ -1404,6 +1404,7 @@ fn claude_team_enabled_without_hook_stubs() {
     p.claude.workflow.intent = false; // its https-only WebFetch hook isn't a team hook
     p.claude.workflow.inquire = false; // nor is its notes-view hook
     p.claude.hooks_extra.drop_noop_cd = false; // nor is the no-op cd hook
+    p.claude.workflow.recap = false; // nor is /recap's GitHub fetch
 
     let dir = tempdir().unwrap();
     p.scaffold(dir.path(), false).unwrap();
@@ -5152,6 +5153,46 @@ fn verify_reports_the_draft_review() {
 }
 
 #[test]
+fn verify_reports_the_recap_github_fetch() {
+    use ocgen::verify::Status;
+    let dir = tempdir().unwrap();
+    claude_default("gv").scaffold(dir.path(), false).unwrap();
+    // Whatever ocgen is on PATH, a working project never fails this check, and
+    // the probe neither calls GitHub nor writes the answer file.
+    let checks = verify_no_claude(dir.path());
+    let status = status_of(&checks, "GitHub fetch");
+    assert!(matches!(status, Status::Pass | Status::Warn), "{checks:#?}");
+    assert!(!dir.path().join(".claude/notes/recap").exists());
+
+    // A hand-edited hook command is reported, never run.
+    let mut s = settings_of(dir.path());
+    for g in s["hooks"]["PostToolUse"].as_array_mut().unwrap() {
+        if g.to_string().contains("recap-github") {
+            g["hooks"][0]["command"] = "cat >/dev/null # recap-github".into();
+        }
+    }
+    fs::write(
+        dir.path().join(".claude/settings.json"),
+        serde_json::to_string_pretty(&s).unwrap(),
+    )
+    .unwrap();
+    let checks = verify_no_claude(dir.path());
+    assert_eq!(
+        status_of(&checks, "GitHub fetch"),
+        Status::Warn,
+        "{checks:#?}"
+    );
+
+    // Skipped without /recap.
+    let dir = tempdir().unwrap();
+    let mut p = claude_default("gv2");
+    p.claude.workflow.recap = false;
+    p.scaffold(dir.path(), false).unwrap();
+    let checks = verify_no_claude(dir.path());
+    assert_eq!(status_of(&checks, "GitHub fetch"), Status::Skip);
+}
+
+#[test]
 fn deliver_waits_for_the_approvers_sign_off() {
     let dir = tempdir().unwrap();
     let mut p = claude_default("gate");
@@ -5527,7 +5568,7 @@ fn inquire_registers_the_notes_hook() {
     assert_eq!(notes["matcher"], "Write|Edit|MultiEdit");
     let cmd = notes["hooks"][0]["command"].as_str().unwrap();
     assert!(
-        cmd.contains("ocgen hook inquire-notes") && cmd.contains("ocgen-hooks 11"),
+        cmd.contains("ocgen hook inquire-notes") && cmd.contains("ocgen-hooks 12"),
         "{cmd}"
     );
     assert_eq!(notes["hooks"][0]["shell"], "bash");

@@ -439,7 +439,7 @@ repo used for a plugin's marketplace and release workflow; `--team` enables
 .claude/skills/deliver/SKILL.md      # /deliver — route → sharpen → requirements → plan → research → gated execution (you run it)
 .claude/skills/inquire/SKILL.md      # /inquire — understand a codebase with evidence and one hint per answer; resumable ledger with a live HTML view
 .claude/skills/intent/SKILL.md       # /intent — prompt → investigate → approved plan → numbered intent file → issue draft (you run it)
-.claude/skills/recap/SKILL.md        # /recap — fast-forward your branches, then a per-branch report of what changed since the last recap (you run it)
+.claude/skills/recap/SKILL.md        # /recap — fast-forward your branches, then a per-branch report of what changed since the last recap, plus new GitHub comments and reviews (you run it)
 .claude/intent/issue-template.md     # /intent's GitHub issue structure — yours, written once
 .claude/intent/drafts/<name>.md      # /intent's issue draft — type `draft` to edit, preview and copy it in your browser (git-ignored)
 .claude/intent/intent-template.md    # /intent's intent-file (ADR) structure — yours, written once
@@ -1015,9 +1015,9 @@ and the house-style comment block).
 #### Daily recap (`/recap`)
 
 **`/recap`** catches you up on a repository in one command: it brings your branches up to date
-with the remote, then reports, branch by branch, what changed since your last recap (wizard:
-"Include the /recap daily branch recap command?"; on by default). You start it; Claude can't,
-because it moves refs.
+with the remote, then reports, branch by branch, what changed since your last recap, and what was
+said on GitHub about that work (wizard: "Include the /recap daily branch recap command?"; on by
+default). You start it; Claude can't, because it moves refs.
 
 1. **Sync, fast-forward only.**
    - It fetches `origin` (`git fetch --prune --no-tags --no-recurse-submodules origin`).
@@ -1036,28 +1036,56 @@ because it moves refs.
    into them; the default branch is read one merged change at a time (`--first-parent`). A
    force-pushed branch is flagged, and `git range-diff` tells "rebased, unchanged" from real
    edits. Branches deleted on the remote are reported as merged or unmerged.
-3. **Report**: an overview table (status, commits, authors, ahead/behind the default branch),
+3. **GitHub activity**: new comments and reviews since the last recap on the related issues and
+   on the branches' PRs.
+   - Related issues come from links that already exist: the `Issue:` lines of your `/intent`
+     files, `#123`/`GH-123` and issue links in branch names and commit subjects, a branch named
+     `123-…`, and the issues a branch's PR closes.
+   - Claude never runs `gh`: the sandbox withholds your GitHub login from its shell. It writes a
+     request (`.claude/notes/recap/github-request.json`), and the `recap-github` hook answers it
+     outside the sandbox with your own gh login: one fixed, read-only GraphQL query on the
+     remote's github.com repository, at most 10 issues and 10 branches.
+   - The answer goes to `.claude/notes/recap/github.json`, never straight into Claude's context;
+     its comment text is treated as data, never instructions. Bot comments are only counted,
+     hidden (minimized) ones skipped, long ones cut, and the file is kept small.
+   - A comment saying "approved" or "LGTM" is never taken as a sign-off: a PR's review state is
+     reported as GitHub records it.
+4. **Report**: an overview table (status, commits, authors, ahead/behind the default branch),
    one section per changed branch (summary, changes by area, notable changes such as API,
-   schema, config, dependencies, CI or security, risks), then **Needs your attention**.
+   schema, config, dependencies, CI or security, risks), a **GitHub** section (per issue or PR:
+   who said what, and what needs you: a mention, a review requested from you, changes
+   requested, a question, a blocker), then **Needs your attention**.
 
 **Since when?** After each report, `/recap` records every remote branch's tip in
 `.claude/notes/recap/state.json`, so the next recap covers exactly what changed in between,
 even if you pulled by hand. The first recap looks at the last 24 hours. `--since "3 days ago"`
 looks further back without moving the baseline, and `--no-fetch` skips the fetch when you have
-fetched yourself. Each report is also saved as `.claude/notes/recap/<date>.md`. The folder
-ignores itself (a `.gitignore` with `*`), so your own `.gitignore` isn't touched.
+fetched yourself. GitHub activity counts from `github_checked_at` in the same state file (when
+the hook last answered), and `--no-github` skips the GitHub step. Each report is also saved as
+`.claude/notes/recap/<date>.md`. The folder ignores itself (a `.gitignore` with `*`), so your
+own `.gitignore` isn't touched.
 
 **Permissions.** The skill pre-approves read-only git commands, the exact fetch and the exact
 current-branch fast-forward. The local fast-forward batch and each new tracking branch still
 ask you first: no permission rule can tell a safe `git fetch . a:b` from a forced `+a:b`, so
 the prompt is your confirmation. With the approval gate on, `/recap` doesn't run the
-current-branch merge at all; it prints the command for you.
+current-branch merge at all; it prints the command for you. No `gh` command is pre-approved: the
+GitHub lookup is the hook's, which uses your gh login for that one read-only query
+(`OCGEN_RECAP_GH_TIMEOUT` caps it, 20 seconds by default). The remote's URL is read from git's
+config only, and `ocgen verify` fails when any settings file sets `OCGEN_RECAP_GH`, the tests'
+stand-in for gh.
 
 **When it stops.** A failed fetch stops the recap rather than reporting stale branches as new.
 A private remote, for example, needs credentials the sandbox withholds by default. Fetch in your
 own terminal, then run `/recap --no-fetch`. Inside a linked worktree, `/recap` stops too (a
 fetch there moves refs the main checkout shares, and the saved state would be lost with the
-worktree). The only exception is a report-only `/recap --no-fetch --since …`.
+worktree). The only exception is a report-only `/recap --no-fetch --since …`. GitHub problems
+never stop a recap: gh not installed or not logged in, no network, a rate limit, or a remote
+that isn't on github.com (GitHub Enterprise and SSH host aliases aren't supported) show as one
+line, "GitHub — not checked: <reason>". The lookup needs ocgen on PATH; without it the report
+says so. PRs are looked up in the remote's repository: one from your own fork counts, one from
+someone else's fork with the same branch name doesn't, and when `origin` is your fork, PRs that
+live upstream aren't found.
 
 To add `/recap` to an existing project, re-render it with `ocgen doctor [dir]`. Projects created
 by older versions get it switched on automatically.
@@ -1166,17 +1194,18 @@ and inside the ocgen binary (`ocgen hook <name>`). The generated hook command us
 binary when a compatible ocgen is installed, and the script otherwise:
 
 ```sh
-if [ "$(ocgen hook --check 2>/dev/null)" = "ocgen-hooks 11" ]; then ocgen hook team-approval-gate; else sh ".../team-approval-gate.sh"; fi
+if [ "$(ocgen hook --check 2>/dev/null)" = "ocgen-hooks 12" ]; then ocgen hook team-approval-gate; else sh ".../team-approval-gate.sh"; fi
 ```
 
 - **The binary gives you** real JSON parsing instead of `grep`, and hooks that work on
   **native Windows**.
 - **The scripts keep the project working** for teammates and CI machines without ocgen.
   The exceptions are `inquire-notes`, which renders `/inquire`'s HTML view, `intent-draft`,
-  which opens `/intent`'s issue draft in the browser, and `intent-approvers`, which checks drafts
-  against the current approvers: their scripts do nothing, so without ocgen the ledgers stay
-  Markdown only, `draft` reaches Claude as typed, and only `ocgen verify` and `ocgen edit intent`
-  report a draft that misses an approver.
+  which opens `/intent`'s issue draft in the browser, `intent-approvers`, which checks drafts
+  against the current approvers, and `recap-github`, which answers `/recap`'s GitHub request:
+  their scripts do nothing, so without ocgen the ledgers stay Markdown only, `draft` reaches
+  Claude as typed, only `ocgen verify` and `ocgen edit intent` report a draft that misses an
+  approver, and `/recap` reports GitHub as not checked.
   They need only a POSIX `sh` (Git Bash on Windows): `jq` is used when present and is never
   required (without it, JSON escapes are decoded, and a command holding a `\b`, `\f` or `\u`
   escape is treated as high-impact), and Windows paths (`C:\Users\...`) are handled in both
@@ -1251,6 +1280,9 @@ ocgen approve --revoke     # re-lock now
   configured: protect every branch on the server, not only `main`. For an approved push to work
   from Claude, allow the credentials: the wizard asks when it turns the sandbox on, or set
   `claude.sandbox.allow_credentials` in `.claude/.ocgen-state.json` and run `ocgen doctor`.
+  One hook uses your GitHub login on purpose: `/recap`'s `recap-github`, which runs outside the
+  sandbox like every hook and makes one fixed, read-only query with your gh login. Claude never
+  gets the token, only the answer file; `/recap --no-github` skips it.
 
 The old `touch .claude/team/execution-approved` file is no longer honoured, because an agent
 could create it. `ocgen verify` flags a leftover one.
@@ -1436,7 +1468,7 @@ for a plugin; `--team` is off by default. (The `--base-url` flag is OpenCode-onl
 |---|---|
 | `ocgen landscape [dir]` (alias `horizon`) | Read-only overview: agents (alias/tools/colour), skills, workflow/output/team setup, delegation topology, and a **Checks** section. |
 | `ocgen doctor [dir] [--dry-run] [--yes]` | Repair the project and rewrite files (invalid models, colours, empty roles, bad enum values, older state files). Shows a per-file plan with diffs, flags hand edits, offers to keep hand-added permission rules and MCP servers, removes files ocgen no longer generates, asks first, and backs up to `.ocgen-backup/`. |
-| `ocgen verify [dir] [--no-claude]` | Check the project works: up to date, settings valid, no local/user/managed setting turns hooks off or weakens a gate, hooks run (in bash; Git Bash present on Windows), every gate is ocgen's own and the approval gate blocks, http:// WebFetch is blocked, a no-op `cd` is dropped, `/inquire` ledgers get their HTML view, `draft` opens the `/intent` issue draft, pending intents and drafts name the current approvers, the sandbox is on behind the gate, the pre-push hook blocks Claude and lets you through, scripts use LF, the statusline renders, ocgen on PATH is current, Claude Code validation passes. Runs only what ocgen generates. Exits 1 on failure. |
+| `ocgen verify [dir] [--no-claude]` | Check the project works: up to date, settings valid, no local/user/managed setting turns hooks off or weakens a gate, hooks run (in bash; Git Bash present on Windows), every gate is ocgen's own and the approval gate blocks, http:// WebFetch is blocked, a no-op `cd` is dropped, `/inquire` ledgers get their HTML view, `draft` opens the `/intent` issue draft, `/recap`'s GitHub request gets an answer, pending intents and drafts name the current approvers, the sandbox is on behind the gate, the pre-push hook blocks Claude and lets you through, scripts use LF, the statusline renders, ocgen on PATH is current, Claude Code validation passes. Runs only what ocgen generates. Exits 1 on failure. |
 | `ocgen approve [dir] [--minutes N] [--status] [--revoke]` | You approve high-impact actions for 1–1440 minutes (default 30). Refuses to run under Claude Code or without a terminal. |
 | `ocgen verify [dir] --run-check` | Also run the project's committed check command, as you and unsandboxed (only on a repository you trust). |
 | `ocgen notes open [topic]` | Show an `/inquire` ledger's HTML page: refresh the tab that shows it, or open one ([details](#the-visual-ledger)). |

@@ -218,6 +218,7 @@ pub fn verify(project: &Project, root: &Path, opts: &Options) -> Vec<Check> {
             out.push(noop_cd(&probe));
             out.push(notes_view(&probe));
             out.push(draft_review(&probe));
+            out.push(recap_github(&probe));
         }
         out.push(sandbox(project, &layers));
         out.push(git_credentials(project, root, &layers));
@@ -388,7 +389,12 @@ fn undo(from: &str) -> String {
 /// settings, minus the keys that name a command to run.
 fn probe_env_key(key: &str) -> bool {
     const PREFIXES: [&str; 4] = ["OCGEN_", "TEAM_", "LOOP_GUARD_", "SUBAGENT_"];
-    const COMMANDS: [&str; 3] = ["OCGEN_CHECK_CMD", "OCGEN_FORMAT_CMD", "OCGEN_NOTES_BROWSER"];
+    const COMMANDS: [&str; 4] = [
+        "OCGEN_CHECK_CMD",
+        "OCGEN_FORMAT_CMD",
+        "OCGEN_NOTES_BROWSER",
+        "OCGEN_RECAP_GH",
+    ];
     (PREFIXES.iter().any(|p| key.starts_with(p)) || key == "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS")
         && !COMMANDS.contains(&key)
 }
@@ -1067,9 +1073,10 @@ fn effective(layers: &Layers, expected: &Value) -> Check {
 /// exempted that the gate holds, a loop budget that releases the quality gates
 /// sooner, the team task gate added where no task gate judges teammates, a
 /// documentation site trusted (as the ConfigChange audit judges it), the
-/// hooks' sandbox off or protecting less, or verify's own probe switch (the
-/// gates then decide but record nothing). A key that no generated gate reads
-/// loosens nothing.
+/// hooks' sandbox off or protecting less, verify's own probe switch (the
+/// gates then decide but record nothing), or a stand-in for gh in /recap's
+/// GitHub hook (it would run with the user's gh login, outside the sandbox).
+/// A key that no generated gate reads loosens nothing.
 ///
 /// Values are read as the hooks read them — roles and sites in any letter case,
 /// a number as either twin reads it, the weaker reading counting: the sh
@@ -1124,6 +1131,9 @@ fn weakens(key: &str, want: Option<&str>, got: Option<&str>, ocgen: &Value) -> b
         }
         "TEAM_TASK_GATE" => hook("SubagentStop") && got == Some("1") && want != Some("1"),
         "OCGEN_HOOK_PROBE" => got.is_some(),
+        // Replaces gh in /recap's GitHub hook, which runs with the user's gh
+        // login outside the sandbox; ocgen never sets it (tests only).
+        "OCGEN_RECAP_GH" => got.is_some_and(|g| !g.trim().is_empty()),
         // The reset that keeps git from asking a keychain (claude::GIT_HELPER_RESET).
         "GIT_CONFIG_COUNT" | "GIT_CONFIG_KEY_0" | "GIT_CONFIG_VALUE_0" => {
             want.is_some() && got != want
@@ -1252,7 +1262,11 @@ fn drain<R: Read + Send + 'static>(mut r: R) -> JoinHandle<Vec<u8>> {
 /// it didn't finish. Both outputs are read while it runs — a pipe nobody reads
 /// fills up (about 64 KiB) and stalls the child until the limit. A timeout
 /// stops everything the command started, not just the shell.
-fn run(mut cmd: Command, stdin: &str, limit: Duration) -> Result<(i32, String, String), String> {
+pub(crate) fn run(
+    mut cmd: Command,
+    stdin: &str,
+    limit: Duration,
+) -> Result<(i32, String, String), String> {
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
@@ -1851,6 +1865,70 @@ fn draft_review(p: &Probe) -> Check {
             name,
             Status::Fail,
             "the hook ran but said nothing about the draft — run `ocgen doctor`",
+        )
+    }
+}
+
+/// /recap's GitHub fetch: a write of its request gets a note for Claude, and any
+/// other write passes untouched. Probed in the project itself: in probe mode the
+/// hook reads nothing, calls no gh and writes nothing.
+fn recap_github(p: &Probe) -> Check {
+    let name = "/recap GitHub fetch";
+    let Some((event, group, cmd)) = p.find("PostToolUse", "recap-github") else {
+        return check(name, Status::Skip, "/recap not enabled");
+    };
+    if let Some(what) = p.hand_edited(&event, &group, &cmd) {
+        return check(name, Status::Warn, not_run(&what));
+    }
+    let run = |rel: &str| {
+        let ev = serde_json::json!({
+            "session_id": "ocgen-verify", "tool_name": "Write",
+            "tool_input": { "file_path": crate::paths::for_shell(&p.root.join(rel)) }
+        })
+        .to_string();
+        run_sh(p.sh, &cmd, &ev, &p.env, p.root, Duration::from_secs(20))
+    };
+    let (Some(other), Some(request)) = (run("src/ocgen-verify.rs"), run(crate::recap::REQUEST))
+    else {
+        return check(name, Status::Fail, "the hook did not finish");
+    };
+    if let Some((code, _, err)) = [&other, &request].into_iter().find(|o| o.0 != 0) {
+        return check(
+            name,
+            Status::Fail,
+            format!(
+                "the hook exited {code} ({}) — it must never fail a write; run `ocgen doctor`",
+                err.lines().next().unwrap_or("").trim()
+            ),
+        );
+    }
+    if !other.1.trim().is_empty() {
+        return check(
+            name,
+            Status::Fail,
+            "the hook answered a write other than /recap's request — run `ocgen doctor`",
+        );
+    }
+    if request.1.contains("additionalContext") {
+        check(
+            name,
+            Status::Pass,
+            "/recap's GitHub request is answered with your gh login, outside the sandbox",
+        )
+    } else if !ocgen_hook_ok() {
+        check(
+            name,
+            Status::Warn,
+            format!(
+                "needs ocgen ({}) on PATH — without it /recap reports GitHub as not checked",
+                crate::hooks::PROTOCOL
+            ),
+        )
+    } else {
+        check(
+            name,
+            Status::Fail,
+            "the hook ran but didn't answer /recap's request — run `ocgen doctor`",
         )
     }
 }
@@ -2608,6 +2686,7 @@ mod tests {
             "OCGEN_NOTES_BROWSER",
             "OCGEN_FORMAT_CMD",
             "OCGEN_CHECK_CMD",
+            "OCGEN_RECAP_GH",
         ] {
             assert!(!probe_env_key(key), "{key}");
         }
@@ -2714,6 +2793,9 @@ mod tests {
         assert!(!w("OCGEN_WEBFETCH_DOMAINS", None, Some("evil.example")));
         // Only verify sets the probe switch.
         assert!(w("OCGEN_HOOK_PROBE", None, Some("")));
+        // Nothing sets the stand-in for gh: it would run with the user's login.
+        assert!(w("OCGEN_RECAP_GH", None, Some("sh ./x")));
+        assert!(!w("OCGEN_RECAP_GH", None, Some(" ")));
         assert!(!w("OCGEN_NO_JQ", None, Some("1")));
 
         // No worker gate, no risk gate: their lists and switches loosen nothing.

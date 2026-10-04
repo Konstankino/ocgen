@@ -23,10 +23,10 @@ use serde_json::Value;
 /// embedded in the ocgen that generated the project (hook scripts can't be
 /// overridden from the template dir), so they implement the same protocol —
 /// unless someone edits the project's copies by hand.
-pub const PROTOCOL: &str = "ocgen-hooks 11";
+pub const PROTOCOL: &str = "ocgen-hooks 12";
 
 /// Every hook `ocgen hook <name>` accepts (matching the script names minus `.sh`).
-pub const NAMES: [&str; 13] = [
+pub const NAMES: [&str; 14] = [
     "subagent-confidence-gate",
     "team-task-completed",
     "team-task-created",
@@ -40,6 +40,7 @@ pub const NAMES: [&str; 13] = [
     "drop-noop-cd",
     "intent-draft",
     "intent-approvers",
+    "recap-github",
 ];
 
 /// A Bash command that starts with one `cd <target>` and goes on after `&&` or
@@ -98,6 +99,7 @@ pub fn run(name: &str, payload: &str, env: &HashMap<String, String>) -> Outcome 
         "drop-noop-cd" => h.drop_noop_cd(),
         "intent-draft" => h.intent_draft(),
         "intent-approvers" => h.intent_approvers(),
+        "recap-github" => h.recap_github(),
         other => Outcome {
             code: 1,
             stdout: String::new(),
@@ -1268,6 +1270,44 @@ impl<'a> Hook<'a> {
             intent::NO_APPROVERS
         );
         let out = serde_json::json!({ "decision": "block", "reason": reason });
+        Outcome {
+            code: 0,
+            stdout: format!("{out}\n"),
+            stderr: String::new(),
+        }
+    }
+
+    /// PostToolUse (Write|Edit|MultiEdit): when /recap writes its GitHub request,
+    /// look up what's new on the issues and the branches' PRs it names and write
+    /// it to `.claude/notes/recap/github.json`, then point Claude there. A hook
+    /// runs outside the Bash sandbox, so this one fixed, read-only query uses the
+    /// user's own gh login, which the sandbox withholds from Claude's shell. Any
+    /// other write passes untouched. Never fails a write.
+    fn recap_github(&self) -> Outcome {
+        let path = self
+            .json
+            .pointer("/tool_input/file_path")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        if path.is_empty() {
+            return Outcome::allow();
+        }
+        let root = self.project();
+        let file = match Path::new(path) {
+            p if p.is_absolute() => p.to_path_buf(),
+            p => root.join(p),
+        };
+        if relative_to(&file, &root).as_deref() != Some(crate::recap::REQUEST) {
+            return Outcome::allow();
+        }
+        let gh = crate::recap::Gh {
+            program: self.env("OCGEN_RECAP_GH").trim().to_string(),
+            limit: Duration::from_secs(self.env_num("OCGEN_RECAP_GH_TIMEOUT", 20)),
+        };
+        let note = crate::recap::answer(&root, &gh, self.probe());
+        let out = serde_json::json!({
+            "hookSpecificOutput": { "hookEventName": "PostToolUse", "additionalContext": note }
+        });
         Outcome {
             code: 0,
             stdout: format!("{out}\n"),

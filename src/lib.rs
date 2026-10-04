@@ -26,6 +26,7 @@ pub mod intent;
 pub mod manifest;
 pub mod notes;
 pub mod paths;
+pub mod recap;
 pub mod render;
 pub mod risk;
 pub mod seeds;

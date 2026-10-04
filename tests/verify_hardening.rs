@@ -151,6 +151,7 @@ fn verify_never_runs_commands_ocgen_did_not_generate() {
     s["env"]["BASH_ENV"] = for_shell(&rc).into();
     s["env"]["ENV"] = for_shell(&rc).into();
     s["env"]["OCGEN_NOTES_BROWSER"] = touch(&m("browser")).into();
+    s["env"]["OCGEN_RECAP_GH"] = touch(&m("gh")).into();
     // On Windows, the shell itself.
     let fake_bash = dir.path().join("tools/bash.exe");
     fs::create_dir_all(fake_bash.parent().unwrap()).unwrap();
@@ -209,7 +210,7 @@ fn verify_never_runs_commands_ocgen_did_not_generate() {
         "{checks:#?}"
     );
     // The rest only isn't run.
-    for name in ["statusline", "no-op cd", "notes view"] {
+    for name in ["statusline", "no-op cd", "notes view", "GitHub fetch"] {
         let c = named(&checks, name);
         assert_eq!(c.status, Status::Warn, "{name}: {c:#?}");
         assert!(
@@ -245,6 +246,7 @@ fn verify_never_runs_a_hand_edited_script() {
         (".claude/hooks/https-only-fetch.sh", "fetch"),
         (".claude/hooks/drop-noop-cd.sh", "noop-cd"),
         (".claude/hooks/team-task-created.sh", "task-created"),
+        (".claude/hooks/recap-github.sh", "recap"),
     ] {
         fs::write(
             dir.path().join(rel),
@@ -647,6 +649,7 @@ fn widening_an_exemption_or_the_loop_budget_weakens_the_gates() {
         ("LOOP_GUARD_MAX_BLOCKS", "2".to_string()),
         ("OCGEN_HOOK_PROBE", "1".to_string()),
         ("OCGEN_HOOK_PROBE", "0".to_string()),
+        ("OCGEN_RECAP_GH", "sh ./fake-gh".to_string()),
     ] {
         let c = effective(json!({ "env": { key: value } }));
         assert_eq!(c.status, Status::Fail, "{key}={value}: {c:#?}");

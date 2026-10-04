@@ -1356,6 +1356,12 @@ impl Project {
                         approval_gate => self.claude.team.enabled && self.claude.team.approval_gate,
                         answer_language => canonical_language(self.response_language()),
                         english_answers => self.response_language().eq_ignore_ascii_case("English"),
+                        // Where /intent files keep their `Issue:` links.
+                        intent_dir => if self.claude.workflow.intent {
+                            self.claude.intent.dir.trim_end_matches('/')
+                        } else {
+                            ""
+                        },
                     },
                 )
                 .context("rendering recap command")?,
@@ -1469,6 +1475,11 @@ impl Project {
                 let body = templates::load_embedded(&format!("claude/hooks/{script}"))?;
                 components.push((format!("hooks/{script}"), body));
             }
+        }
+        // /recap's GitHub request is answered by this hook, outside the sandbox.
+        if self.claude.workflow.recap {
+            let body = templates::load_embedded("claude/hooks/recap-github.sh")?;
+            components.push(("hooks/recap-github.sh".to_string(), body));
         }
         // Shared loop guard, sourced by every blocking hook so no gate can hold an
         // agent forever.
@@ -2231,6 +2242,14 @@ impl Project {
             push(
                 "PostToolUse",
                 json!({ "matcher": "Write|Edit|MultiEdit", "hooks": [ command_hook(hook_cmd(prefix, dir, "intent-approvers.sh")) ] }),
+            );
+        }
+        if self.claude.workflow.recap {
+            // /recap writes a GitHub request; the hook answers it with the user's
+            // own gh login, which the Bash sandbox withholds from Claude's shell.
+            push(
+                "PostToolUse",
+                json!({ "matcher": "Write|Edit|MultiEdit", "hooks": [ command_hook(hook_cmd(prefix, dir, "recap-github.sh")) ] }),
             );
         }
         // Deterministic line for every WebFetch: HTTPS, trusted docs sites only.

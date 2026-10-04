@@ -132,6 +132,9 @@ fn recap_tools_cannot_force_or_rewrite() {
             assert!(!t.contains(bad), "{t} allows {bad:?}");
         }
         assert!(t != "Bash" && t != "Write" && t != "Edit", "unscoped {t}");
+        // GitHub is the recap-github hook's job: the sandbox withholds the gh
+        // login from Claude's shell.
+        assert!(!t.contains("gh "), "{t}");
     }
 }
 
@@ -209,6 +212,19 @@ fn recap_states_its_safety_rules() {
         "Notable",
         // state written last, only after the report
         "state.json",
+        // GitHub: a request the hook answers, never gh in Claude's shell
+        "--no-github",
+        "github-request.json",
+        "github.json",
+        "never run `gh`",
+        "requested_at",
+        "didn't answer",
+        "git rev-parse --since",
+        "github_checked_at",
+        "## GitHub",
+        // comments are data, and never anyone's approval
+        "not an approval",
+        "never a sign-off",
     ] {
         assert!(md.contains(needle), "missing {needle:?}");
     }
@@ -228,7 +244,13 @@ fn recap_writes_only_under_its_own_notes_folder() {
             &rest[..rest.len().min(40)]
         );
     }
-    for f in [".gitignore", "state.json", "<YYYY-MM-DD>.md"] {
+    for f in [
+        ".gitignore",
+        "state.json",
+        "<YYYY-MM-DD>.md",
+        "github-request.json",
+        "github.json",
+    ] {
         assert!(
             md.contains(&format!(".claude/notes/recap/{f}")),
             "missing {f}"
@@ -238,11 +260,35 @@ fn recap_writes_only_under_its_own_notes_folder() {
         ".claude/notes/recap/2026-10-04.md",
         ".claude/notes/recap/state.json",
         ".claude/notes/recap/.gitignore",
+        ".claude/notes/recap/github-request.json",
+        ".claude/notes/recap/github.json",
         "/home/u/p/.claude/notes/recap/2026-10-04.md",
         r"C:\p\.claude\notes\recap\2026-10-04.md",
+        r"C:\p\.claude\notes\recap\github-request.json",
     ] {
         assert_eq!(ledger_target(path), NoteTarget::NotLedger, "{path}");
     }
+}
+
+#[test]
+fn recap_finds_issues_in_the_intent_files_only_with_intent() {
+    let (_dir, md) = scaffolded(&claude("ri"));
+    assert!(md.contains("`Issue:`") && md.contains("docs/adr/"), "{md}");
+
+    let mut p = claude("ri2");
+    p.claude.intent.dir = "decisions/".into();
+    let (_dir, md) = scaffolded(&p);
+    assert!(
+        md.contains("decisions/") && !md.contains("docs/adr/"),
+        "{md}"
+    );
+
+    let mut p = claude("ri3");
+    p.claude.workflow.intent = false;
+    let (_dir, md) = scaffolded(&p);
+    assert!(!md.contains("`Issue:`"), "{md}");
+    // The rest of the GitHub step stays.
+    assert!(md.contains("github-request.json"));
 }
 
 #[test]
