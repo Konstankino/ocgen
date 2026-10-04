@@ -4486,7 +4486,7 @@ fn intent_templates_are_written_once_and_user_owned() {
     p.scaffold(dir.path(), false).unwrap();
     let issue = ".claude/intent/issue-template.md";
     let intent = ".claude/intent/intent-template.md";
-    assert!(read(dir.path(), issue).contains("Acceptance criteria"));
+    assert!(read(dir.path(), issue).contains("## Options and trade-offs"));
     assert!(read(dir.path(), intent).contains("Status:"));
 
     // A user edit survives regeneration and isn't a change doctor wants to undo.
@@ -4980,23 +4980,38 @@ fn intent_templates_carry_severity_approvers_and_sign_off() {
     let dir = tempdir().unwrap();
     claude_default("tpl").scaffold(dir.path(), false).unwrap();
     let issue = read(dir.path(), ".claude/intent/issue-template.md");
-    for section in [
-        "## Summary",
-        "## Current behaviour",
-        "## Impact",
-        "Severity:",
-        "## Background",
-        "## Proposal",
-        "## Decision requested",
-        "## Approvers / sign-off",
+    // The team's issue convention: these parts, in this order (the wording
+    // around them is the template's own and may change).
+    let mut at = 0;
+    for part in [
+        "## Intent",
+        "**Blocks prod?** Yes / No",
+        "**Depends on the platform view**",
+        "## Options and trade-offs",
+        "**Do nothing.**",
+        "## Proposed call",
+        "## Needs from",
         "- [ ] @",
-        "## Acceptance criteria",
-        "72 characters",
-        "--max-words",
+        "<details><summary>Plan",
+        "**Changes:**",
+        "**How we know it worked:**",
+        "**Revert:**",
+        "</details>",
     ] {
-        assert!(issue.contains(section), "issue template misses {section}");
+        let found = issue[at..]
+            .find(part)
+            .unwrap_or_else(|| panic!("issue template misses {part} (in order)"));
+        at += found + part.len();
     }
-    assert!(!issue.contains("## Problem"));
+    for rule in ["72 characters", "--max-words", "a guide, not a form"] {
+        assert!(issue.contains(rule), "issue template misses {rule}");
+    }
+    for gone in ["## Summary", "## Background", "## Out of scope"] {
+        assert!(
+            !issue.contains(gone),
+            "{gone} is not part of the convention"
+        );
+    }
     let intent = read(dir.path(), ".claude/intent/intent-template.md");
     for section in [
         "Status: Proposed",
@@ -5024,6 +5039,111 @@ fn intent_templates_carry_severity_approvers_and_sign_off() {
             assert!(t.contains(word), "comment block misses {word}");
         }
     }
+}
+
+#[test]
+fn intent_writes_the_issue_draft_to_a_file_and_offers_the_browser_review() {
+    let dir = tempdir().unwrap();
+    let mut p = claude_default("drf");
+    p.claude.intent.approvers = vec!["@alice".into()];
+    p.scaffold(dir.path(), false).unwrap();
+    let md = read(dir.path(), ".claude/skills/intent/SKILL.md");
+
+    // The description is a file I can edit and file as it is.
+    let step5 = skill_step(&md, 5);
+    assert!(step5.contains(".claude/intent/drafts/"), "{step5}");
+    assert!(
+        step5.contains("--body-file .claude/intent/drafts/"),
+        "{step5}"
+    );
+    // The convention is a guide, and the Plan waits for the agreed intent.
+    assert!(step5.contains("a guide, not a form"), "{step5}");
+    assert!(step5.contains("Plan"), "{step5}");
+    assert!(step5.contains("Needs from"), "{step5}");
+    // The browser review is suggested once a draft exists, and opened by one word.
+    assert!(step5.contains("`draft`"), "{step5}");
+    let step6 = skill_step(&md, 6);
+    for part in ["Plan", "gh issue edit", "`draft`"] {
+        assert!(step6.contains(part), "step 6 misses {part}");
+    }
+    // Edits made in the browser are mine: the draft is re-read before any reuse.
+    assert!(md.contains("re-read the draft"), "{md}");
+    // …but a flaw I cut doesn't vanish unnoticed: browser edits skip the tone check.
+    assert!(md.contains("skip the tone check"), "{md}");
+
+    // The word is caught by a UserPromptSubmit hook, which runs outside the
+    // sandbox: the binary when it speaks this protocol, else its script.
+    let s = settings_of(dir.path());
+    let groups = hook_groups(&s, "UserPromptSubmit");
+    let g = groups
+        .iter()
+        .find(|g| g.to_string().contains("intent-draft"))
+        .expect("a UserPromptSubmit group for the draft review");
+    let cmd = g["hooks"][0]["command"].as_str().unwrap();
+    assert!(
+        cmd.contains("ocgen hook intent-draft") && cmd.contains(ocgen::hooks::PROTOCOL),
+        "{cmd}"
+    );
+    let script = dir.path().join(".claude/hooks/intent-draft.sh");
+    assert!(std::process::Command::new("sh")
+        .arg("-n")
+        .arg(&script)
+        .status()
+        .unwrap()
+        .success());
+
+    // Off with /intent.
+    let dir = tempdir().unwrap();
+    p.claude.workflow.intent = false;
+    p.scaffold(dir.path(), false).unwrap();
+    assert!(!settings_of(dir.path()).to_string().contains("intent-draft"));
+    assert!(!dir.path().join(".claude/hooks/intent-draft.sh").exists());
+}
+
+#[test]
+fn verify_reports_the_draft_review() {
+    use ocgen::verify::Status;
+    let dir = tempdir().unwrap();
+    claude_default("dv").scaffold(dir.path(), false).unwrap();
+    // A draft to find: with the browser off the probe still writes nothing.
+    let drafts = dir.path().join(".claude/intent/drafts");
+    fs::create_dir_all(&drafts).unwrap();
+    fs::write(drafts.join("adr-0001-x.md"), "## Intent\n").unwrap();
+    // Whatever ocgen is on PATH, a working project never fails this check.
+    let checks = verify_no_claude(dir.path());
+    let status = status_of(&checks, "draft review");
+    assert!(matches!(status, Status::Pass | Status::Warn), "{checks:#?}");
+    assert!(
+        !drafts.join(".gitignore").exists(),
+        "the probe wrote a file"
+    );
+
+    // A hand-edited hook command is reported, never run.
+    let mut s = settings_of(dir.path());
+    for g in s["hooks"]["UserPromptSubmit"].as_array_mut().unwrap() {
+        if g.to_string().contains("intent-draft") {
+            g["hooks"][0]["command"] = "cat >/dev/null # intent-draft".into();
+        }
+    }
+    fs::write(
+        dir.path().join(".claude/settings.json"),
+        serde_json::to_string_pretty(&s).unwrap(),
+    )
+    .unwrap();
+    let checks = verify_no_claude(dir.path());
+    assert_eq!(
+        status_of(&checks, "draft review"),
+        Status::Warn,
+        "{checks:#?}"
+    );
+
+    // Skipped without /intent.
+    let dir = tempdir().unwrap();
+    let mut p = claude_default("dv2");
+    p.claude.workflow.intent = false;
+    p.scaffold(dir.path(), false).unwrap();
+    let checks = verify_no_claude(dir.path());
+    assert_eq!(status_of(&checks, "draft review"), Status::Skip);
 }
 
 #[test]
@@ -5402,7 +5522,7 @@ fn inquire_registers_the_notes_hook() {
     assert_eq!(notes["matcher"], "Write|Edit|MultiEdit");
     let cmd = notes["hooks"][0]["command"].as_str().unwrap();
     assert!(
-        cmd.contains("ocgen hook inquire-notes") && cmd.contains("ocgen-hooks 9"),
+        cmd.contains("ocgen hook inquire-notes") && cmd.contains("ocgen-hooks 10"),
         "{cmd}"
     );
     assert_eq!(notes["hooks"][0]["shell"], "bash");

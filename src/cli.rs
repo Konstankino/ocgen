@@ -153,7 +153,33 @@ pub enum Command {
         #[command(subcommand)]
         action: NotesAction,
     },
+    /// Open an /intent issue draft in your browser: edit the Markdown and save it
+    /// back to the file, preview it the way GitHub shows it, and copy it.
+    ///
+    /// /intent writes the GitHub issue description to .claude/intent/drafts/<name>.md.
+    /// Typing `draft` on its own in Claude Code opens the newest one the same way.
+    #[command(after_help = DRAFT_EXAMPLES)]
+    Draft {
+        /// The draft's name, or its start (e.g. ADR-0007); default: the newest.
+        name: Option<String>,
+        /// Directory inside the project (default: current dir).
+        #[arg(long, short, default_value = ".")]
+        path: String,
+    },
 }
+
+const DRAFT_EXAMPLES: &str = "Examples:
+  ocgen draft                            the most recently changed draft
+  ocgen draft ADR-0007                   by the intent it belongs to
+  ocgen draft issue-retry-budget         by file name
+
+The editor is a local page (127.0.0.1, a secret token in its address). Save writes the
+.md file only if it hasn't changed since you opened it; the file is what
+`gh issue create --body-file` files.
+
+Environment:
+  OCGEN_NOTES_OPEN=0     never open a browser
+  OCGEN_NOTES_BROWSER    a command to open pages with instead of the system default";
 
 const NOTES_EXAMPLES: &str = "Examples:
   ocgen notes open                       the most recently updated ledger

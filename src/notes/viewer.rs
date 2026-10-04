@@ -4,6 +4,12 @@
 //! whether a page is already open: an update reloads the open tabs, and only
 //! when there are none does the hook open a new one.
 //!
+//! Run for an /intent drafts directory, the same server is the issue draft's
+//! editor ([`super::draft`]): it serves an editor page per draft, saves what the
+//! page sends back to the file (only over the version the page last saw, and
+//! only from the page itself: its `Origin`), renders the preview, and tells open
+//! tabs when the file changes on disk.
+//!
 //! One server per notes directory, found through `.viewer.json` (port, token,
 //! pid). The token is in every URL and the `Host` header must be loopback, so
 //! other local pages can't read the notes. The server exits after a long idle
@@ -285,8 +291,17 @@ struct Client {
     stream: TcpStream,
 }
 
+/// What a server serves: /inquire ledger pages, or /intent issue draft editors.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    Notes,
+    Drafts,
+}
+
 struct State {
     clients: HashMap<String, Vec<Client>>,
+    /// Drafts: the revision each draft's tabs were last told of.
+    revs: HashMap<String, String>,
     opened: HashMap<String, Instant>,
     left: HashMap<String, Instant>,
     last_activity: Instant,
@@ -294,6 +309,7 @@ struct State {
 }
 
 struct Server {
+    kind: Kind,
     dir: PathBuf,
     token: String,
     port: u16,
@@ -355,19 +371,29 @@ fn close_inherited_fds() {
 }
 
 /// Run the viewer for notes directory `dir` until it is idle or superseded.
-/// Only a `.claude/notes` directory: the server writes `.viewer.json` there and
-/// renders pages next to their ledgers.
+/// Only a `.claude/notes` directory — the server writes `.viewer.json` there and
+/// renders pages next to their ledgers — or an /intent drafts directory, whose
+/// drafts it edits.
 pub fn serve(dir: &Path) -> Result<()> {
     #[cfg(unix)]
     close_inherited_fds();
-    if !super::is_notes_dir(dir) {
-        anyhow::bail!("{} is not a .claude/notes directory", dir.display());
-    }
+    let kind = if super::is_notes_dir(dir) {
+        Kind::Notes
+    } else if super::draft::is_drafts_dir(dir) {
+        Kind::Drafts
+    } else {
+        anyhow::bail!(
+            "{} is not a .claude/notes or {} directory",
+            dir.display(),
+            super::draft::DIR
+        );
+    };
     let dir = dir.canonicalize()?;
     let listener = TcpListener::bind(("127.0.0.1", 0))?;
     let port = listener.local_addr()?.port();
     let grace = Duration::from_millis(env_u64("OCGEN_NOTES_GRACE_MS").unwrap_or(15_000));
     let srv = Arc::new(Server {
+        kind,
         root: root_key(&dir),
         dir,
         token: random_token(),
@@ -377,6 +403,7 @@ pub fn serve(dir: &Path) -> Result<()> {
         idle: Duration::from_secs(env_u64("OCGEN_NOTES_IDLE_SECS").unwrap_or(1800)),
         state: Mutex::new(State {
             clients: HashMap::new(),
+            revs: HashMap::new(),
             opened: HashMap::new(),
             left: HashMap::new(),
             last_activity: Instant::now(),
@@ -386,10 +413,20 @@ pub fn serve(dir: &Path) -> Result<()> {
     });
     {
         let srv = Arc::clone(&srv);
+        // A thread per connection, up to a limit: each open tab holds one, and a
+        // local process opening connections it never finishes can't pile up more.
+        let open = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         std::thread::spawn(move || {
             for s in listener.incoming().flatten() {
-                let srv = Arc::clone(&srv);
-                std::thread::spawn(move || srv.handle(s));
+                if open.load(Ordering::SeqCst) >= MAX_CONNECTIONS {
+                    continue; // dropped: closed at once
+                }
+                open.fetch_add(1, Ordering::SeqCst);
+                let (srv, open) = (Arc::clone(&srv), Arc::clone(&open));
+                std::thread::spawn(move || {
+                    srv.handle(s);
+                    open.fetch_sub(1, Ordering::SeqCst);
+                });
             }
         });
     }
@@ -472,35 +509,68 @@ struct Request {
     method: String,
     target: String,
     host: String,
+    /// The `Origin` header, if any (browsers send it with every POST).
+    origin: Option<String>,
+    /// The body; `None` when it was larger than [`MAX_BODY`] (and not read).
+    body: Option<Vec<u8>>,
 }
 
-fn read_request(s: &TcpStream) -> Option<Request> {
-    let mut r = BufReader::new(s).take(16 * 1024);
-    let mut line = String::new();
-    r.read_line(&mut line).ok()?;
-    let mut parts = line.split_whitespace();
+/// The most a request's line and headers may take.
+const MAX_HEAD: u64 = 16 * 1024;
+/// The largest body accepted: a draft, or the text to preview.
+const MAX_BODY: usize = 1024 * 1024;
+/// The most connections served at once (open tabs included).
+const MAX_CONNECTIONS: usize = 64;
+
+/// Read a request from `s`. Its body is read only when `wanted(host, target)`
+/// says the request may be served: a stranger can't make the server wait for,
+/// or hold, a body it will refuse anyway.
+fn read_request(s: &TcpStream, wanted: impl Fn(&str, &str) -> bool) -> Option<Request> {
+    let mut r = BufReader::new(s);
+    let mut left = MAX_HEAD;
+    let mut line = |r: &mut BufReader<&TcpStream>| -> Option<String> {
+        let mut l = String::new();
+        let n = r.by_ref().take(left).read_line(&mut l).ok()?;
+        left = left.checked_sub(n as u64)?;
+        (n > 0 && l.ends_with('\n')).then_some(l)
+    };
+    let first = line(&mut r)?;
+    let mut parts = first.split_whitespace();
     let method = parts.next()?.to_string();
     let target = parts.next()?.to_string();
-    let mut host = String::new();
+    let (mut host, mut origin, mut length) = (String::new(), None, 0usize);
     loop {
-        let mut h = String::new();
-        if r.read_line(&mut h).ok()? == 0 {
-            return None;
-        }
+        let h = line(&mut r)?;
         let h = h.trim_end();
         if h.is_empty() {
             break;
         }
         if let Some((k, v)) = h.split_once(':') {
-            if k.trim().eq_ignore_ascii_case("host") {
-                host = v.trim().to_string();
+            let (k, v) = (k.trim(), v.trim());
+            if k.eq_ignore_ascii_case("host") {
+                host = v.to_string();
+            } else if k.eq_ignore_ascii_case("origin") {
+                origin = Some(v.to_string());
+            } else if k.eq_ignore_ascii_case("content-length") {
+                length = v.parse().ok()?;
             }
         }
     }
+    let body = if length > MAX_BODY {
+        None
+    } else if !wanted(&host, &target) {
+        Some(Vec::new())
+    } else {
+        let mut b = vec![0; length];
+        r.read_exact(&mut b).ok()?;
+        Some(b)
+    };
     Some(Request {
         method,
         target,
         host,
+        origin,
+        body,
     })
 }
 
@@ -511,6 +581,8 @@ fn respond(s: &mut TcpStream, code: u16, ctype: &str, extra: &str, body: &[u8]) 
         403 => "Forbidden",
         404 => "Not Found",
         405 => "Method Not Allowed",
+        409 => "Conflict",
+        413 => "Payload Too Large",
         _ => "Error",
     };
     let head = format!(
@@ -540,6 +612,17 @@ const CSP: &str = "Content-Security-Policy: default-src 'none'; img-src data: ht
 style-src 'unsafe-inline'; script-src 'unsafe-inline' https://cdn.jsdelivr.net; \
 connect-src 'self'; font-src data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'\r\n";
 
+/// A draft editor's policy: its one script (by nonce) and nothing from outside —
+/// a draft's text can't run anything or load anything (an image URL could carry
+/// data out past the sandbox's network rules).
+fn draft_csp(nonce: &str) -> String {
+    format!(
+        "Content-Security-Policy: default-src 'none'; img-src data:; style-src 'unsafe-inline'; \
+         script-src 'nonce-{nonce}'; connect-src 'self'; base-uri 'none'; form-action 'none'; \
+         frame-ancestors 'none'\r\n"
+    )
+}
+
 /// The live-reload client, added to every page the server serves (the file on
 /// disk stays static, so it also opens fine without the server).
 fn inject(page: &str, slug: &str, rev: &str) -> String {
@@ -562,6 +645,11 @@ fn inject(page: &str, slug: &str, rev: &str) -> String {
     }
 }
 
+/// The event that tells a draft's tabs the file is now at revision `rev`.
+fn changed_event(rev: &str) -> String {
+    format!("event: changed\ndata: {rev}\n\n")
+}
+
 fn newer(a: &Path, b: &Path) -> bool {
     let m = |p: &Path| fs::metadata(p).and_then(|m| m.modified()).ok();
     match (m(a), m(b)) {
@@ -582,11 +670,14 @@ impl Server {
 
     fn handle(&self, mut s: TcpStream) {
         let _ = s.set_read_timeout(Some(Duration::from_secs(5)));
-        let Some(req) = read_request(&s) else {
+        let port = self.port;
+        let host_ok =
+            |h: &str| h == format!("127.0.0.1:{port}") || h == format!("localhost:{port}");
+        let prefix = format!("/{}/", self.token);
+        let Some(req) = read_request(&s, |h, t| host_ok(h) && t.starts_with(&prefix)) else {
             return;
         };
-        let port = self.port;
-        if req.host != format!("127.0.0.1:{port}") && req.host != format!("localhost:{port}") {
+        if !host_ok(&req.host) {
             return plain(&mut s, 403, "forbidden");
         }
         let (path, q) = req.target.split_once('?').unwrap_or((&req.target, ""));
@@ -630,16 +721,135 @@ impl Server {
                 Some(t) => self.events(s, t, q.get("rev").copied().unwrap_or("")),
                 None => plain(&mut s, 400, "bad topic"),
             },
-            (_, "ping" | "reload" | "quit" | "events") => plain(&mut s, 405, "method not allowed"),
-            ("GET", page) => match page.strip_suffix(".html").filter(|p| is_slug(p)) {
-                Some(slug) => self.page(s, slug),
-                None => plain(&mut s, 404, "not found"),
-            },
+            ("POST", "render") if self.kind == Kind::Drafts => self.preview(s, &req),
+            (_, "ping" | "reload" | "quit" | "events" | "render") => {
+                plain(&mut s, 405, "method not allowed")
+            }
+            ("GET", page) if page.ends_with(".html") => {
+                match page.strip_suffix(".html").filter(|p| is_slug(p)) {
+                    Some(slug) => self.page(s, slug),
+                    None => plain(&mut s, 404, "not found"),
+                }
+            }
+            (method, file) if self.kind == Kind::Drafts => {
+                match (method, file.strip_suffix(".md").filter(|p| is_slug(p))) {
+                    ("GET", Some(slug)) => self.load_draft(s, slug),
+                    ("POST", Some(slug)) => {
+                        self.save_draft(s, slug, &req, q.get("rev").copied().unwrap_or(""))
+                    }
+                    _ => plain(&mut s, 404, "not found"),
+                }
+            }
             _ => plain(&mut s, 404, "not found"),
         }
     }
 
+    /// Whether a request comes from this server's own pages (a POST from any
+    /// other page, or from none, carries another `Origin` or none).
+    fn same_origin(&self, req: &Request) -> bool {
+        let port = self.port;
+        req.origin.as_deref().is_some_and(|o| {
+            o == format!("http://127.0.0.1:{port}") || o == format!("http://localhost:{port}")
+        })
+    }
+
+    /// The draft file `slug` names: a regular file in the drafts directory.
+    fn draft_file(&self, slug: &str) -> Option<PathBuf> {
+        let p = self.dir.join(format!("{slug}.md"));
+        fs::symlink_metadata(&p)
+            .is_ok_and(|m| m.file_type().is_file())
+            .then_some(p)
+    }
+
+    /// The preview of the text the page sends.
+    fn preview(&self, mut s: TcpStream, req: &Request) {
+        if !self.same_origin(req) {
+            return plain(&mut s, 403, "forbidden");
+        }
+        let Some(body) = &req.body else {
+            return plain(&mut s, 413, "too large");
+        };
+        let html = super::draft::preview(&String::from_utf8_lossy(body));
+        respond(&mut s, 200, "text/html; charset=utf-8", "", html.as_bytes());
+    }
+
+    /// A draft's text and revision.
+    fn load_draft(&self, mut s: TcpStream, slug: &str) {
+        let Some(text) = self
+            .draft_file(slug)
+            .and_then(|p| fs::read_to_string(p).ok())
+        else {
+            return plain(&mut s, 404, "not found");
+        };
+        let rev = super::rev(text.as_bytes());
+        json_reply(&mut s, &json!({ "text": text, "rev": rev }));
+    }
+
+    /// Save the page's text to draft `slug` — only over revision `base`, the
+    /// version the page last saw; otherwise answer 409 with what the file holds.
+    fn save_draft(&self, mut s: TcpStream, slug: &str, req: &Request, base: &str) {
+        if !self.same_origin(req) {
+            return plain(&mut s, 403, "forbidden");
+        }
+        let Some(path) = self.draft_file(slug) else {
+            return plain(&mut s, 404, "not found");
+        };
+        let Some(body) = &req.body else {
+            return plain(&mut s, 413, "too large");
+        };
+        let Ok(text) = std::str::from_utf8(body) else {
+            return plain(&mut s, 400, "not UTF-8");
+        };
+        // One save at a time, and the tabs hear of it in the same step.
+        let mut st = self.lock();
+        let on_disk = fs::read_to_string(&path).unwrap_or_default();
+        let current = super::rev(on_disk.as_bytes());
+        if current != base {
+            drop(st);
+            let v = json!({ "text": on_disk, "rev": current });
+            return respond(
+                &mut s,
+                409,
+                "application/json",
+                "",
+                v.to_string().as_bytes(),
+            );
+        }
+        if let Err(e) = super::write_if_changed(&path, text.as_bytes()) {
+            drop(st);
+            return plain(&mut s, 500, &format!("{e:#}"));
+        }
+        let new = super::rev(text.as_bytes());
+        st.revs.insert(slug.to_string(), new.clone());
+        Self::tell(&mut st, slug, &changed_event(&new));
+        drop(st);
+        json_reply(&mut s, &json!({ "rev": new }));
+    }
+
+    /// Send `msg` to every open tab of `topic`, dropping the ones gone; how
+    /// many are left.
+    fn tell(st: &mut State, topic: &str, msg: &str) -> usize {
+        match st.clients.get_mut(topic) {
+            Some(list) => {
+                list.retain_mut(|c| c.stream.write_all(msg.as_bytes()).is_ok());
+                list.len()
+            }
+            None => 0,
+        }
+    }
+
+    /// The current revision of draft `slug` ("" when it is gone).
+    fn draft_rev(&self, slug: &str) -> String {
+        self.draft_file(slug)
+            .and_then(|p| fs::read(p).ok())
+            .map(|b| super::rev(&b))
+            .unwrap_or_default()
+    }
+
     fn page(&self, mut s: TcpStream, slug: &str) {
+        if self.kind == Kind::Drafts {
+            return self.draft_page(s, slug);
+        }
         let html = self.dir.join(format!("{slug}.html"));
         let md = self.dir.join(format!("{slug}.md"));
         // Keep the page in step even with edits the hook didn't see. `serve`
@@ -660,6 +870,35 @@ impl Server {
         );
     }
 
+    /// The editor page for draft `slug`, rendered fresh from the file.
+    fn draft_page(&self, mut s: TcpStream, slug: &str) {
+        let Some(path) = self.draft_file(slug) else {
+            return plain(&mut s, 404, "not found");
+        };
+        let Ok(text) = fs::read_to_string(&path) else {
+            return plain(&mut s, 404, "not found");
+        };
+        let nonce = random_token();
+        let source = format!("{}/{slug}.md", super::draft::DIR);
+        let language = super::answer_language(&path);
+        match super::draft::page(
+            &text,
+            &source,
+            &super::rev(text.as_bytes()),
+            &nonce,
+            &language,
+        ) {
+            Ok(page) => respond(
+                &mut s,
+                200,
+                "text/html; charset=utf-8",
+                &draft_csp(&nonce),
+                page.as_bytes(),
+            ),
+            Err(e) => plain(&mut s, 500, &format!("{e:#}")),
+        }
+    }
+
     fn events(&self, mut s: TcpStream, topic: &str, rev: &str) {
         let head =
             "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-store\r\n\
@@ -671,16 +910,26 @@ impl Server {
             return;
         };
         let _ = writer.set_write_timeout(Some(Duration::from_secs(1)));
-        let current = fs::read(self.dir.join(format!("{topic}.html")))
-            .map(|b| super::rev(&b))
-            .unwrap_or_default();
+        let current = match self.kind {
+            Kind::Notes => fs::read(self.dir.join(format!("{topic}.html")))
+                .map(|b| super::rev(&b))
+                .unwrap_or_default(),
+            Kind::Drafts => self.draft_rev(topic),
+        };
         let id = {
             let mut st = self.lock();
             st.next_id += 1;
             let id = st.next_id;
             // The page is older than the file (it loaded mid-update): refresh now.
             if !rev.is_empty() && rev != current {
-                let _ = writer.write_all(b"event: reload\ndata: 1\n\n");
+                let msg = match self.kind {
+                    Kind::Notes => "event: reload\ndata: 1\n\n".to_string(),
+                    Kind::Drafts => changed_event(&current),
+                };
+                let _ = writer.write_all(msg.as_bytes());
+            }
+            if self.kind == Kind::Drafts {
+                st.revs.entry(topic.to_string()).or_insert(current);
             }
             st.clients
                 .entry(topic.to_string())
@@ -708,16 +957,15 @@ impl Server {
     /// Reload `topic`'s tabs, or say whether a new one should be opened —
     /// decided under one lock, so concurrent updates never open two tabs.
     fn decide(&self, topic: &str, force: bool) -> Action {
+        // A draft's tabs are told its revision, never reloaded: they may hold edits.
+        let msg = match self.kind {
+            Kind::Notes => "event: reload\ndata: 1\n\n".to_string(),
+            Kind::Drafts => changed_event(&self.draft_rev(topic)),
+        };
         let mut st = self.lock();
         let now = Instant::now();
         st.last_activity = now;
-        let n = match st.clients.get_mut(topic) {
-            Some(list) => {
-                list.retain_mut(|c| c.stream.write_all(b"event: reload\ndata: 1\n\n").is_ok());
-                list.len()
-            }
-            None => 0,
-        };
+        let n = Self::tell(&mut st, topic, &msg);
         let recent = |m: &HashMap<String, Instant>, d: Duration| {
             m.get(topic).is_some_and(|t| now.duration_since(*t) < d)
         };
@@ -750,7 +998,25 @@ impl Server {
             if tabs == 0 && st.last_activity.elapsed() >= self.idle {
                 return;
             }
+            let open: Vec<String> = match self.kind {
+                Kind::Drafts => st
+                    .clients
+                    .iter()
+                    .filter(|(_, l)| !l.is_empty())
+                    .map(|(t, _)| t.clone())
+                    .collect(),
+                Kind::Notes => Vec::new(),
+            };
             drop(st);
+            // Drafts change under open tabs (Claude, another editor): tell them.
+            for topic in open {
+                let now = self.draft_rev(&topic);
+                let mut st = self.lock();
+                if st.revs.get(&topic) != Some(&now) {
+                    st.revs.insert(topic.clone(), now.clone());
+                    Self::tell(&mut st, &topic, &changed_event(&now));
+                }
+            }
             if !self.dir.is_dir() {
                 return;
             }

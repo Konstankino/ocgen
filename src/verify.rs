@@ -217,6 +217,7 @@ pub fn verify(project: &Project, root: &Path, opts: &Options) -> Vec<Check> {
             out.push(https_only_fetch(&probe));
             out.push(noop_cd(&probe));
             out.push(notes_view(&probe));
+            out.push(draft_review(&probe));
         }
         out.push(sandbox(project, &layers));
         out.push(git_credentials(project, root, &layers));
@@ -1754,6 +1755,70 @@ fn notes_view(p: &Probe) -> Check {
             Status::Fail,
             "the hook ran but wrote no HTML page — run `ocgen doctor`",
         ),
+    }
+}
+
+/// The /intent draft review: the word `draft` gets a note for Claude about
+/// opening the issue draft, and any other prompt passes untouched. Probed with
+/// the browser switched off, in the project itself (it writes nothing then).
+fn draft_review(p: &Probe) -> Check {
+    let name = "/intent draft review";
+    let Some((event, group, cmd)) = p.find("UserPromptSubmit", "intent-draft") else {
+        return check(name, Status::Skip, "/intent not enabled");
+    };
+    if let Some(what) = p.hand_edited(&event, &group, &cmd) {
+        return check(name, Status::Warn, not_run(&what));
+    }
+    let mut env = p.env.clone();
+    env.insert("OCGEN_NOTES_OPEN".into(), "0".into());
+    let run = |prompt: &str| {
+        let ev = serde_json::json!({
+            "session_id": "ocgen-verify", "hook_event_name": "UserPromptSubmit", "prompt": prompt
+        })
+        .to_string();
+        run_sh(p.sh, &cmd, &ev, &env, p.root, Duration::from_secs(20))
+    };
+    let (Some(other), Some(word)) = (run("ocgen verify"), run(crate::notes::draft::WORD)) else {
+        return check(name, Status::Fail, "the hook did not finish");
+    };
+    if let Some((code, _, err)) = [&other, &word].into_iter().find(|o| o.0 != 0) {
+        return check(
+            name,
+            Status::Fail,
+            format!(
+                "the hook exited {code} ({}) — it must never stop a prompt; run `ocgen doctor`",
+                err.lines().next().unwrap_or("").trim()
+            ),
+        );
+    }
+    if !other.1.trim().is_empty() {
+        return check(
+            name,
+            Status::Fail,
+            "the hook answered a prompt other than `draft` — run `ocgen doctor`",
+        );
+    }
+    if word.1.contains("additionalContext") {
+        check(
+            name,
+            Status::Pass,
+            "`draft` on its own opens the issue draft in a browser editor",
+        )
+    } else if !ocgen_hook_ok() {
+        check(
+            name,
+            Status::Warn,
+            format!(
+                "needs ocgen ({}) on PATH — without it `draft` reaches Claude as typed",
+                crate::hooks::PROTOCOL
+            ),
+        )
+    } else {
+        check(
+            name,
+            Status::Fail,
+            "the hook ran but said nothing about the draft — run `ocgen doctor`",
+        )
     }
 }
 

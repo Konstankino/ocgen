@@ -1165,7 +1165,7 @@ fn edit_intent_resets_a_template_to_the_default() {
         .success();
     assert!(std::fs::read_to_string(&issue)
         .unwrap()
-        .contains("Acceptance criteria"));
+        .contains("## Options and trade-offs"));
 }
 
 #[cfg(unix)]

@@ -39,12 +39,42 @@ pub struct Words {
     /// The /intent reading copy's page.
     pub intent_original: &'static str,
     pub intent_footer: &'static str,
+    /// The issue draft's editor page.
+    pub draft: DraftWords,
     /// Lens keys → shown names.
     lenses: [(&'static str, &'static str); 7],
     /// Footnote prefixes → shown prefixes.
     footnotes: [(&'static str, &'static str); 6],
     /// The counts line: questions, verified, inferred, stale (0 = left out).
     counts: fn(usize, usize, usize, usize) -> String,
+}
+
+/// What the issue draft's editor page says by itself.
+pub struct DraftWords {
+    pub title: &'static str,
+    pub write: &'static str,
+    pub preview: &'static str,
+    pub save: &'static str,
+    pub copy_markdown: &'static str,
+    pub copy_formatted: &'static str,
+    pub saved: &'static str,
+    pub unsaved: &'static str,
+    pub saving: &'static str,
+    pub save_failed: &'static str,
+    pub copied: &'static str,
+    pub copy_failed: &'static str,
+    /// The file changed on disk while the page has no unsaved edits.
+    pub updated: &'static str,
+    /// The file changed on disk while the page has unsaved edits.
+    pub changed: &'static str,
+    /// A save refused because the file changed since it was loaded.
+    pub conflict: &'static str,
+    pub load_disk: &'static str,
+    pub keep_mine: &'static str,
+    pub overwrite: &'static str,
+    /// The banner shown when the editor stops (HTML: it names a command).
+    pub offline: &'static str,
+    pub footer: &'static str,
 }
 
 pub static ENGLISH: Words = Words {
@@ -77,6 +107,28 @@ pub static ENGLISH: Words = Words {
     footer: "Rendered by ocgen from the Markdown ledger next to this file — the .md is the source of truth.",
     intent_original: "Original:",
     intent_footer: "A reading copy rendered by ocgen from the Markdown next to this file. The intent file it renders is the record.",
+    draft: DraftWords {
+        title: "Issue draft",
+        write: "Write",
+        preview: "Preview",
+        save: "Save",
+        copy_markdown: "Copy Markdown",
+        copy_formatted: "Copy formatted",
+        saved: "Saved",
+        unsaved: "Unsaved changes",
+        saving: "Saving…",
+        save_failed: "Not saved — your edits are still here.",
+        copied: "Copied",
+        copy_failed: "Couldn't copy — select the text and copy it by hand.",
+        updated: "Updated from the file",
+        changed: "The file changed while you were editing.",
+        conflict: "The file changed since you opened it — saving now would overwrite that change.",
+        load_disk: "Load the file (drop my edits)",
+        keep_mine: "Keep my edits",
+        overwrite: "Save mine anyway",
+        offline: "Editor disconnected — saving won't work. Run <code>ocgen draft</code> to reconnect.",
+        footer: "Save writes the file named above — the one gh issue create --body-file files on GitHub.",
+    },
     lenses: [
         ("Structure", "Structure"),
         ("Flow", "Flow"),
@@ -131,6 +183,28 @@ pub static UKRAINIAN: Words = Words {
     footer: "ocgen створив цю сторінку з Markdown-нотаток, що лежать поруч. Основний файл — .md.",
     intent_original: "Оригінал англійською:",
     intent_footer: "Переклад для читання, який ocgen створив із Markdown-файлу поруч. Чинний запис — англійський файл наміру.",
+    draft: DraftWords {
+        title: "Чернетка GitHub issue",
+        write: "Редагувати",
+        preview: "Перегляд",
+        save: "Зберегти",
+        copy_markdown: "Копіювати Markdown",
+        copy_formatted: "Копіювати з форматуванням",
+        saved: "Збережено",
+        unsaved: "Є незбережені зміни",
+        saving: "Зберігаю…",
+        save_failed: "Не збережено — ваші зміни нікуди не зникли.",
+        copied: "Скопійовано",
+        copy_failed: "Не вдалося скопіювати — виділіть текст і скопіюйте вручну.",
+        updated: "Оновлено з файлу",
+        changed: "Файл змінився, поки ви редагували.",
+        conflict: "Файл змінився відтоді, як ви його відкрили, — збереження зараз перезапише цю зміну.",
+        load_disk: "Завантажити файл (мої зміни буде втрачено)",
+        keep_mine: "Залишити мої зміни",
+        overwrite: "Усе одно зберегти мої",
+        offline: "Редактор від’єднано — зберегти не вийде. Щоб під’єднатися знову, виконайте <code>ocgen draft</code>.",
+        footer: "Кнопка «Зберегти» записує файл, указаний вище, — саме його подає на GitHub команда gh issue create --body-file.",
+    },
     lenses: [
         ("Structure", "Структура"),
         ("Flow", "Потік"),

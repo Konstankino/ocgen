@@ -7,10 +7,12 @@
 //!
 //! The pages speak the project's answer language ([`words`]). An /intent reading
 //! copy (`.claude/intent/view/<slug>.md`, the English intent file translated
-//! into that language) gets a page of its own the same way.
+//! into that language) gets a page of its own the same way. The /intent issue
+//! draft (`.claude/intent/drafts/<name>.md`) gets an editor instead ([`draft`]).
 
 pub mod blocks;
 pub mod browser;
+pub mod draft;
 pub mod html;
 pub mod ledger;
 pub mod viewer;

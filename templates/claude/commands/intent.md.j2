@@ -7,8 +7,8 @@ effort: xhigh
 Work out the intent for: $ARGUMENTS
 
 Be my collaborator: improve the request, investigate it with evidence, and agree a plan with me
-before anything is written. The only files you write are the intent file (step 4) and, later, its
-`Issue:` line and sign-off records (step 6). **Never create the GitHub issue** — I file it myself, and
+before anything is written. The only files you write are the intent file (step 4), the issue draft
+(step 5) and, later, the intent file's `Issue:` line and sign-off records and the draft's Plan (step 6). **Never create the GitHub issue** — I file it myself, and
 `gh issue create` is denied in this project's permissions.
 
 Settings for this project (change them with `ocgen edit intent`):
@@ -168,27 +168,48 @@ Draft it following the writing standard; write it only after the tone check (ste
 
 ## 5. Draft the GitHub issue, check the tone, show both
 - **Title:** imperative and actionable (what to do, not the topic), at most 72 characters.
-- **Description:** follow the writing standard and `{{ issue_template }}` (if it is missing, use:
-  Summary, Current behaviour, Impact, Background, Proposal, Decision requested, Approvers / sign-off,
-  Acceptance criteria, Out of scope, Links); at most {{ max_words }} words — state the word count. Link
-  the intent file when there is one.{% if adversary %} Name every UNRESOLVED adversary finding, with its evidence, so the
+- **Description:** follow the writing standard and `{{ issue_template }}` — a guide, not a form: keep
+  its sections in their order and what each is for, adapt the wording to the topic, and leave its
+  `<!-- -->` comments out (if it is missing, use: Intent with the **Blocks prod?** and **Depends on the
+  platform view** lines, Options and trade-offs including "do nothing", Proposed call, Needs from the
+  approvers, and the Plan in a collapsed `<details>` block). At most {{ max_words }} words — state the
+  word count. Link the intent file when there is one. Short as it is, it hides no flaw: each one of
+  Medium or higher gets at least a line — in the Intent, or in an option's "what can go wrong" —
+  with its trigger, impact, severity, and its evidence or a link to it in the intent file (with no
+  intent file, its full evidence). Leave the Plan as the template's outline
+  until the intent is agreed (step 6).{% if adversary %} Name every UNRESOLVED adversary finding, with its evidence, so the
   approvers decide with it in view.{% endif %}
-- **Approvers / sign-off:** {% if approvers %}one pending checklist line per approver, as @mentions ({{ approvers }}) —
-  GitHub notifies them when I file the issue{% else %}"No approvers configured"{% endif %}. That is the only notice: **Never email**,
-  message or otherwise contact anyone. Don't use `--assignee` for approvers — assignees do the work.
+- **Needs from the approvers:** {% if approvers %}name them in that heading ({{ approvers }}), then one pending checklist
+  line per approver, as @mentions — GitHub notifies them when I file the issue{% else %}"No approvers configured"{% endif %}. That is the only
+  notice: **Never email**, message or otherwise contact anyone. Don't use `--assignee` for approvers —
+  assignees do the work.
 - **Tone check**, before showing anything: give a fresh {% if reviewer %}`reviewer`{% elif prefer_explorer %}`explorer`{% else %}`Explore`{% endif %} subagent the drafts, the numbered
   findings with their severities, the writing standard and both templates' comment blocks, and ask
   it to report:
   (a) **Blame and alarm** — banned words, people as subjects, names from git history, judgmental framing.
   (b) **Softening and omission** (the more important) — every Verified finding of Medium or higher
-  appears with its trigger, behavior, impact and evidence; no severity is lower than the evidence supports;
-  no hedge contradicts a Verified finding.
+  appears with its trigger, behavior, impact and evidence (in full in the intent file, and in the issue
+  at least as the line above); no severity is lower than the evidence supports; no hedge
+  contradicts a Verified finding.
   (c) **Approvers** — every configured approver is listed in both drafts with a pending sign-off.{% if adversary %}
   (d) **Unresolved** — every UNRESOLVED adversary finding appears in both drafts with its evidence.{% endif %}
-  Fix everything it reports. Then write the intent file and show me its path, the title and the
-  description in separate fenced blocks, and the command for me to run — save the description to a
-  file and `gh issue create --title "<title>" --body-file <file>` — with one line on what the check changed.
+  Fix everything it reports. Then write the intent file, and write the description with the Write tool
+  to the **issue draft** `.claude/intent/drafts/<name>.md` — `<name>` is the intent file's name
+  lowercased (e.g. `{{ example|lower }}-cache-invalidation`), or `issue-<kebab-case-slug>` with no intent
+  file; make sure `.claude/intent/drafts/.gitignore` exists and holds `*` (drafts stay out of git). Show
+  me the intent file's path, the title and the description in separate fenced blocks, one line on what
+  the check changed, and:
+  - **The browser review:** "Type `draft` to review it in your browser — edit the Markdown, preview it
+    the way GitHub shows it, and copy it." That word, sent alone, makes ocgen open the newest draft
+    (its hook adds a note saying what it did): reply in one line and wait — it is not a request to
+    write a draft. If no note came, tell me to run `ocgen draft` in a terminal.
+  - **The command** for me to run: `gh issue create --title "<title>" --body-file .claude/intent/drafts/<name>.md`
+    — it files the draft as it stands, my edits included.
 - **Never create the issue yourself** — no `gh issue create`, no API call. Wait for me to file it.
+- **My edits are mine, and they skip the tone check:** re-read the draft before you use it again (to
+  quote, revise or fill in the Plan) — I may have changed it in the browser. Build on my version and
+  don't quietly put back what I removed; but if my edits dropped or softened a flaw of Medium or
+  higher, or a pending approver, say so once — with the finding — and let me decide.
 
 ## 6. Sign-off, link the issue, keep collaborating
 When I give you the issue (`#123` or its URL), add `Issue: <url>` to the intent file.
@@ -199,5 +220,8 @@ when I report it with evidence (e.g. `@alice approved: <link>`), one Sign-off li
 - **rejected** — the date and the link; set `Status: Rejected`.
 
 Set `Status: Accepted` only when every approver has approved and I confirm{% if not approvers %} (with no approvers,
-once I confirm I'm proceeding without a sign-off){% endif %}. Then keep working on it with me — refine the
-plan as the issue discussion evolves, or hand off to `/deliver` with the intent file as the brief.
+once I confirm I'm proceeding without a sign-off){% endif %}. The intent is then agreed: re-read the issue draft, fill in
+its Plan (changes, how we know it worked, revert) from the approved plan, and tell me to type `draft`
+to review it and to run `gh issue edit <number> --body-file .claude/intent/drafts/<name>.md` to update
+the issue — I run it. Then keep working on it with me — refine the plan as the issue discussion
+evolves, or hand off to `/deliver` with the intent file as the brief.

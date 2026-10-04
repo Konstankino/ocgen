@@ -23,10 +23,10 @@ use serde_json::Value;
 /// embedded in the ocgen that generated the project (hook scripts can't be
 /// overridden from the template dir), so they implement the same protocol —
 /// unless someone edits the project's copies by hand.
-pub const PROTOCOL: &str = "ocgen-hooks 9";
+pub const PROTOCOL: &str = "ocgen-hooks 10";
 
 /// Every hook `ocgen hook <name>` accepts (matching the script names minus `.sh`).
-pub const NAMES: [&str; 11] = [
+pub const NAMES: [&str; 12] = [
     "subagent-confidence-gate",
     "team-task-completed",
     "team-task-created",
@@ -38,6 +38,7 @@ pub const NAMES: [&str; 11] = [
     "https-only-fetch",
     "inquire-notes",
     "drop-noop-cd",
+    "intent-draft",
 ];
 
 /// A Bash command that starts with one `cd <target>` and goes on after `&&` or
@@ -81,6 +82,7 @@ pub fn run(name: &str, payload: &str, env: &HashMap<String, String>) -> Outcome 
         "https-only-fetch" => h.https_only_fetch(),
         "inquire-notes" => h.inquire_notes(),
         "drop-noop-cd" => h.drop_noop_cd(),
+        "intent-draft" => h.intent_draft(),
         other => Outcome {
             code: 1,
             stdout: String::new(),
@@ -1124,6 +1126,64 @@ impl<'a> Hook<'a> {
         match notes::show(&md, self.env, false) {
             Ok(_) => Outcome::allow(),
             Err(e) => note(format!("could not show the HTML view: {e:#}")),
+        }
+    }
+
+    /// UserPromptSubmit: the word `draft`, sent on its own, opens the newest
+    /// /intent issue draft in the browser editor — from here, outside the Bash
+    /// sandbox, where a local server can start — and tells Claude what happened.
+    /// Any other prompt passes untouched. Never blocks.
+    fn intent_draft(&self) -> Outcome {
+        use crate::notes::{draft, Shown};
+        if !draft::is_prompt(&self.field("prompt")) {
+            return Outcome::allow();
+        }
+        let dir = self.project().join(draft::DIR);
+        let note = match draft::find(&dir, None) {
+            Err(_) => format!(
+                "The user typed `draft` to open the /intent issue draft in their browser, but there is \
+                 no issue draft in {}/ yet, so nothing was opened. /intent writes one when it drafts \
+                 the GitHub issue.",
+                draft::DIR
+            ),
+            Ok(md) => {
+                let rel = format!(
+                    "{}/{}",
+                    draft::DIR,
+                    md.file_name().unwrap_or_default().to_string_lossy()
+                );
+                let terminal = "`ocgen draft` in a terminal opens it in their browser";
+                match draft::show(&md, self.env, true) {
+                    Ok(Shown::Off) => format!(
+                        "The user typed `draft`, but opening a browser is switched off here \
+                         (OCGEN_NOTES_OPEN=0). Tell them the issue draft is {rel} and that {terminal}."
+                    ),
+                    Ok(Shown::Reloaded(_) | Shown::Pending) => format!(
+                        "The user typed `draft`: the issue draft {rel} is already open in a tab of \
+                         their browser. Say so in one line and wait. Re-read the file before you use \
+                         the draft again — they may have changed it there."
+                    ),
+                    Ok(_) => format!(
+                        "The user typed `draft`: ocgen opened the issue draft {rel} in their browser, \
+                         where they can edit the raw Markdown and save it to that file, preview it the \
+                         way GitHub shows it, and copy it. Say so in one line and wait (if they meant \
+                         something else by `draft`, answer that instead). Re-read the file before you \
+                         use the draft again — they may have changed it."
+                    ),
+                    Err(e) => format!(
+                        "The user typed `draft`, but ocgen could not open the issue draft {rel} in the \
+                         browser ({e:#}). Tell them so, and that {terminal}."
+                    ),
+                }
+            }
+        };
+        let out = serde_json::json!({
+            "hookSpecificOutput": { "hookEventName": "UserPromptSubmit", "additionalContext": note }
+        });
+        Outcome {
+            code: 0,
+            stdout: format!("{out}\n"),
+            stderr: String::new(),
         }
     }
 

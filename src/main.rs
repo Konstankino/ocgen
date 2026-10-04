@@ -164,6 +164,35 @@ fn main() -> Result<()> {
             TemplatesAction::Edit { path } => wizard::run_templates_edit(path)?,
         },
         Command::Notes { action } => run_notes(action)?,
+        Command::Draft { name, path } => run_draft(name.as_deref(), &path)?,
+    }
+    Ok(())
+}
+
+fn run_draft(name: Option<&str>, path: &str) -> Result<()> {
+    use ocgen::notes::{draft, Shown};
+    let dir = draft::drafts_dir(std::path::Path::new(path)).ok_or_else(|| {
+        anyhow::anyhow!(
+            "no {}/ above {path} — /intent writes the issue draft there",
+            draft::DIR
+        )
+    })?;
+    let md = draft::find(&dir, name)?;
+    let rel = format!(
+        "{}/{}",
+        draft::DIR,
+        md.file_name().unwrap_or_default().to_string_lossy()
+    );
+    let env: std::collections::HashMap<String, String> = std::env::vars().collect();
+    match draft::show(&md, &env, true)? {
+        Shown::Off => println!("{rel} (not opened: OCGEN_NOTES_OPEN=0)"),
+        Shown::Reloaded(_) | Shown::Pending => {
+            println!("{rel} is already open in your browser")
+        }
+        Shown::Opened(url) => println!("Opened {rel} in your browser: {url}"),
+        Shown::OpenedFile(p) | Shown::FileAlreadyOpened(p) => {
+            println!("Opened {}", p.display())
+        }
     }
     Ok(())
 }

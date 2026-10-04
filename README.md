@@ -441,6 +441,7 @@ repo used for a plugin's marketplace and release workflow; `--team` enables
 .claude/skills/intent/SKILL.md       # /intent — prompt → investigate → approved plan → numbered intent file → issue draft (you run it)
 .claude/skills/recap/SKILL.md        # /recap — fast-forward your branches, then a per-branch report of what changed since the last recap (you run it)
 .claude/intent/issue-template.md     # /intent's GitHub issue structure — yours, written once
+.claude/intent/drafts/<name>.md      # /intent's issue draft — type `draft` to edit, preview and copy it in your browser (git-ignored)
 .claude/intent/intent-template.md    # /intent's intent-file (ADR) structure — yours, written once
 .claude/skills/fanout/SKILL.md       # /fanout — worktree-isolated parallel writers (you run it)
 .claude/skills/improve-prompt/SKILL.md
@@ -852,20 +853,61 @@ GitHub issue (wizard: "Include the /intent command…"; on by default). You star
    Sign-off section. The number is one more than the highest found in the local directory **and**
    on the remote main branch (`git fetch` + `git ls-tree`), matching both `ADR-0007-…` and `0007-…`
    names, so it never collides with an existing ADR.
-5. **Issue draft** — an actionable title (≤ 72 characters) and a description of at most 250 words
-   that follows the project's issue template — current behaviour, impact with its severity,
-   background, proposal, the **decision requested** from the approvers, and a pending sign-off
-   checklist that @mentions them — plus the `gh issue create` command **for you to run**. Claude
-   never files it: the skill says so, and `Bash(gh issue create*)` is in the generated `deny` list.
-   Approvers aren't made assignees (assignees do the work). Before you see either draft, a **tone
-   check** runs (below).
+5. **Issue draft** — an actionable title (≤ 72 characters) and a description of at most 250 words,
+   written to `.claude/intent/drafts/<name>.md` (git-ignored). It follows the project's issue
+   template **as a guide, not a form**: the sections keep their order and purpose, the wording fits
+   the topic. The default template is the team convention below. You also get the
+   `gh issue create --title "…" --body-file .claude/intent/drafts/<name>.md` command **for you to
+   run**: it files the draft as it stands, with your edits. Claude never files it: the skill says
+   so, and `Bash(gh issue create*)` is in the generated `deny` list. Approvers aren't made assignees
+   (assignees do the work). Before you see either draft, a **tone check** runs (below).
 6. **Sign-off, link and continue** — after you file it, `/intent #123` (or the URL) adds `Issue:`
    to the intent file. Claude never marks or infers an approval: it records one only when you
    report it with evidence (`@alice approved: <link>`) — **approved** (date and link), **changes
    requested** (their feedback, quoted and linked; back to step 3) or **rejected**
    (`Status: Rejected`). `Status: Accepted` needs every approver's approval and your confirmation.
+   The intent is then agreed: Claude fills in the draft's Plan and gives you the
+   `gh issue edit <number> --body-file …` command to update the issue.
 
 `/intent` with no arguments lists intents that have no issue yet; `/intent ADR-0007` resumes one.
+
+**The issue convention.** The default `issue-template.md` asks for:
+
+| Section | What goes in it |
+|---|---|
+| `## Intent` | 2–3 lines: what should be true afterwards and why it matters, with no solution yet. Then **Blocks prod?** Yes / No and **Depends on the platform view** (what we need to protect)? Yes / No. |
+| `## Options and trade-offs` | The main contribution: 2–3 options, one line each, covering what each costs, protects and could break. One is always **Do nothing**. |
+| `## Proposed call` | Which option and why, in 1–2 lines. |
+| `## Needs from <approvers>` | A decision, an IT ask, or nothing; one pending sign-off line per approver (their @mentions are how GitHub notifies them). |
+| `<details><summary>Plan …` | Collapsed: **Changes**, **How we know it worked**, **Revert**. Left as the outline until the intent is agreed. |
+
+Short as it is, the issue hides no flaw. Each one of Medium severity or higher gets at least a line:
+its trigger, impact and severity, plus its evidence or a link to it in the intent file. The guidance
+comments stay in the template and out of the draft.
+
+**Review the draft in your browser.** When `/intent` shows the draft it suggests this. Type
+**`draft`** (the word alone, as your whole message) and the newest issue draft opens in your
+browser, in a local editor where you can:
+
+- **Write:** edit the raw Markdown. **Save** (or ⌘S / Ctrl+S) writes it back to the draft file.
+- **Preview:** see it the way GitHub shows an issue — task lists, tables, the collapsible Plan,
+  comments hidden, a single newline kept as a line break.
+- **Copy:** **Copy Markdown** for GitHub's issue form, or **Copy formatted** for chat or email.
+
+Claude re-reads the draft before using it again, so your edits stay yours. Browser edits skip the
+tone check, so if one drops or softens a flaw of Medium or higher, Claude tells you once and lets
+you decide.
+A change Claude makes while the page is open shows up in it; if you have unsaved edits, the page asks
+whether to load the file or keep yours. Saving never silently replaces a newer file. From a
+terminal, `ocgen draft [name]` does the same (`ocgen draft ADR-0007` picks a draft by its intent).
+
+A `UserPromptSubmit` hook (`intent-draft`) catches the word and starts the editor. Hooks run outside
+Claude Code's Bash sandbox, where a local server can start; inside the sandbox it can't. Any other
+prompt passes through untouched. The editor is the same loopback viewer as `/inquire`'s pages,
+behind a random token and same-origin checks for saving. The draft's text can't run scripts or load
+anything: raw HTML is limited to a few tags without attributes, and images become links. It needs
+the ocgen binary on `PATH`; without it the word reaches Claude, which tells you to run
+`ocgen draft`. `ocgen verify` checks the hook.
 
 **Blameless, but completely honest.** The team that wrote the code reads these drafts, so they
 follow a writing standard: **soften the framing, never the facts**. The code, design or behaviour
@@ -873,7 +915,7 @@ is the subject of every sentence, never a person; git history explains *why*, ne
 comes before the flaw; every flaw reads *when [trigger], [behavior], which means [impact]
 (evidence: F#, `file:line`)*, then the proposed fix; severity (Critical, High, Medium, Low, plus a
 likelihood) rests on the Verified findings, not on adjectives; what works is said too; and the
-drafts lead with a summary and the decision requested. The **tone check** — a fresh `reviewer`
+drafts make the decision requested explicit. The **tone check** — a fresh `reviewer`
 subagent (or the research agent, if there's no reviewer) — reads both drafts against the findings
 before you see them, checking both ways: blame and alarm (banned words, people as subjects, names
 from git history) **and** softening or omission (every Verified finding of Medium or higher present
@@ -949,10 +991,10 @@ ocgen edit intent --reset-intent-template                # restore ocgen's defau
 
 The two templates live in the project under `.claude/intent/` and belong to you: ocgen writes them
 once and never overwrites them (like `CLAUDE.md`), so commit them with the rest of `.claude/`.
-A project created before the writing standard and the approvers keeps its copies; run
-`ocgen edit intent --reset-issue-template --reset-intent-template` to pick up the new defaults
-(severity, background, decision requested, approvers and sign-off sections, and the house-style
-comment block).
+A project created before the writing standard, the approvers or the issue convention keeps its
+copies; run `ocgen edit intent --reset-issue-template --reset-intent-template` to pick up the new
+defaults (the issue convention above, the intent file's severity, approvers and sign-off sections,
+and the house-style comment block).
 
 #### Daily recap (`/recap`)
 
@@ -1108,14 +1150,15 @@ and inside the ocgen binary (`ocgen hook <name>`). The generated hook command us
 binary when a compatible ocgen is installed, and the script otherwise:
 
 ```sh
-if [ "$(ocgen hook --check 2>/dev/null)" = "ocgen-hooks 9" ]; then ocgen hook team-approval-gate; else sh ".../team-approval-gate.sh"; fi
+if [ "$(ocgen hook --check 2>/dev/null)" = "ocgen-hooks 10" ]; then ocgen hook team-approval-gate; else sh ".../team-approval-gate.sh"; fi
 ```
 
 - **The binary gives you** real JSON parsing instead of `grep`, and hooks that work on
   **native Windows**.
 - **The scripts keep the project working** for teammates and CI machines without ocgen.
-  The one exception is `inquire-notes`, which renders `/inquire`'s HTML view: its script does
-  nothing, so without ocgen the ledgers stay Markdown only.
+  The exceptions are `inquire-notes`, which renders `/inquire`'s HTML view, and `intent-draft`,
+  which opens `/intent`'s issue draft in the browser: their scripts do nothing, so without ocgen
+  the ledgers stay Markdown only and `draft` reaches Claude as typed.
   They need only a POSIX `sh` (Git Bash on Windows): `jq` is used when present and is never
   required (without it, JSON escapes are decoded, and a command holding a `\b`, `\f` or `\u`
   escape is treated as high-impact), and Windows paths (`C:\Users\...`) are handled in both
@@ -1375,11 +1418,12 @@ for a plugin; `--team` is off by default. (The `--base-url` flag is OpenCode-onl
 |---|---|
 | `ocgen landscape [dir]` (alias `horizon`) | Read-only overview: agents (alias/tools/colour), skills, workflow/output/team setup, delegation topology, and a **Checks** section. |
 | `ocgen doctor [dir] [--dry-run] [--yes]` | Repair the project and rewrite files (invalid models, colours, empty roles, bad enum values, older state files). Shows a per-file plan with diffs, flags hand edits, offers to keep hand-added permission rules and MCP servers, removes files ocgen no longer generates, asks first, and backs up to `.ocgen-backup/`. |
-| `ocgen verify [dir] [--no-claude]` | Check the project works: up to date, settings valid, no local/user/managed setting turns hooks off or weakens a gate, hooks run (in bash; Git Bash present on Windows), every gate is ocgen's own and the approval gate blocks, http:// WebFetch is blocked, a no-op `cd` is dropped, `/inquire` ledgers get their HTML view, the sandbox is on behind the gate, the pre-push hook blocks Claude and lets you through, scripts use LF, the statusline renders, ocgen on PATH is current, Claude Code validation passes. Runs only what ocgen generates. Exits 1 on failure. |
+| `ocgen verify [dir] [--no-claude]` | Check the project works: up to date, settings valid, no local/user/managed setting turns hooks off or weakens a gate, hooks run (in bash; Git Bash present on Windows), every gate is ocgen's own and the approval gate blocks, http:// WebFetch is blocked, a no-op `cd` is dropped, `/inquire` ledgers get their HTML view, `draft` opens the `/intent` issue draft, the sandbox is on behind the gate, the pre-push hook blocks Claude and lets you through, scripts use LF, the statusline renders, ocgen on PATH is current, Claude Code validation passes. Runs only what ocgen generates. Exits 1 on failure. |
 | `ocgen approve [dir] [--minutes N] [--status] [--revoke]` | You approve high-impact actions for 1–1440 minutes (default 30). Refuses to run under Claude Code or without a terminal. |
 | `ocgen verify [dir] --run-check` | Also run the project's committed check command, as you and unsandboxed (only on a repository you trust). |
 | `ocgen notes open [topic]` | Show an `/inquire` ledger's HTML page: refresh the tab that shows it, or open one ([details](#the-visual-ledger)). |
 | `ocgen notes render <file.md>…` | Render `/inquire` ledgers (`.claude/notes/<topic-slug>.md`) and `/intent` reading copies (`.claude/intent/view/<name>.md`) to their HTML pages without opening them; any other file is refused. |
+| `ocgen draft [name] [-p dir]` | Open an `/intent` issue draft (`.claude/intent/drafts/<name>.md`) in a local browser editor: edit and save the Markdown, preview it as GitHub shows it, and copy it. With no name, the newest; `ADR-0007` picks by intent. Typing `draft` in Claude Code does the same ([details](#from-findings-to-a-github-issue-intent)). |
 | `ocgen managed-settings` | Print a recommended organisation policy (`managed-settings.json`): no bypass mode, secrets unreadable, high-impact commands always ask, strict sandbox. |
 | `ocgen fields` (alias `reference`) | Explain every configurable field, including the Claude-specific ones (alias, tools, skills, output/plugin, agent teams). |
 
@@ -1445,7 +1489,8 @@ claude/commands/*.md.j2         # multi / intake / refine / deliver / inquire / 
 claude/intent/*.md              # default /intent issue and intent-file templates (copied into new projects)
 claude/notes/ledger.html.j2     # the /inquire ledger's HTML page
 claude/notes/intent.html.j2     # the /intent reading copy's HTML page
-claude/notes/page.css           # the style both pages share
+claude/notes/draft.html.j2      # the /intent issue draft's editor (`draft`, `ocgen draft`)
+claude/notes/page.css           # the style the pages share
 claude/skill/SKILL.md.j2        # one generic skill
 claude/skill-presets.toml       # add-skill presets (command / knowledge / forked-research)
 claude/output-styles/ocgen-concise.md.j2

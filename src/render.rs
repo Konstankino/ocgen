@@ -1462,6 +1462,11 @@ impl Project {
             let body = templates::load_embedded("claude/hooks/inquire-notes.sh")?;
             components.push(("hooks/inquire-notes.sh".to_string(), body));
         }
+        // The word `draft` opens /intent's issue draft in a browser editor.
+        if self.claude.workflow.intent {
+            let body = templates::load_embedded("claude/hooks/intent-draft.sh")?;
+            components.push(("hooks/intent-draft.sh".to_string(), body));
+        }
         // Shared loop guard, sourced by every blocking hook so no gate can hold an
         // agent forever.
         if self.has_blocking_hooks() {
@@ -2208,6 +2213,14 @@ impl Project {
             push(
                 "PostToolUse",
                 json!({ "matcher": "Write|Edit|MultiEdit", "hooks": [ command_hook(hook_cmd(prefix, dir, "inquire-notes.sh")) ] }),
+            );
+        }
+        if self.claude.workflow.intent {
+            // `draft`, sent alone, opens /intent's issue draft in a browser editor:
+            // a hook runs outside the Bash sandbox, where the editor's server can start.
+            push(
+                "UserPromptSubmit",
+                json!({ "hooks": [ command_hook(hook_cmd(prefix, dir, "intent-draft.sh")) ] }),
             );
         }
         // Deterministic line for every WebFetch: HTTPS, trusted docs sites only.

@@ -982,7 +982,97 @@ fn inquire_notes_renders_the_view_and_the_script_is_a_no_op() {
     assert_eq!(o.code, 0);
     assert!(o.stderr.starts_with("inquire-notes:"), "{o:?}");
     assert!(ocgen::hooks::NAMES.contains(&"inquire-notes"));
-    assert_eq!(ocgen::hooks::PROTOCOL, "ocgen-hooks 9");
+    assert_eq!(ocgen::hooks::PROTOCOL, "ocgen-hooks 10");
+}
+
+// ---------------------------------------------------------- intent-draft --
+
+const ISSUE_DRAFT: &str = "## Intent\nThe cache is invalidated on deploy.\n";
+
+fn write_draft(dir: &Path) {
+    let drafts = dir.join(".claude/intent/drafts");
+    fs::create_dir_all(&drafts).unwrap();
+    fs::write(drafts.join("adr-0001-cache.md"), ISSUE_DRAFT).unwrap();
+}
+
+#[test]
+fn intent_draft_parity() {
+    let step = |payload: &'static str, setup: fn(&Path)| Step {
+        hook: "intent-draft",
+        env: NO_BROWSER,
+        setup,
+        payload,
+    };
+    check(
+        "intent-draft",
+        &[
+            // Any other prompt passes untouched, whether or not a draft exists.
+            step(r#"{"prompt":"fix the cache"}"#, none),
+            step(r#"{"prompt":"draft the issue"}"#, write_draft),
+            step(r#"{"prompt":""}"#, none),
+            step("not json", none),
+        ],
+    );
+}
+
+/// The context line the hook hands to the model, if any.
+fn draft_context(o: &ocgen::hooks::Outcome) -> String {
+    assert_eq!(o.code, 0, "never blocks: {o:?}");
+    if o.stdout.is_empty() {
+        return String::new();
+    }
+    let v: serde_json::Value = serde_json::from_str(o.stdout.trim()).unwrap();
+    assert_eq!(v["hookSpecificOutput"]["hookEventName"], "UserPromptSubmit");
+    v["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+#[test]
+fn intent_draft_opens_on_the_one_word_and_the_script_is_a_no_op() {
+    let mut env: HashMap<String, String> = NO_BROWSER
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+    let dir = project();
+    let d = ocgen::paths::for_shell(dir.path());
+    env.insert("CLAUDE_PROJECT_DIR".into(), d.clone());
+    let run = |prompt: &str, env: &HashMap<String, String>| {
+        let payload = serde_json::json!({ "prompt": prompt, "cwd": d }).to_string();
+        ocgen::hooks::run("intent-draft", &payload, env)
+    };
+
+    // No draft yet: the model is told so, and nothing opens.
+    let ctx = draft_context(&run("draft", &env));
+    assert!(ctx.contains("no issue draft"), "{ctx}");
+
+    // With a draft: the word (any case, surrounding space) finds the newest one.
+    write_draft(dir.path());
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    let newer = dir
+        .path()
+        .join(".claude/intent/drafts/issue-retry-budget.md");
+    fs::write(&newer, ISSUE_DRAFT).unwrap();
+    for word in ["draft", " Draft \n", "DRAFT"] {
+        let ctx = draft_context(&run(word, &env));
+        assert!(
+            ctx.contains(".claude/intent/drafts/issue-retry-budget.md"),
+            "{word:?}: {ctx}"
+        );
+        // Opening is switched off here: the model hears why and the way round it.
+        assert!(ctx.contains("ocgen draft"), "{ctx}");
+    }
+    // Only the word on its own.
+    for other in ["draft it", "a draft", "drafts", "/draft"] {
+        assert_eq!(draft_context(&run(other, &env)), "", "{other:?}");
+    }
+
+    // The script keeps the hook harmless when the binary can't run it.
+    let payload = serde_json::json!({ "prompt": "draft" }).to_string();
+    let (code, out, _) = sh(dir.path(), "intent-draft", &env, &payload);
+    assert_eq!((code, out.as_str()), (0, ""));
+    assert!(ocgen::hooks::NAMES.contains(&"intent-draft"));
 }
 
 // ---------------------------------------------------------- drop-noop-cd --
