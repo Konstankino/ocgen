@@ -13,8 +13,9 @@ permissions = """
   webfetch: deny
 """
 
-# Claude Code defaults for this role.
-claude_model = "opus"
+# Claude Code defaults for this role. Another model than the implementer's, so
+# the review doesn't share its blind spots.
+claude_model = "fable"
 tools = "Read, Grep, Glob"
 claude_max_turns = 30
 claude_disallowed_tools = "Edit, Write, NotebookEdit"

@@ -419,6 +419,20 @@ Claude Code has no per-agent providers or base URLs, an agent's model is a Claud
 provider and utility-model questions are replaced by an alias plus a **tools** allow-list
 per agent.
 
+The default team gives each role a model that fits its job:
+
+| Role | Model | Effort | Why |
+|---|---|---|---|
+| coordinator (the session's `model` in `settings.json`) | `opus` | session's | Planning errors cascade |
+| explorer | `sonnet` | `medium` | Reads the most and decides the least; others check its findings |
+| implementer | `opus` | inherit | Writes the code |
+| reviewer | `fable` | `high` | Another model than the implementer's, so it doesn't share its blind spots |
+| adversary | `opus` | `high` | Covers what the reviewer's model misses |
+| verifier (preset, not in the default team) | `sonnet` | inherit | Runs checks and reports pass/fail |
+
+These only seed new agents: a project keeps the models it recorded, and `ocgen doctor` doesn't
+change them. Change one with `ocgen edit agent <name>`.
+
 ```bash
 ocgen new ./my-team --target claude
 ocgen new ./my-team --target claude --output both --repo me/my-team
@@ -583,7 +597,7 @@ and autocomplete it.
   reviewer, verifier and adversary ship with `Edit, Write, NotebookEdit` denied, so they have no
   file-editing tools. The explorer and reviewer are **hard read-only**; the verifier and
   adversary keep `Bash` to run tests, so their read-only status rests on their prompts.
-- `effort`: the reviewer and adversary use `high`.
+- `effort`: the reviewer and adversary use `high`, the explorer `medium`.
 - `permissionMode`.
 - `memory`: `project` is committed under `.claude/agent-memory/`, `local` is git-ignored,
   `user` spans every project.
@@ -1555,9 +1569,9 @@ generation time.
 changes needed. Each archetype declares `mode`, `default_model`, `temperature`,
 `color`, an optional `steps`, a raw `permissions` YAML block, and language-keyed
 `description` / `body` (and, for coordinators, an external `prompt`). For the Claude
-target an archetype also supplies `claude_model` (the alias) and `tools`. Presets are
-just starting points: the wizard lets you override every field, and you can always
-choose `blank (custom role)` to skip presets entirely. Generated projects are
+target an archetype also supplies `claude_model` (the alias), an optional `claude_effort`, and
+`tools`. Presets are just starting points: the wizard lets you override every field, and you
+can always choose `blank (custom role)` to skip presets entirely. Generated projects are
 self-contained — each agent stores its own resolved fields (in the target's state file,
 `.opencode/.ocgen-state.json` or `.claude/.ocgen-state.json`), so they don't depend on
 the archetype files.

@@ -361,7 +361,7 @@ fn landscape_and_show_on_claude_project() {
         .arg(dir.path())
         .assert()
         .success()
-        .stdout(contains("model: opus"))
+        .stdout(contains("model: sonnet"))
         .stdout(contains("tools: Read, Grep, Glob"))
         .stdout(contains("coordinated by"));
 }

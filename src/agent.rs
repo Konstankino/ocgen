@@ -187,7 +187,7 @@ mod tests {
         // Subagent role: alias + tools from the archetype, provider cleared.
         let rev = Agent::from_archetype_claude("explorer", "reviewer", "English").unwrap();
         assert_eq!(rev.mode, "subagent");
-        assert_eq!(rev.model, "opus");
+        assert_eq!(rev.model, "fable");
         assert_eq!(rev.tools, "Read, Grep, Glob");
         assert_eq!(rev.provider, "");
         assert!(!rev.description.is_empty());
@@ -207,6 +207,48 @@ mod tests {
         // Read-only roles are not isolated.
         let rev = Agent::from_archetype_claude("rev", "reviewer", "English").unwrap();
         assert_eq!(rev.isolation, "");
+    }
+
+    #[test]
+    fn claude_defaults_fit_each_role() {
+        // (role, model, effort): opus where mistakes cost the most, a cheaper model
+        // for the read-heavy roles, and a reviewer on another model.
+        let want = [
+            ("coordinator", "opus", ""),
+            ("explorer", "sonnet", "medium"),
+            ("implementer", "opus", ""),
+            ("reviewer", "fable", "high"),
+            ("adversary", "opus", "high"),
+            ("verifier", "sonnet", ""),
+        ];
+        for (role, model, effort) in want {
+            let a = Agent::from_archetype_claude(role, role, "English").unwrap();
+            assert_eq!(
+                (a.model.as_str(), a.effort.as_str()),
+                (model, effort),
+                "{role}"
+            );
+        }
+        let model = |role: &str| {
+            Agent::from_archetype_claude(role, role, "English")
+                .unwrap()
+                .model
+        };
+        // A reviewer on the implementer's model tends to miss the same things.
+        assert_ne!(model("reviewer"), model("implementer"));
+        assert_ne!(model("adversary"), model("reviewer"));
+
+        // The OpenCode defaults stay as they are.
+        for (role, local) in [
+            ("explorer", "gemma-26b"),
+            ("implementer", "qwen3-coder-30b"),
+            ("reviewer", "gemma-26b"),
+            ("adversary", "devstral-24b"),
+            ("verifier", "qwen3.5-9b"),
+        ] {
+            let a = Agent::from_archetype(role, role, "English", "mac").unwrap();
+            assert_eq!(a.model, local, "{role}");
+        }
     }
 
     #[test]

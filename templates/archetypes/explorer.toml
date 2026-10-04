@@ -14,11 +14,14 @@ permissions = """
 """
 
 # Claude Code defaults for this role. The explorer researches, so it can fetch
-# web pages and search the web in addition to reading the codebase.
-claude_model = "opus"
+# web pages and search the web in addition to reading the codebase. It reads the
+# most and decides the least, and the coordinator and the reviewer check its
+# findings, so a cheaper model at medium effort does.
+claude_model = "sonnet"
 tools = "Read, Grep, Glob, WebFetch, WebSearch"
 claude_max_turns = 40
 claude_disallowed_tools = "Edit, Write, NotebookEdit"
+claude_effort = "medium"
 
 [description]
 Ukrainian = "Досліджує код та вхідні дані, звітує про знахідки; тільки читання"

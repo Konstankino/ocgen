@@ -949,13 +949,24 @@ fn claude_default_pipeline_scaffolds_a_full_project() {
 
     // coordinator is primary → coordinator (CLAUDE.md), not an agent file.
     assert!(!dir.path().join(".claude/agents/coordinator.md").exists());
+    // The explorer reads the most and decides the least: a cheaper model.
     let structure = read(dir.path(), ".claude/agents/explorer.md");
-    assert!(structure.contains("model: opus"));
+    assert!(structure.contains("model: sonnet\n"));
+    assert!(structure.contains("effort: medium\n"));
     // The explorer can fetch web pages and search — needed for parallel research.
     assert!(structure.contains("tools: Read, Grep, Glob"));
     assert!(structure.contains("WebFetch") && structure.contains("WebSearch"));
+    // The implementer writes the code: opus, effort inherited.
+    let implementer = read(dir.path(), ".claude/agents/implementer.md");
+    assert!(implementer.contains("model: opus\n"));
+    assert!(!implementer.contains("effort:"));
+    // The reviewer runs on another model than the implementer's.
     let grammar = read(dir.path(), ".claude/agents/reviewer.md");
-    assert!(grammar.contains("model: opus"));
+    assert!(grammar.contains("model: fable\n"));
+    assert!(grammar.contains("effort: high\n"));
+    let adversary = read(dir.path(), ".claude/agents/adversary.md");
+    assert!(adversary.contains("model: opus\n"));
+    assert!(adversary.contains("effort: high\n"));
 
     let claude_md = read(dir.path(), "CLAUDE.md");
     assert!(claude_md.contains("# writing"));

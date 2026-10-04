@@ -1076,6 +1076,35 @@ fn doctor_keeps_mcp_servers_added_by_hand() {
     );
 }
 
+#[test]
+fn doctor_keeps_the_models_a_project_recorded() {
+    // A project made when every role defaulted to opus keeps its models and
+    // efforts: the per-role defaults only seed new agents.
+    let dir = tempdir().unwrap();
+    let mut p = claude("models");
+    for a in &mut p.agents {
+        a.model = "opus".into();
+        if a.role == "explorer" {
+            a.effort.clear();
+        }
+    }
+    p.scaffold(dir.path(), false).unwrap();
+    ocgen()
+        .args(["doctor", "--yes"])
+        .arg(dir.path())
+        .assert()
+        .success()
+        .stdout(contains("every generated file is up to date"));
+    for name in ["explorer", "implementer", "reviewer", "adversary"] {
+        let md = read(dir.path(), &format!(".claude/agents/{name}.md"));
+        assert!(md.contains("model: opus\n"), "{name}:\n{md}");
+    }
+    assert!(!read(dir.path(), ".claude/agents/explorer.md").contains("effort:"));
+    for a in json_at(dir.path(), STATE)["agents"].as_array().unwrap() {
+        assert_eq!(a["model"], "opus", "{}", a["name"]);
+    }
+}
+
 // ------------------------------------------------- links and leftovers -----
 
 #[cfg(unix)]
