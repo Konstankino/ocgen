@@ -1,0 +1,9 @@
+{# /intent's shared text (claude::INTENT_PARTIALS), included by /intent and /review-intent
+   (where `review` is set). /intent renders exactly as it did before the split. -#}
+**Languages.** Write {% if review %}the issue draft and the ADR (an intent file){% else %}the intent file and the GitHub issue draft{% endif %} in English, even though we talk in
+{{ answer_language }}: they are the shared record and GitHub's. After every write to an intent file
+({% if review %}step 6{% else %}steps 4 and 6{% endif %}), also write its **reading copy**: `.claude/intent/view/<the intent file's name,
+lowercased>`, the whole file translated into {{ answer_language }} with the same structure — code, paths,
+identifiers, `file:line` and @mentions left as they are. Write it with the Write or Edit tool (a Bash
+write doesn't trigger the page): ocgen renders it as a page beside it and opens it —
+never write the `.html` yourself. The copy is git-ignored; the English intent file is the record.

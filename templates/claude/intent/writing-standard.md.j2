@@ -1,0 +1,17 @@
+{# /intent's shared text (claude::INTENT_PARTIALS), included by /intent and /review-intent
+   (where `review` is set). /intent renders exactly as it did before the split. -#}
+The team that wrote the code reads these drafts: keep them blameless and calm, and completely honest —
+**soften the framing, never the facts**; no flaw is softened, hidden or dropped. Read the comment block
+at the top of both templates and follow it: it holds the severity definitions and the banned words.
+- **System, not people:** the subject is the code, design or behavior ("The gate matches command text
+  only"), never a person or team.
+- **Context before the flaw:** what the design was meant to achieve and what shaped it, then where it
+  falls short.
+- **Every flaw, in this order:** When [trigger], [behavior], which means [impact] (evidence: {% if review %}R#{% else %}F#{% endif %}, `file:line`).
+  Then the proposed fix.
+- **Severity** (Critical, High, Medium, Low) and **Likelihood** come from the Verified findings, never
+  from adjectives.
+- **Balanced:** say what works correctly, without diluting any flaw. **Forward-looking:** each
+  problem statement leads to the proposal.
+- **Written for the approvers:** lead with a summary and a recommendation, and make the decision you
+  need from them explicit — approve, choose an option, or redirect. Present; don't pressure.

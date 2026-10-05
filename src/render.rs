@@ -1359,46 +1359,81 @@ impl Project {
             ));
         }
         if self.claude.workflow.intent {
+            // /intent's shared text — the writing standard, the tone check, how an
+            // intent file is numbered, the reading copy and the browser review —
+            // included by /intent and /review-intent alike, so it has one source.
+            // An include stands on its own line: the partial brings no newline.
+            for name in crate::claude::INTENT_PARTIALS {
+                let src = templates::load(&format!("claude/intent/{name}.md.j2"))?;
+                env.add_template_owned(
+                    format!("intent/{name}.md"),
+                    src.trim_end_matches(['\n', '\r']).to_string(),
+                )
+                .with_context(|| format!("parsing the /intent partial '{name}'"))?;
+            }
             let i = &self.claude.intent;
             // The linked CODEOWNERS and the rule ocgen's block holds there.
             let (codeowners, codeowners_rule) = match self.codeowners_block() {
                 Some((rel, Some(rule))) => (rel, rule),
                 _ => Default::default(),
             };
+            let intent_ctx = context! {
+                answer_language => canonical_language(self.response_language()),
+                reading_copies => self.writes_reading_copies(),
+                prefix => i.prefix,
+                digits => i.digits,
+                dir => i.dir.trim_end_matches('/'),
+                example => i.first_id(),
+                max_words => i.max_words,
+                branch => i.branch.trim(),
+                allowed_tools => i.allowed_tools(&self.trusted_docs),
+                trusted_domains => self.trusted_docs.join(", "),
+                approvers => i.approvers.join(", "),
+                codeowners => codeowners,
+                codeowners_rule => codeowners_rule,
+                // The research and review agents it hands work to: the
+                // project's own where they exist (the built-in Explore is
+                // denied when the explorer is preferred).
+                prefer_explorer => self.prefers_explorer(),
+                reviewer => self
+                    .agents
+                    .iter()
+                    .any(|a| a.name == "reviewer" && a.mode == "subagent"),
+                issue_template => crate::claude::INTENT_ISSUE_TEMPLATE,
+                intent_template => crate::claude::INTENT_FILE_TEMPLATE,
+                adversary => checks.adversary,
+                scope_guard => checks.scope_guard,
+                rounds => checks.rounds,
+                // Set by /review-intent, for the few words the partials word
+                // differently there.
+                review => false,
+            };
             components.push((
                 "commands/intent.md".to_string(),
                 env.render_str(
                     &templates::load("claude/commands/intent.md.j2")?,
-                    context! {
-                        answer_language => canonical_language(self.response_language()),
-                        reading_copies => self.writes_reading_copies(),
-                        prefix => i.prefix,
-                        digits => i.digits,
-                        dir => i.dir.trim_end_matches('/'),
-                        example => i.first_id(),
-                        max_words => i.max_words,
-                        branch => i.branch.trim(),
-                        allowed_tools => i.allowed_tools(&self.trusted_docs),
-                        trusted_domains => self.trusted_docs.join(", "),
-                        approvers => i.approvers.join(", "),
-                        codeowners => codeowners,
-                        codeowners_rule => codeowners_rule,
-                        // The research and review agents it hands work to: the
-                        // project's own where they exist (the built-in Explore is
-                        // denied when the explorer is preferred).
-                        prefer_explorer => self.prefers_explorer(),
-                        reviewer => self
-                            .agents
-                            .iter()
-                            .any(|a| a.name == "reviewer" && a.mode == "subagent"),
-                        issue_template => crate::claude::INTENT_ISSUE_TEMPLATE,
-                        intent_template => crate::claude::INTENT_FILE_TEMPLATE,
-                        adversary => checks.adversary,
-                        scope_guard => checks.scope_guard,
-                        rounds => checks.rounds,
-                    },
+                    intent_ctx.clone(),
                 )
                 .context("rendering intent command")?,
+            ));
+            // /review-intent records a review the way /intent records an intent,
+            // with the same settings and text. Its review runs go to the project's
+            // reviewer, found by role; without one, to a general-purpose agent that
+            // has to be told the review is read-only.
+            let review_agent = self.subagent_for("reviewer");
+            components.push((
+                "commands/review-intent.md".to_string(),
+                env.render_str(
+                    &templates::load("claude/commands/review-intent.md.j2")?,
+                    context! {
+                        review => true,
+                        allowed_tools => crate::claude::review_read_tools().join(", "),
+                        review_agent => review_agent.map_or("general-purpose", |a| a.name.as_str()),
+                        review_agent_owned => review_agent.is_some(),
+                        ..intent_ctx
+                    },
+                )
+                .context("rendering review-intent command")?,
             ));
         }
         if self.claude.workflow.inquire {
@@ -2063,6 +2098,10 @@ impl Project {
             // /intent drafts the issue; the user files it. Kept even without the
             // permission defaults, since the workflow relies on it.
             rules.deny.push("Bash(gh issue create*)".into());
+            // /review-intent never posts on a pull request: a post asks first.
+            for r in crate::claude::PR_POST_ASK {
+                rules.tighten(RuleList::Ask, r);
+            }
             if matches!(self.codeowners_block(), Some((_, Some(_)))) {
                 // GitHub requires the approvers through ocgen's block: changing
                 // it, or hiding it, asks first.

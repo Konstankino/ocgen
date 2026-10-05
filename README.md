@@ -193,6 +193,8 @@ When the two languages differ:
   copy** of the intent file to `.claude/intent/view/<name, lowercased>.md`, which is git-ignored. ocgen
   renders it as a page with the same look as the ledger page, linking the English original, and opens
   it once.
+- **`/review-intent`:** the same as `/intent`: the issue draft and the ADR are English, and the ADR
+  gets a reading copy when the answers aren't.
 - **`/recap`:** the report, in chat and in its saved copy, is written in the answer language.
   Branch names, paths, SHAs and commands stay as they are.
 - **Other languages:** the pages have built-in words for English and Ukrainian. Any other answer
@@ -407,7 +409,7 @@ refuses to change a project a newer one wrote, so it can't drop settings it does
 > tooling. Everything built on Claude Code's own mechanisms is **Claude-only**, and the OpenCode
 > target keeps its current feature set:
 > - governance gates, the loop guard and the approval gate (hooks);
-> - skills and the workflow skills (`/deliver`, `/inquire`, `/intent`, `/recap`, …);
+> - skills and the workflow skills (`/deliver`, `/inquire`, `/intent`, `/review-intent`, `/recap`, …);
 > - MCP, the statusline, subagent controls, and plugin output.
 >
 > OpenCode has no hook system, so the gates can't be ported.
@@ -454,6 +456,7 @@ repo used for a plugin's marketplace and release workflow; `--team` enables
 .claude/skills/deliver/SKILL.md      # /deliver — route → sharpen → requirements → plan → research → gated execution (you run it)
 .claude/skills/inquire/SKILL.md      # /inquire — understand a codebase with evidence and one hint per answer; resumable ledger with a live HTML view
 .claude/skills/intent/SKILL.md       # /intent — prompt → investigate → approved plan → numbered intent file (optional) → issue draft (you run it)
+.claude/skills/review-intent/SKILL.md # /review-intent — a change reviewed by your agents in parallel, each finding checked by another, recorded as an issue draft; an ADR on request (you run it)
 .claude/skills/recap/SKILL.md        # /recap — fast-forward your branches, then a per-branch report of what changed since the last recap, plus new GitHub comments and reviews (you run it)
 .claude/intent/issue-template.md     # /intent's GitHub issue structure — yours, written once
 .claude/intent/drafts/<name>.md      # /intent's issue draft — type `draft` to edit, preview and copy it in your browser (git-ignored)
@@ -550,8 +553,8 @@ name the agent `scope-guard` or `adversary` and its preset is picked.
 
 **Workflow commands are skills.** Claude Code merged commands into skills, so ocgen renders
 its workflows as `.claude/skills/<name>/SKILL.md`. You still type `/deliver`, `/inquire` and so on.
-- **You start the side-effecting ones:** `/multi`, `/fanout`, `/deliver`, `/intent`, `/recap`,
-  `/team` and `/team-plan` carry `disable-model-invocation: true`, so Claude can't start them on
+- **You start the side-effecting ones:** `/multi`, `/fanout`, `/deliver`, `/intent`,
+  `/review-intent`, `/recap`, `/team` and `/team-plan` carry `disable-model-invocation: true`, so Claude can't start them on
   its own.
 - **Claude may use the rest when relevant:** `/inquire`, `/intake`, `/refine` and
   `/improve-prompt`.
@@ -1109,6 +1112,87 @@ copies; run `ocgen edit intent --reset-issue-template --reset-intent-template` t
 defaults (the issue convention above, the intent file's severity, approvers and sign-off sections,
 and the house-style comment block).
 
+#### Reviewing a change into an intent (`/review-intent`)
+
+**`/review-intent [target]`** reviews a change with your project's own agents and records what it
+finds the way `/intent` records an intent: an issue draft you file yourself, and an ADR only when you
+ask for one. It ships with `/intent` and uses its settings, templates, hooks and writing standard, so
+`ocgen edit intent --disable` turns both off. You start it; Claude can't. Claude Code's own
+`/review`, `/code-review` and `/security-review` print or post findings; this one keeps them as a
+checked record your approvers can decide on, under a name that doesn't collide with theirs.
+
+**What it reviews.** With no argument, the current branch against its base: the open pull
+request's base, else the branch `ocgen edit intent --branch` names, else the remote's default. The
+diff runs from the merge-base to your working tree, so uncommitted and untracked files count. `#123`
+or a pull-request URL reviews that pull request (`gh pr view`, `gh pr diff`); a branch name, that
+branch; a path, the change under it (or, with no change there, the files as they are). The base and
+head commits are pinned first, so every agent reviews the same code. A pull request or branch that
+isn't checked out can be read but not run, so its findings can only be confirmed by reading; Claude
+offers that you check it out (`gh pr checkout`), and you run that.
+
+**Fast: independent work runs at once.**
+
+| Step | Who | Gets | Returns |
+|---|---|---|---|
+| Context pack | the session | — | the diff, stat and log, the change's stated purpose (pull-request body, linked issues, an intent it names) and the changed symbols |
+| Find, in one wave | `scope-guard` | the purpose and the commits | what the purpose asks that the change lacks, what the change adds that it doesn't need, the blast radius |
+| | `reviewer` × 4 | the pack and one area: correctness, security, tests, cross-platform | candidates: severity, `file:line`, trigger → behavior → impact, evidence, fix |
+| | `explorer` | the changed symbols | every call site, test and doc that uses them |
+| Merge | the session | the reports | candidates C1, C2, … (duplicates merged, the scope gaps included) |
+| Verify, in one wave (≤ 8 at a time) | the adversary, one run per candidate (the Low ones together) | one claim, its evidence and fix, the pack — **not** the reviewer's reasoning or confidence | Confirmed (reproduced), Confirmed (by reading), Rejected or Unsettled, plus a severity and a fix check |
+| Draft | the session, then a fresh `reviewer` for `/intent`'s tone check | the confirmed findings | the issue draft |
+
+**Trustworthy: nothing unchecked reaches the draft.** Only candidates the adversary confirms become
+findings, numbered **R1, R2, …** by severity, one line each:
+
+```
+- **R3 · High · Possible · Verified** (cross-platform) — When `--target` is a Windows path with spaces, `resolve_target` (`src/review.rs:88`) splits it, so the review silently skips the change, which means the report is clean for code nobody checked. Evidence: test `target_with_spaces` fails. Fix: pass the path through `paths::for_shell`. red-team: confirmed (reproduced: `cargo test target_with_spaces`).
+```
+
+A reproduced finding is **Verified**. One confirmed by reading is **Inferred**, with a confidence;
+since the house style lets only Verified findings set a severity, its severity is **provisional**
+and it says what would verify it. Rejected candidates are listed with the reason. Those the adversary
+could neither confirm nor reject are listed as **Not confirmed**, with what would settle them: never
+findings, never dropped. A flaw the adversary finds on its own gets one more independent check.
+
+The agents are found by role, so a renamed adversary (`red-team`) or scope guard is named as such.
+Without an adversary, a fresh reviewer checks each candidate by reading, every finding is Inferred,
+and the draft says so. Without a scope guard, the session checks the purpose itself. Without a
+reviewer, a general-purpose agent does the review and is told it is read-only.
+
+**The draft** is `.claude/intent/drafts/issue-review-<slug>.md`, with `<slug>` from the branch,
+`pr-123` or the path (a second review of the same target gets `-2`, never an overwrite). That is
+`/intent`'s name for a draft without an intent file, so `/intent`, `/deliver` and `/recap` read it like
+any other. It follows the project's issue template and `/intent`'s writing standard: the Intent says
+what was reviewed and names each finding of Medium or higher; the options are to fix everything, to
+fix the Critical and High ones now and file the rest, or to do nothing; the approvers are named. The
+findings, the rejected and not-confirmed candidates, the scope and blast radius, and the Plan sit in
+collapsed `<details>` blocks, so the visible text stays within the word limit (the blocks don't
+count).
+
+Type `draft` to edit, preview and copy it in your browser, as with `/intent`; the same hooks check it
+for the current approvers and for lines wrapped by hand. Claude gives you the
+`gh issue create --body-file …` command and never runs it. It never posts on the pull request either:
+while `/intent` is on, `gh pr comment` and `gh pr review` are **ask** rules, even without the
+permission defaults and in auto mode. They aren't denied, so your own requests and Claude Code's
+`/code-review --comment` still post once you confirm. After you file the issue, `/intent #123` links
+it and `/intent issue-review-<slug>` records the sign-offs.
+
+**An ADR, only when you ask.** Once the draft exists, ask for an ADR and Claude writes one the way
+`/intent` writes an intent file: the same numbering (checked locally and on the remote), template and
+approvers, plus a reading copy when you read answers in another language. The findings are its
+evidence, the blast radius its consequences, the not-confirmed candidates its risks. The two link each
+other: the draft's Intent links the ADR, and the ADR's `Issue:` line names the draft until you file
+the issue. The draft moves to the ADR's name (an `mv`, which asks first), the name `/intent ADR-0007`,
+`/deliver` and `/recap` look for. A browser tab still showing the old name is stale: type `draft`
+again.
+
+**One source with `/intent`.** The writing standard, the tone check, the numbering, the reading copy
+and the browser-review text are templates both skills include (`claude/intent/*.md.j2`), so a change
+reaches both. While it runs, `/intent`'s read-only git and `gh` reads are pre-approved, plus
+`git merge-base`, `git status`, `git ls-files` and `git rev-list`; nothing that writes, files or
+posts.
+
 #### Daily recap (`/recap`)
 
 **`/recap`** catches you up on a repository in one command: it brings your branches up to date
@@ -1530,7 +1614,7 @@ defaults to `.`.
 
 | Command | What it does |
 |---|---|
-| `ocgen new [dir] --target claude` | Scaffold a new Claude project (agents, `/multi` `/intake` `/refine` `/deliver` `/inquire` `/intent` `/recap`, `CLAUDE.md`, `settings.json`). |
+| `ocgen new [dir] --target claude` | Scaffold a new Claude project (agents, `/multi` `/intake` `/refine` `/deliver` `/inquire` `/intent` `/review-intent` `/recap`, `CLAUDE.md`, `settings.json`). |
 | `ocgen new [dir] --target claude --output plugin` | Emit a distributable plugin instead of the project tree. |
 | `ocgen new [dir] --target claude --output both --repo <owner/repo>` | Emit both the project **and** a plugin (marketplace + release workflow). |
 | `ocgen new [dir] --target claude --team` | Also enable Agent Teams (env flag + `/team` + hooks + guidance). With the approval gate on, the sandbox question defaults to yes (macOS, Linux/WSL2). |
@@ -1553,7 +1637,7 @@ for a plugin; `--team` is off by default. (The `--base-url` flag is OpenCode-onl
 | Command | What it does |
 |---|---|
 | `ocgen add skill [dir]` | Author a new skill → `.claude/skills/<name>/SKILL.md` (name, description, allowed-tools, body). |
-| `ocgen edit intent -p <dir> [--prefix --digits --dir --max-words --branch --trust-domain/--untrust-domain --approver/--remove-approver --codeowners <path\|off> --codeowners-scope intents\|all\|off --enable/--disable --issue-template --intent-template --reset-…-template --show]` | Configure `/intent`: intent-file prefix, number width and directory, the issue word limit, the branch checked for taken numbers, the approvers who must sign off (GitHub handles), the project's existing CODEOWNERS it keeps their block in, and the project's issue / intent-file templates. No flags = interactive. |
+| `ocgen edit intent -p <dir> [--prefix --digits --dir --max-words --branch --trust-domain/--untrust-domain --approver/--remove-approver --codeowners <path\|off> --codeowners-scope intents\|all\|off --enable/--disable --issue-template --intent-template --reset-…-template --show]` | Configure `/intent` (and `/review-intent`, which shares its settings): intent-file prefix, number width and directory, the issue word limit, the branch checked for taken numbers, the approvers who must sign off (GitHub handles), the project's existing CODEOWNERS it keeps their block in, and the project's issue / intent-file templates. No flags = interactive. |
 | `ocgen edit docs -p <dir> [--trust/--untrust <host>]… [--show]` | The documentation sites agents may fetch, one list for every agent, skill and team member (both targets). Claude: the WebFetch guard blocks every other site, and trusted ones never ask. OpenCode: each fetch asks, and the agents are told the list. No flags = show. |
 | `ocgen edit permissions -p <dir> --list` | What `settings.json` actually holds, list by list in the order Claude Code checks them, each rule marked ocgen's or yours; flags yours that have no effect (`no effect: ocgen's ask rule wins`) or replace a generated one. Writes nothing. |
 | `ocgen edit permissions -p <dir> [--allow/--ask/--deny/--remove <RULE>]…` | Add or remove your own permission rules. They are saved in the state file and merged with ocgen's in `settings.json` by strictness, deny > ask > allow, so each rule sits in one list: a rule stricter than a generated one takes its place (`--deny "Bash(git push:*)"` moves it from ask to deny), a looser one has no effect, and both are warned about. Generated rules (including the approval-gate guards) can't be removed; removing your stricter rule restores ocgen's. No flags = interactive. |
@@ -1570,7 +1654,7 @@ for a plugin; `--team` is off by default. (The `--base-url` flag is OpenCode-onl
 | `ocgen verify [dir] --run-check` | Also run the project's committed check command, as you and unsandboxed (only on a repository you trust). |
 | `ocgen notes open [topic]` | Show an `/inquire` ledger's HTML page: refresh the tab that shows it, or open one ([details](#the-visual-ledger)). |
 | `ocgen notes render <file.md>…` | Render `/inquire` ledgers (`.claude/notes/<topic-slug>.md`) and `/intent` reading copies (`.claude/intent/view/<name>.md`) to their HTML pages without opening them; any other file is refused. |
-| `ocgen draft [name] [-p dir]` | Open an `/intent` issue draft (`.claude/intent/drafts/<name>.md`) in a local browser editor: edit it as formatted text (Markdown syntax hidden) or as Markdown source, save it back as plain Markdown (untouched blocks keep their exact text), preview it as GitHub shows it, and copy it. A calm black page by default (white on request), the text around the cursor dimmed, and a Focus button for full screen. With no name, the newest; `ADR-0007` picks by intent. Typing `draft` in Claude Code does the same ([details](#from-findings-to-a-github-issue-intent)). |
+| `ocgen draft [name] [-p dir]` | Open an `/intent` or `/review-intent` issue draft (`.claude/intent/drafts/<name>.md`) in a local browser editor: edit it as formatted text (Markdown syntax hidden) or as Markdown source, save it back as plain Markdown (untouched blocks keep their exact text), preview it as GitHub shows it, and copy it. A calm black page by default (white on request), the text around the cursor dimmed, and a Focus button for full screen. With no name, the newest; `ADR-0007` picks by intent. Typing `draft` in Claude Code does the same ([details](#from-findings-to-a-github-issue-intent)). |
 | `ocgen managed-settings` | Print a recommended organisation policy (`managed-settings.json`): no bypass mode, secrets unreadable, high-impact commands always ask, strict sandbox. |
 | `ocgen fields` (alias `reference`) | Explain every configurable field, including the Claude-specific ones (alias, tools, skills, output/plugin, agent teams). |
 
@@ -1633,8 +1717,10 @@ opencode/commands/multi.md.j2     # a command that fans out to the subagents
 seeds.toml               # blank-agent seed text (body + external prompt)
 claude/agent.md.j2              # one generic Claude subagent
 claude/CLAUDE.md.j2             # project instructions + roster
-claude/commands/*.md.j2         # multi / intake / refine / deliver / inquire / intent / recap… (rendered as skills)
+claude/commands/*.md.j2         # multi / intake / refine / deliver / inquire / intent / review-intent / recap… (rendered as skills)
 claude/intent/*.md              # default /intent issue and intent-file templates (copied into new projects)
+claude/intent/*.md.j2           # /intent's shared text (writing standard, tone check, numbering, reading copy,
+                                # browser review), included by /intent and /review-intent
 claude/notes/ledger.html.j2     # the /inquire ledger's HTML page
 claude/notes/intent.html.j2     # the /intent reading copy's HTML page
 claude/notes/draft.html.j2      # the /intent issue draft's editor (`draft`, `ocgen draft`): its layout, palettes and script;

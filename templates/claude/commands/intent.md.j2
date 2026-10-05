@@ -31,13 +31,7 @@ Settings for this project (change them with `ocgen edit intent`):
   skill was generated. After every write to an intent file or issue draft, ocgen checks it against
   the project's current approvers and tells you what is missing: its list wins — fix the file at once.
 {% if reading_copies %}
-**Languages.** Write the intent file and the GitHub issue draft in English, even though we talk in
-{{ answer_language }}: they are the shared record and GitHub's. After every write to an intent file
-(steps 4 and 6), also write its **reading copy**: `.claude/intent/view/<the intent file's name,
-lowercased>`, the whole file translated into {{ answer_language }} with the same structure — code, paths,
-identifiers, `file:line` and @mentions left as they are. Write it with the Write or Edit tool (a Bash
-write doesn't trigger the page): ocgen renders it as a page beside it and opens it —
-never write the `.html` yourself. The copy is git-ignored; the English intent file is the record.
+{% include "intent/reading-copy.md" %}
 {% endif %}
 ## 0. Route the arguments
 - **Empty** (or `list`): list the intents that have no issue yet, newest first — the intent files in
@@ -151,42 +145,12 @@ Do not write anything yet. Once I approve, ask whether to write an intent file (
 go to step 5: the issue draft is then the intent's only record (step 6).
 
 ## Writing standard (steps 4 and 5)
-The team that wrote the code reads these drafts: keep them blameless and calm, and completely honest —
-**soften the framing, never the facts**; no flaw is softened, hidden or dropped. Read the comment block
-at the top of both templates and follow it: it holds the severity definitions and the banned words.
-- **System, not people:** the subject is the code, design or behavior ("The gate matches command text
-  only"), never a person or team.
-- **Context before the flaw:** what the design was meant to achieve and what shaped it, then where it
-  falls short.
-- **Every flaw, in this order:** When [trigger], [behavior], which means [impact] (evidence: F#, `file:line`).
-  Then the proposed fix.
-- **Severity** (Critical, High, Medium, Low) and **Likelihood** come from the Verified findings, never
-  from adjectives.
-- **Balanced:** say what works correctly, without diluting any flaw. **Forward-looking:** each
-  problem statement leads to the proposal.
-- **Written for the approvers:** lead with a summary and a recommendation, and make the decision you
-  need from them explicit — approve, choose an option, or redirect. Present; don't pressure.
+{% include "intent/writing-standard.md" %}
 
 ## 4. Intent file
 Skip this step if I don't want an intent file. Draft it following the writing standard; write it only
 after the tone check (step 5).
-1. **Pick the number** so it is never reused:
-   - Local: the files in `{{ dir }}/` (any case) named `{{ prefix }}-NNNN…` or `NNNN-…`.
-   - Remote main branch: {% if branch %}`git fetch --quiet origin {{ branch }}`{% else %}the remote's default branch
-     (find it with `git ls-remote --symref origin HEAD`, which prints `ref: refs/heads/<branch>`;
-     else use `main`) — `git fetch --quiet origin <branch>`{% endif %}, then `git ls-tree --name-only FETCH_HEAD {{ dir }}/` and the
-     same name patterns.
-   - The number is 1 + the highest found (`{{ example }}` when there are none), zero-padded to
-     {{ digits }} digits. If the fetch fails (offline, no remote), say so and ask me to confirm the number.
-2. Name it `{{ dir }}/{{ prefix }}-<number>-<kebab-case-slug>.md`. Fill the structure in
-   `{{ intent_template }}` (if it is missing, use: title, Status, Severity, Approvers, Date, Issue,
-   Context, Evidence, Decision, Options considered, Consequences, Risks, Sign-off) from the analysis
-   and the approved plan, with `Status: Proposed`, `Approvers: {% if approvers %}{{ approvers }}{% else %}No approvers configured{% endif %}`, and every
-   approver pending in Sign-off.{% if adversary %} List every UNRESOLVED adversary finding
-   under **Risks**, marked **UNRESOLVED**, with its evidence.{% endif %}{% if scope_guard %} Put the predicted blast radius under **Consequences**,
-   each line citing its F# or labelled **Assumption**.{% endif %}
-3. Right before writing, re-check the local directory for the number; if it is taken, take the next.
-   Show me the path.
+{% include "intent/numbering.md" %}
 
 ## 5. Draft the GitHub issue, check the tone, show both
 - **Title:** imperative and actionable (what to do, not the topic), at most 72 characters.
@@ -209,34 +173,14 @@ after the tone check (step 5).
   line per approver, as @mentions — GitHub notifies them when I file the issue{% else %}"No approvers configured"{% endif %}. That is the only
   notice: **Never email**, message or otherwise contact anyone. Don't use `--assignee` for approvers —
   assignees do the work.
-- **Tone check**, before showing anything: give a fresh {% if reviewer %}`reviewer`{% elif prefer_explorer %}`explorer`{% else %}`Explore`{% endif %} subagent the drafts, the numbered
-  findings with their severities, the writing standard and both templates' comment blocks, and ask
-  it to report:
-  (a) **Blame and alarm** — banned words, people as subjects, names from git history, judgmental framing.
-  (b) **Softening and omission** (the more important) — every Verified finding of Medium or higher
-  appears with its trigger, behavior, impact and evidence (in full in the intent file, and in the issue
-  at least as the line above — in full there too with no intent file); no severity is lower than the evidence supports; no hedge
-  contradicts a Verified finding.
-  (c) **Approvers** — every configured approver is listed in both drafts (in the issue draft, with no
-  intent file) with a pending sign-off.{% if adversary %}
-  (d) **Unresolved** — every UNRESOLVED adversary finding appears in both drafts with its evidence.{% endif %}
+{% include "intent/tone-check.md" %}
   Fix everything it reports. Then write the intent file (if there is one), and write the description with the Write tool
   to the **issue draft** `.claude/intent/drafts/<name>.md` — `<name>` is the intent file's name
   lowercased (e.g. `{{ example|lower }}-cache-invalidation`), or `issue-<kebab-case-slug>` with no intent
   file (pick a slug no draft has yet); make sure `.claude/intent/drafts/.gitignore` exists and holds `*` (drafts stay out of git). Show
   me the intent file's path (if any), the title and the description in separate fenced blocks, one line on what
   the check changed, and:
-  - **The browser review:** "Type `draft` to review it in your browser — edit it as formatted text or
-    as Markdown, preview it the way GitHub shows it, and copy it." That word, sent alone, makes ocgen open the newest draft
-    (its hook adds a note saying what it did): reply in one line and wait — it is not a request to
-    write a draft. If no note came, tell me to run `ocgen draft` in a terminal.
-  - **The command** for me to run: `gh issue create --title "<title>" --body-file .claude/intent/drafts/<name>.md`
-    — it files the draft as it stands, my edits included.
-- **Never create the issue yourself** — no `gh issue create`, no API call. Wait for me to file it.
-- **My edits are mine, and they skip the tone check:** re-read the draft before you use it again (to
-  quote, revise or fill in the Plan) — I may have changed it in the browser. Build on my version and
-  don't quietly put back what I removed; but if my edits dropped or softened a flaw of Medium or
-  higher, or a pending approver, say so once — with the finding — and let me decide.
+  {% include "intent/browser-review.md" %}
 
 ## 6. Sign-off, link the issue, keep collaborating
 When I give you the issue (`#123` or its URL), add `Issue: <url>` to the intent file.

@@ -1,0 +1,27 @@
+{# /intent's shared text (claude::INTENT_PARTIALS), included by /intent and /review-intent
+   (where `review` is set). /intent renders exactly as it did before the split. -#}
+1. **Pick the number** so it is never reused:
+   - Local: the files in `{{ dir }}/` (any case) named `{{ prefix }}-NNNN…` or `NNNN-…`.
+   - Remote main branch: {% if branch %}`git fetch --quiet origin {{ branch }}`{% else %}the remote's default branch
+     (find it with `git ls-remote --symref origin HEAD`, which prints `ref: refs/heads/<branch>`;
+     else use `main`) — `git fetch --quiet origin <branch>`{% endif %}, then `git ls-tree --name-only FETCH_HEAD {{ dir }}/` and the
+     same name patterns.
+   - The number is 1 + the highest found (`{{ example }}` when there are none), zero-padded to
+     {{ digits }} digits. If the fetch fails (offline, no remote), say so and ask me to confirm the number.
+2. Name it `{{ dir }}/{{ prefix }}-<number>-<kebab-case-slug>.md`. Fill the structure in
+   `{{ intent_template }}` (if it is missing, use: title, Status, Severity, Approvers, Date, Issue,
+   Context, Evidence, Decision, Options considered, Consequences, Risks, Sign-off) {% if review %}from the
+   review: **Severity** — the highest finding's severity and likelihood; **Context** — what the change
+   is for (its stated purpose) and what the review covered (the target and its commits); **Evidence** —
+   the findings R1, R2, … in full; **Decision** — the proposed call, and the decision requested from the
+   approvers; **Options considered** — the draft's options; **Consequences** — the blast radius, each
+   line citing its finding (R#) or labelled **Assumption**; **Risks** — every Not confirmed candidate,
+   marked **NOT CONFIRMED**, with what would settle it; **Acceptance criteria** — one per finding: it is
+   fixed, and the test that shows it. Set `Status: Proposed`, `Approvers: {% if approvers %}{{ approvers }}{% else %}No approvers configured{% endif %}`,
+   and every approver pending in Sign-off.{% else %}from the analysis
+   and the approved plan, with `Status: Proposed`, `Approvers: {% if approvers %}{{ approvers }}{% else %}No approvers configured{% endif %}`, and every
+   approver pending in Sign-off.{% if adversary %} List every UNRESOLVED adversary finding
+   under **Risks**, marked **UNRESOLVED**, with its evidence.{% endif %}{% if scope_guard %} Put the predicted blast radius under **Consequences**,
+   each line citing its F# or labelled **Assumption**.{% endif %}{% endif %}
+3. Right before writing, re-check the local directory for the number; if it is taken, take the next.
+   Show me the path.

@@ -173,6 +173,7 @@ const DRAFT_EXAMPLES: &str = "Examples:
   ocgen draft                            the most recently changed draft
   ocgen draft ADR-0007                   by the intent it belongs to
   ocgen draft issue-retry-budget         by file name
+  ocgen draft issue-review-feat-retry    a /review-intent draft, by file name
 
 The editor is a local page (127.0.0.1, a secret token in its address). Save writes the
 .md file only if it hasn't changed since you opened it; the file is what

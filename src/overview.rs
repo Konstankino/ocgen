@@ -487,6 +487,7 @@ fn run_claude(root: &Path, project: &Project) -> Result<()> {
     }
     if project.claude.workflow.intent {
         wf.push("/intent");
+        wf.push("/review-intent");
     }
     if project.claude.workflow.recap {
         wf.push("/recap");

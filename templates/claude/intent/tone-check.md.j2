@@ -1,0 +1,16 @@
+{# /intent's shared text (claude::INTENT_PARTIALS), included by /intent and /review-intent
+   (where `review` is set). /intent renders exactly as it did before the split. -#}
+- **Tone check**, before showing anything: give a fresh {% if reviewer %}`reviewer`{% elif prefer_explorer %}`explorer`{% else %}`Explore`{% endif %} subagent the drafts, the numbered
+  findings with their severities, the writing standard and both templates' comment blocks, and ask
+  it to report:
+  (a) **Blame and alarm** — banned words, people as subjects, names from git history, judgmental framing.
+  (b) **Softening and omission** (the more important) — every Verified finding of Medium or higher
+  appears with its trigger, behavior, impact and evidence ({% if review %}in full in the draft's
+  Findings block, and in the ADR when there is one{% else %}in full in the intent file, and in the issue
+  at least as the line above — in full there too with no intent file{% endif %}); no severity is lower than the evidence supports; no hedge
+  contradicts a Verified finding.
+  (c) **Approvers** — every configured approver is listed in both drafts (in the issue draft, with no
+  intent file) with a pending sign-off.{% if review %}
+  (d) **Not confirmed** — every candidate the check could not settle is listed as Not confirmed, with
+  what would settle it; none is presented as a finding, and none is dropped.{% elif adversary %}
+  (d) **Unresolved** — every UNRESOLVED adversary finding appears in both drafts with its evidence.{% endif %}

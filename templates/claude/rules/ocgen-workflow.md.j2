@@ -159,4 +159,8 @@ branch so it is never reused) and drafts an actionable GitHub issue title and de
 create GitHub issues** — the user files them (`gh issue create` is denied). Once filed,
 `/intent #<number>` links the issue to the intent file, or to the issue draft when there is none;
 `/deliver` can take either as its brief.
+To review a change and record what the review finds the same way, run `/review-intent` (this branch
+by default; or a pull request, a branch or a path): the project's agents review it in parallel, only
+findings another agent confirms reach the issue draft, and it writes an ADR only when asked. It never
+posts on a pull request.
 {% endif %}

@@ -121,7 +121,7 @@ pub fn find(dir: &Path, name: Option<&str>) -> Result<PathBuf> {
     let Some(name) = name.map(str::trim).filter(|n| !n.is_empty()) else {
         return all.into_iter().next().with_context(|| {
             format!(
-                "no issue drafts in {} yet — /intent writes one when it drafts the GitHub issue",
+                "no issue drafts in {} yet — /intent and /review-intent write one when they draft a GitHub issue",
                 dir.display()
             )
         });

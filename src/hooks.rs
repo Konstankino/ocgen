@@ -1159,8 +1159,8 @@ impl<'a> Hook<'a> {
         let note = match draft::find(&dir, None) {
             Err(_) => format!(
                 "The user typed `draft` to open the /intent issue draft in their browser, but there is \
-                 no issue draft in {}/ yet, so nothing was opened. /intent writes one when it drafts \
-                 the GitHub issue.",
+                 no issue draft in {}/ yet, so nothing was opened. /intent and /review-intent write \
+                 one when they draft a GitHub issue.",
                 draft::DIR
             ),
             Ok(md) => {

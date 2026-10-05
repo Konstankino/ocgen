@@ -1081,9 +1081,10 @@ fn edit_permissions_list_shows_every_rule_at_a_glance() {
             "allow ({})",
             9 + ocgen::docs::DEFAULT_TRUSTED_DOMAINS.len()
         )))
+        // /intent is on: posting on a pull request asks too.
         .stdout(contains(format!(
             "ask ({})",
-            ocgen::claude::HIGH_IMPACT_ASK.len()
+            ocgen::claude::HIGH_IMPACT_ASK.len() + ocgen::claude::PR_POST_ASK.len()
         )))
         .stdout(contains("deny ("))
         .stdout(contains("Bash(ocgen approve*)"))

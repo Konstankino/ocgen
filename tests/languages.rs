@@ -146,9 +146,10 @@ fn english_prompts_with_ukrainian_answers() {
         ] {
             assert!(coord.contains(must), "missing {must:?} in:\n{coord}");
         }
-        // Only the coordinator's text, Claude's settings and the three skills that
-        // write files people read (/inquire's ledger, /intent's reading copy,
-        // /recap's report) change: the subagents and the other commands keep their instructions.
+        // Only the coordinator's text, Claude's settings and the four skills that
+        // write files people read (/inquire's ledger, /intent's and /review-intent's
+        // reading copies, /recap's report) change: the subagents and the other
+        // commands keep their instructions.
         let changed: Vec<&String> = split
             .iter()
             .filter(|(rel, text)| same.get(*rel) != Some(text))
@@ -161,6 +162,7 @@ fn english_prompts_with_ukrainian_answers() {
                 ".claude/skills/inquire/SKILL.md",
                 ".claude/skills/intent/SKILL.md",
                 ".claude/skills/recap/SKILL.md",
+                ".claude/skills/review-intent/SKILL.md",
             ],
             Target::OpenCode => &[".opencode/prompts/coordinator.txt"],
         };

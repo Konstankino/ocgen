@@ -1,0 +1,227 @@
+---
+description: Review a change with this project's agents in parallel, keep only the findings another agent confirms, and draft them as a GitHub issue for me to file — an ADR only when I ask
+argument-hint: "[empty = this branch against its base | #PR or a PR URL | a branch | a path]"
+allowed-tools: {{ allowed_tools }}
+effort: high
+---
+Review this change and record what the review finds: $ARGUMENTS
+
+Run the review with this project's agents and record it the way `/intent` records an intent: an issue
+draft I file myself, and an ADR only if I ask for one. Be fast — independent work runs in parallel —
+and be trustworthy: no finding reaches the draft unless another agent has checked its evidence on its
+own. The review is **read-only**: the only files you write are the issue draft (step 5) and, when I
+ask, the ADR, its links and the draft's new name (step 6). Never create the GitHub issue and never
+post on a pull request — I file the issue and comment myself.
+
+Settings for this project — `/intent`'s, shared (change them with `ocgen edit intent`):
+- Issue description: at most {{ max_words }} words of visible text, structured by `{{ issue_template }}`.
+- ADR (an intent file): `{{ dir }}/{{ prefix }}-<number>-<slug>.md`, the number zero-padded to
+  {{ digits }} digits, structured by `{{ intent_template }}`.
+{% if approvers -%}
+- Approvers: {{ approvers }} — they decide. GitHub notifies them through the @mentions in the issue;
+  never contact them any other way.
+{% else -%}
+- **No approvers configured.** Say "No approvers configured" in the draft, and suggest
+  `ocgen edit intent --approver @handle`.
+{% endif -%}
+- **The approvers can change while you work**, and this list is as of when this skill was generated.
+  After every write to an issue draft or an ADR, ocgen checks it against the project's current
+  approvers and tells you what is missing: its list wins — fix the file at once.
+{% if reading_copies %}
+{% include "intent/reading-copy.md" %}
+{% endif %}
+## 0. Choose the target and pin it
+Work out what to review from the arguments, then record its base and head commits (`git rev-parse`):
+every agent reviews those, even if the branch moves while you work.
+- **Empty:** the current branch against its base, including what isn't committed yet. The base is the
+  first of: the base branch of an open pull request for this branch (`gh pr view --json baseRefName`);
+  {% if branch %}`{{ branch }}`{% else %}the remote's default branch (`git ls-remote --symref origin HEAD` prints `ref: refs/heads/<branch>`){% endif %};
+  `main`. Use its remote-tracking ref (`origin/<base>`) when there is one. Diff from
+  `git merge-base origin/<base> HEAD` to the working tree (`git diff <merge-base>`), and list the
+  untracked files (`git status --porcelain --untracked-files=all`): they are part of the change — read
+  them.
+- **`#123`, a bare number or a pull-request URL:** that pull request —
+  `gh pr view <number> --json number,title,body,url,baseRefName,headRefName,headRefOid,closingIssuesReferences`
+  and `gh pr diff <number>`.
+- **A branch** (`git rev-parse --verify --quiet <branch>` finds it): `git diff <base>...<branch>`, with
+  the base found as above.
+- **A path** (it exists in the work tree): the current branch's change limited to it
+  (`git diff <merge-base> -- "<path>"`, and its untracked files); if that is empty, review the files
+  under it as they are (`git ls-files -- "<path>"`), and say so in the draft.
+- **Anything else, or two readings at once** (a branch and a path with the same name): ask me — one
+  question, 2–4 options, the recommended one first.
+
+Pass every path to git quoted, after `--`, with forward slashes (`-- "src/my dir/x.rs"`), so a path
+with spaces or backslashes reaches git whole. An empty change: say so and stop.
+
+**Not checked out here** — a pull request, or a branch whose head isn't `HEAD`: its code can be read
+but not run. Read files at the head commit with `git show <head>:<path>` (fetch it first when it's
+missing: `git fetch --quiet origin pull/<number>/head`, or `git fetch --quiet origin <branch>`). Tell
+me that the findings can then be confirmed only by reading, and offer that I check it out
+(`gh pr checkout <number>`) so they can be reproduced — I run the checkout, not you.
+
+## 1. Collect the context pack
+Run these reads in **one message** (they are pre-approved): `git diff --stat` and the diff itself;
+`git log --format='%h %s' <base>..<head>`; and the change's stated purpose — the pull request's title
+and body, the issues it closes (`gh issue view`), and any intent file in `{{ dir }}/` or issue draft in
+`.claude/intent/drafts/` it names. No purpose stated anywhere: use the commit subjects, and say so. If
+`gh` is not authenticated or can't reach GitHub, say so and continue without it.
+
+The **context pack** is the target, the base and head commits, the stat, the diff, the log and the
+purpose. Also list the **changed symbols**: the functions, types, CLI flags, config keys, environment
+variables and file formats the diff adds, removes or changes. With a diff of more than about 3,000
+lines, split it into groups of related files and give each area one review run per group.
+
+## 2. Find — one wave, in parallel
+Launch all of these in **one message**, so they run at once; none waits for another. Give each the
+context pack verbatim: an agent without a shell can't run git, and every agent must review the same
+commits.
+{% if scope_guard -%}
+- **Scope:** `{{ scope_guard }}` gets the purpose and the base and head commits, and checks the change
+  against the purpose both ways: what the purpose asks that the change lacks (Missing, Partial), what
+  the change adds that the purpose doesn't need (Cut, Defer), and the blast radius. Tell it when the
+  target isn't checked out: it reads with `git show <head>:<path>`.
+{% endif -%}
+- **Review — one `{{ review_agent }}` run per area**{% if not review_agent_owned %} (it can edit files: tell each run the review is
+  read-only — no edits, and no command that writes){% endif %}, each given the context pack, its area, and
+  the severity scale in the comment block at the top of `{{ issue_template }}`:
+  - **Correctness:** logic, error and edge paths, state, concurrency, compatibility of public surfaces.
+  - **Security:** injection, path traversal, check bypasses, unsafe defaults, secrets, permissions and
+    trust boundaries.
+  - **Tests:** changed behavior no test covers, tests that don't assert what they claim, flaky or
+    order-dependent tests.
+  - **Cross-platform:** Windows paths (spaces, backslashes, drive letters, `\\?\` verbatim paths), line
+    endings, shell portability (POSIX sh, Git Bash, PowerShell), case-insensitive file systems.
+  Each reports only in its area — "nothing in this area" when nothing applies — and gives every
+  candidate: the area; severity and likelihood; `file:line`; when [trigger], [behavior], which means
+  [impact]; the evidence; the proposed fix; and `Confidence: NN%`.
+- **Context:** {% if prefer_explorer %}`explorer`{% else %}a built-in `Explore` subagent{% endif %} gets the changed symbols and maps their consumers — every
+  call site, the tests that cover them, the docs that describe them, each with `file:line`. It reports
+  facts, not findings.
+{% if not scope_guard -%}
+- **Scope, yourself:** while they run, check the change against its purpose both ways — what the
+  purpose asks that the change lacks, what the change adds that the purpose doesn't need — and state
+  the blast radius: files, public surface, dependencies, what could break, how to roll it back.
+{% endif %}
+## 3. Merge into candidates
+Put the reports together. Merge candidates that describe the same flaw — the same cause in the same
+place — and keep every area that found it; number the rest **C1, C2, …**. {% if scope_guard %}Each of
+`{{ scope_guard }}`'s Missing or Partial items becomes a candidate in the **scope** area; its Cut and
+Defer items and the blast radius go to the draft's Scope section, not the findings, unless a reviewer
+found a flaw in that code.{% else %}Each gap your scope check found becomes a candidate in the
+**scope** area.{% endif %} Attach to each candidate the consumers found for the symbols it touches.
+Drop nothing here: a candidate you doubt still goes to the check.
+
+## 4. Verify — every candidate checked on its own
+{% if adversary -%}
+Give each candidate to `{{ adversary }}` on its own: one run per candidate of Medium or higher, and one
+run for all the Low ones together. Launch them in **one message**, at most 8 at a time (the next 8 as
+those return). Give each run the candidate's claim, its `file:line` and its proposed fix, the context
+pack, and the consumers attached to it — **not** the reviewer's reasoning, severity rationale or
+confidence, so the check stands on its own. Ask it to try to disprove the claim, and to return one
+verdict per candidate under its **Challenged claims**:
+- **Confirmed (reproduced)** — a test, the built program or a PoC input shows it: the exact command and
+  what it printed.
+- **Confirmed (by reading)** — the code at `file:line` does what the claim says, and a caller can reach
+  the trigger: `Confidence: NN%`, and what would reproduce it.
+- **Rejected** — the evidence doesn't hold, nothing reaches the trigger, it isn't in this change's code
+  or behavior, or it repeats another candidate: the reason, with `file:line`.
+- **Unsettled** — it can neither confirm nor reject it (a platform it can't run, a service it can't
+  reach): what would settle it.
+For each confirmed one, also ask whether the severity fits the scale (and which it should be, with the
+evidence), and whether the proposed fix would work ("holds", or the concern). It changes nothing in the
+work tree: a PoC that needs files uses a directory from `mktemp -d`. When the target isn't checked out,
+tell it so: it reads with `git show <head>:<path>` and can confirm by reading only. A flaw it reports
+that no candidate named has had no second look: give it to one more fresh run, the same way, once; a
+flaw that run finds in turn goes to Not confirmed.
+{% else -%}
+No adversary in this project, so nothing gets reproduced: give each candidate to a fresh
+`{{ review_agent }}` run on its own — one per candidate of Medium or higher, one for all the Low ones,
+in **one message**, at most 8 at a time — with the claim, its `file:line` and fix, the context pack and
+the consumers, but **not** the reviewer's reasoning or confidence. It returns **Confirmed (by reading)**
+with `Confidence: NN%`, **Rejected** with the reason, or **Unsettled** with what would settle it. So
+every surviving finding is **Inferred**: say in the draft that no agent tried to reproduce them.
+{% endif %}
+Only confirmed candidates become findings. Number them **R1, R2, …** by severity (Critical first), then
+likelihood. Where the check gives evidence for another severity, use that. An Inferred finding's
+severity is **(provisional)** — the house style lets only Verified findings set one — and comes with
+**To verify:** what would confirm it. Rejected and unsettled candidates never become findings and are
+never dropped: they go in the draft's last block.
+
+## Writing standard (steps 5 and 6)
+{% include "intent/writing-standard.md" %}
+
+## 5. Draft the issue, check the tone, show it
+If no candidate survived, don't write a draft: show me the rejected and unsettled candidates with
+their reasons, and ask whether I want a draft anyway.
+- **Title:** imperative and actionable (what to do, not the topic), at most 72 characters — e.g.
+  "Fix the two High findings in the retry change before it merges".
+- **Description:** follow the writing standard and `{{ issue_template }}` — a guide, not a form: keep
+  its sections in their order and what each is for, adapt the wording to a review, and leave its
+  `<!-- -->` comments out (if it is missing, use: Intent with the **Blocks prod?** and **Depends on the
+  platform view** lines, Options and trade-offs including "do nothing", Proposed call, Needs from the
+  approvers, and the Plan in a collapsed `<details>` block).
+  - **Intent:** what was reviewed — the target, `<base>..<head>` as short commits, and "plus
+    uncommitted changes" when there were any — what should be true before it merges, and one line for
+    each finding of Medium or higher: its ID, severity, trigger and impact.
+  - **Blocks prod?** Yes when a finding is Critical or High. **Depends on the platform view**: as the
+    template asks.
+  - **Options and trade-offs:** fix every finding before merging; fix the Critical and High ones now
+    and file the rest; do nothing (merge as it is) — each with what it costs and what can go wrong.
+  - **Proposed call**, then **Needs from the approvers**: {% if approvers %}name them in that heading ({{ approvers }}),
+    then one pending checklist line per approver, as @mentions — GitHub notifies them when I file
+    the issue{% else %}"No approvers configured"{% endif %}.
+  - Then three collapsed blocks, each `<details><summary>…</summary>`, a blank line, the content and
+    `</details>`:
+    1. **Findings (R1–Rn)**, one line each, like this:
+       ```
+       - **R3 · High · Possible · Verified** (cross-platform) — When `--target` is a Windows path with spaces, `resolve_target` (`src/review.rs:88`) splits it, so the review silently skips the change, which means the report is clean for code nobody checked. Evidence: test `target_with_spaces` fails. Fix: pass the path through `paths::for_shell`. {% if adversary %}{{ adversary }}: confirmed (reproduced: `cargo test target_with_spaces`){% else %}{{ review_agent }}: confirmed (by reading){% endif %}.
+       ```
+       An Inferred one reads `**R5 · Medium (provisional) · Inferred, Confidence 70%**` and ends with
+       `To verify: …`. After the findings: **What works** — what the review found correct, in a line or
+       two; **Scope** — {% if scope_guard %}`{{ scope_guard }}`'s Missing, Partial, Cut and Defer items that aren't findings,
+       and its{% else %}what your scope check found that isn't a finding, and the{% endif %} blast radius; and which agents ran.
+    2. **Rejected and not confirmed** — each rejected candidate with its reason
+       (`- C7 (security) "<the claim>" — rejected: <reason> (file:line)`), then each **Not confirmed**
+       one with what would settle it. Not confirmed is not a finding — no ID, no severity, not in the
+       Intent — but it is listed, never dropped.
+    3. **Plan** — the template's outline, left as it is until the intent is agreed.
+  - **Words:** the visible text — everything outside the `<details>` blocks — is at most {{ max_words }} words;
+    the blocks don't count. State both counts.
+- **One line per paragraph:** GitHub shows every newline in an issue as a line break, so write each
+  paragraph, each list item and each finding on one line — never wrap it by hand. ocgen flags lines
+  wrapped mid-sentence after every write to the draft.
+- **Name:** `.claude/intent/drafts/issue-review-<slug>.md` — `/intent`'s name for a draft with no
+  intent file, so `/intent`, `/deliver` and `/recap` find it. `<slug>` is the target in lowercase
+  letters, digits and hyphens — the branch (`feat/retry_budget` → `feat-retry-budget`), `pr-123`, or
+  the path — at most 80 characters with its prefix. If that file exists, it holds an earlier review:
+  add `-2`, `-3`, … rather than overwrite it. Make sure `.claude/intent/drafts/.gitignore` exists and
+  holds `*` (drafts stay out of git).
+{% include "intent/tone-check.md" %}
+  Fix everything it reports. Then write the draft with the Write tool, and show me its path, the title
+  and the description in separate fenced blocks, both word counts, one line on what the check
+  changed, and:
+  {% include "intent/browser-review.md" %}
+- **Never post on the pull request** — no `gh pr comment`, `gh pr review` or API call: the findings
+  reach it only through the issue I file, or what I post myself.
+- **What comes next is `/intent`'s:** once I file the issue, `/intent #<number>` links it, and
+  `/intent issue-review-<slug>` records the sign-offs and fills in the Plan. Say so in one line, then
+  offer the ADR (step 6) in one line — and don't write it unless I ask.
+
+## 6. An ADR, only when I ask
+Write an ADR only when I ask for one, and only once the draft exists. Re-read the draft first — I may
+have changed it in the browser — and build on my version. The ADR is an intent file, numbered and
+structured the way `/intent` does it:
+{% include "intent/numbering.md" %}
+4. **Link them both ways, and move the draft.** `/intent`, `/deliver` and `/recap` look for the draft
+   of an intent file under that file's name, lowercased: move the draft there with
+   `mv .claude/intent/drafts/<old name>.md .claude/intent/drafts/<the ADR's name, lowercased>.md` (it
+   asks me first — that prompt is my confirmation; the draft is git-ignored). Then, with the Edit
+   tool, link the ADR from the draft's Intent section ("Findings and decision: `<the ADR's path>`").
+   In the ADR, write `Issue: not filed yet — draft .claude/intent/drafts/<the ADR's name, lowercased>.md`
+   until I file the issue; `/intent` replaces it with the link.
+5. **Check, write, show.** Run the tone check (step 5) on the ADR and the changed draft and fix what it
+   reports; then write the ADR{% if reading_copies %} and its reading copy{% endif %}. Show me the ADR's path and the draft's
+   new path, and tell me: if the old draft is still open in a browser tab, that tab is stale — close it
+   and type `draft` to open the moved one. From here the ADR is an intent like any other:
+   `/intent {{ prefix }}-<number>` resumes it for the sign-off, the issue link and the Plan.

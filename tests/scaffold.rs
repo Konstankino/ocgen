@@ -3601,6 +3601,7 @@ fn workflow_commands_are_generated_as_skills() {
         ("team-plan", true),
         ("inquire", false),
         ("intent", true),
+        ("review-intent", true),
         ("recap", true),
         ("intake", false),
         ("refine", false),

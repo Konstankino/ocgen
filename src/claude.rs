@@ -128,6 +128,16 @@ pub struct ClaudeConfig {
 pub const INTENT_ISSUE_TEMPLATE: &str = ".claude/intent/issue-template.md";
 pub const INTENT_FILE_TEMPLATE: &str = ".claude/intent/intent-template.md";
 
+/// /intent's text that /review-intent shares, one template each
+/// (`templates/claude/intent/<name>.md.j2`), included by both skills.
+pub const INTENT_PARTIALS: [&str; 5] = [
+    "reading-copy",
+    "writing-standard",
+    "numbering",
+    "tone-check",
+    "browser-review",
+];
+
 /// Where GitHub reads a CODEOWNERS file, in its search order (the first one found
 /// is used). ocgen links an existing one; it never creates one.
 pub const CODEOWNERS_PATHS: [&str; 3] = [".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS"];
@@ -208,6 +218,34 @@ pub const INTENT_READ_TOOLS: [&str; 19] = [
     "Bash(gh search issues:*)",
     "Bash(gh search prs:*)",
 ];
+
+/// What /review-intent may also run without asking: the reads a diff needs.
+/// Like /intent's, nothing here writes, files an issue or posts on a pull
+/// request (`gh pr comment` and `gh pr review` ask first: [`PR_POST_ASK`]).
+pub const REVIEW_EXTRA_TOOLS: [&str; 4] = [
+    "Bash(git merge-base:*)",
+    "Bash(git status:*)",
+    "Bash(git ls-files:*)",
+    "Bash(git rev-list:*)",
+];
+
+/// /review-intent's `allowed-tools`: /intent's reads and the diff reads. No
+/// WebFetch: the reviewers read the code, and the trusted sites are allowed
+/// project-wide anyway.
+pub fn review_read_tools() -> Vec<&'static str> {
+    INTENT_READ_TOOLS
+        .iter()
+        .chain(REVIEW_EXTRA_TOOLS.iter())
+        .copied()
+        .collect()
+}
+
+/// Asked while /intent is on: posting on a pull request. /review-intent
+/// never posts — its findings reach a pull request only through the issue the
+/// user files — and an ask rule puts a human in front of a post even in auto
+/// mode. Not a deny: the user's own requests, and Claude Code's
+/// `/code-review --comment`, still post once confirmed.
+pub const PR_POST_ASK: [&str; 2] = ["Bash(gh pr comment*)", "Bash(gh pr review*)"];
 
 impl Default for IntentSettings {
     fn default() -> Self {
@@ -759,7 +797,7 @@ impl Default for HooksExtra {
 
 /// The workflow skills ocgen generates (formerly `.claude/commands/`). A user
 /// skill with one of these names would collide with the generated one.
-pub const WORKFLOW_SKILLS: [&str; 11] = [
+pub const WORKFLOW_SKILLS: [&str; 12] = [
     "multi",
     "intake",
     "refine",
@@ -768,17 +806,24 @@ pub const WORKFLOW_SKILLS: [&str; 11] = [
     "deliver",
     "inquire",
     "intent",
+    "review-intent",
     "recap",
     "team",
     "team-plan",
 ];
 
+/// Claude Code's own review commands. No workflow skill may take one of these
+/// names: `/review-intent` sits beside them, it doesn't replace them.
+pub const CLAUDE_CODE_REVIEW_COMMANDS: [&str; 4] =
+    ["review", "code-review", "security-review", "ultrareview"];
+
 /// Workflow skills with side effects: only the user starts them (`/name`).
-pub const USER_RUN_WORKFLOWS: [&str; 7] = [
+pub const USER_RUN_WORKFLOWS: [&str; 8] = [
     "multi",
     "fanout",
     "deliver",
     "intent",
+    "review-intent",
     "recap",
     "team",
     "team-plan",
