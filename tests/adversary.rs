@@ -1,4 +1,4 @@
-//! The `adversary` role: a read-only skeptic and outside attacker that checks the
+//! The `adversary` role: a read-only skeptic that hunts accidents in the
 //! team's results, and the loop the coordinator runs around it — only when the team
 //! has one, so projects without it render exactly as before.
 
@@ -107,8 +107,14 @@ fn the_description_names_the_role_in_both_languages_and_is_plain_yaml() {
     let arch = Archetype::load("adversary").unwrap();
     let uk = arch.description_for("Ukrainian");
     let en = arch.description_for("English");
-    assert!(uk.starts_with("Скептик і зловмисник"), "{uk}");
-    assert!(en.starts_with("Skeptic and attacker"), "{en}");
+    assert!(
+        uk.starts_with("Скептик — ") && uk.contains("випадковості"),
+        "{uk}"
+    );
+    assert!(
+        en.starts_with("Skeptic — ") && en.contains("accidents"),
+        "{en}"
+    );
     for d in [&uk, &en] {
         // Written unquoted into YAML frontmatter.
         assert!(!d.contains(": ") && !d.contains(" #"), "{d}");
@@ -140,8 +146,8 @@ fn the_body_fixes_the_report_format_in_both_languages() {
         // The PoC lives in the report, never in the work tree.
         assert!(!body.contains("tests/poc_"), "{body}");
     }
-    assert!(uk.contains("зовнішній зловмисник"));
-    assert!(en.contains("outside attacker"));
+    assert!(uk.contains("Модель загрози — випадковості"));
+    assert!(en.contains("Threat model: accidents"));
 }
 
 // ------------------------------------------------------------ Claude Code --
@@ -153,7 +159,7 @@ fn claude_writes_the_adversary_agent_file() {
     let md = read(dir.path(), ".claude/agents/adversary.md");
     for line in [
         "name: adversary\n",
-        "description: Skeptic and attacker",
+        "description: Skeptic — checks",
         "tools: Read, Grep, Glob, Bash\n",
         "model: opus\n",
         "color: red\n",

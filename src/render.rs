@@ -865,6 +865,17 @@ impl Project {
         .context("rendering the trusted docs note")
     }
 
+    /// The mindset every agent and the coordinator are given, in the instruction
+    /// language: safety work protects against accidents, not insiders.
+    fn mindset(&self, env: &Environment) -> Result<String> {
+        env.render_str(
+            &templates::load("mindset.md.j2")?,
+            context! { language => canonical_language(&self.language) },
+        )
+        .map(|n| n.trim().to_string())
+        .context("rendering the mindset")
+    }
+
     /// The language agents answer the user in: `response_language`, else the
     /// instruction language, else English.
     pub fn response_language(&self) -> &str {
@@ -1130,6 +1141,7 @@ impl Project {
 
         // Per-agent files (+ external prompt files).
         let agent_tmpl = templates::load("opencode/agents/_agent.md.j2")?;
+        let mindset = self.mindset(&env)?;
         for agent in &self.agents {
             // What ocgen adds to a coordinator goes at the end of its prompt file,
             // or of its body when it has none.
@@ -1141,9 +1153,12 @@ impl Project {
             } else {
                 None
             };
-            let with_note = |text: &str| match &note {
-                Some(n) => with_paragraph(text, n),
-                None => text.to_string(),
+            let with_note = |text: &str| {
+                let text = match &note {
+                    Some(n) => with_paragraph(text, n),
+                    None => text.to_string(),
+                };
+                with_paragraph(&text, &mindset)
             };
             let body = if primary && !has_prompt_file {
                 self.coordinator_text(&with_note(&agent.body), &env)?
@@ -1241,6 +1256,7 @@ impl Project {
         let mut components: Vec<(String, String)> = Vec::new();
 
         let agent_tmpl = templates::load("claude/agent.md.j2")?;
+        let mindset = self.mindset(&env)?;
         for agent in self.agents.iter().filter(|a| a.mode != "primary") {
             let model = if agent.model.trim().is_empty() {
                 "opus"
@@ -1264,6 +1280,7 @@ impl Project {
             } else {
                 agent.body.clone()
             };
+            let body = with_paragraph(&body, &mindset);
             let agent_val = context! {
                 name => agent.name,
                 description => agent.description,
@@ -1628,17 +1645,24 @@ impl Project {
         // Coordinator body may itself be a template (the orchestrator prompt loops
         // over subagents), so render it with that context for CLAUDE.md.
         let coordinator = match self.primary() {
-            Some(p) => body_as_template(
-                &env,
-                &p.name,
-                &p.body,
-                context! { subagents => &subs, language => lang, parallel => true },
+            Some(p) => with_paragraph(
+                &body_as_template(
+                    &env,
+                    &p.name,
+                    &p.body,
+                    context! { subagents => &subs, language => lang, parallel => true },
+                ),
+                &mindset,
             ),
             None => String::new(),
         };
         // The main session coordinates: the answer line and the adversary loop
-        // are its to follow.
-        let coordinator = self.coordinator_text(&coordinator, &env)?;
+        // are its to follow. Without a coordinator agent it still runs them, so
+        // it is given the mindset with them.
+        let mut coordinator = self.coordinator_text(&coordinator, &env)?;
+        if self.primary().is_none() && !coordinator.is_empty() {
+            coordinator = join_section(&mindset, &coordinator);
+        }
         // Behavioral guidance lives in .claude/rules/ (loads every session at CLAUDE.md
         // priority) so ocgen never has to touch a user-owned CLAUDE.md.
         let has_coordinator = !coordinator.is_empty();

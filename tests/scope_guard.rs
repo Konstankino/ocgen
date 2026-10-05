@@ -418,7 +418,10 @@ fn a_team_without_the_guard_renders_as_before() {
     assert!(!rule.contains(LOOP_MARK) && !rule.contains("Scope check"));
     let prompt = coordinator_prompt(&opencode("English", false, false));
     assert!(prompt.ends_with("Respond in English.\n"), "{prompt}");
-    assert!(!prompt.contains("scope"));
+    assert!(
+        !prompt.contains(LOOP_MARK) && !prompt.contains("Scope check"),
+        "{prompt}"
+    );
 }
 
 #[test]

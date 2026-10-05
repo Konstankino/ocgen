@@ -150,7 +150,7 @@ fn intent_has_the_guard_check_the_plan_in_both_directions() {
     ] {
         assert!(plan.contains(must), "missing {must:?} in:\n{plan}");
     }
-    // Before the adversary attacks the plan.
+    // Before the adversary checks the plan.
     let scope = plan.find("give `scope-guard`").unwrap();
     let adversary = plan.find("give `adversary` the plan").unwrap();
     assert!(scope < adversary, "{plan}");

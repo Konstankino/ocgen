@@ -198,7 +198,11 @@ fn the_answer_line_comes_before_the_adversary_loop() {
         assert!(coord.find("Your subagents").unwrap() < line);
         assert!(line < scope && scope < adversary, "{coord}");
         // A blank line between sections, none doubled.
-        assert!(coord.contains(".\n\nAnswer the user in"), "{coord}");
+        // The mindset closes the coordinator's own text, before the answer.
+        assert!(
+            coord.contains("</mindset>\n\nAnswer the user in"),
+            "{coord}"
+        );
         assert!(coord.contains(".\n\nScope check"), "{coord}");
         assert!(!coord.contains("\n\n\n\nAdversary"), "{coord}");
         assert!(!coord.contains("\n\n\n\nScope"), "{coord}");
@@ -212,7 +216,8 @@ fn a_coordinator_without_an_answer_line_gets_one() {
     p.agents[0].body = "You coordinate the team.".into();
     let coord = coordinator(&rendered(&p)).to_string();
     assert!(
-        coord.contains("You coordinate the team.\n\nAnswer the user in Ukrainian."),
+        coord.contains("You coordinate the team.\n\n<mindset>")
+            && coord.contains("</mindset>\n\nAnswer the user in Ukrainian."),
         "{coord}"
     );
 

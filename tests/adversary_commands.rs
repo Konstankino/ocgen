@@ -1,6 +1,6 @@
 //! /deliver and /intent use the project's adversary when it has one: /deliver
-//! has it check the whole change before synthesizing, /intent has it attack the
-//! findings (Pass 4) and the plan, and records what stays open in both drafts.
+//! has it check the whole change before synthesizing, /intent has it challenge the
+//! findings (Pass 4) and check the plan for accidents, and records what stays open in both drafts.
 //! Without an adversary both commands read exactly as before.
 
 use std::collections::BTreeMap;
@@ -78,7 +78,7 @@ fn deliver_has_the_adversary_check_the_change_before_synthesizing() {
 // -------------------------------------------------------------- /intent --
 
 #[test]
-fn intent_has_the_adversary_attack_the_findings_and_the_plan() {
+fn intent_has_the_adversary_challenge_the_findings_and_check_the_plan() {
     let f = files(&project(true));
     let text = &f[INTENT];
 
@@ -89,7 +89,7 @@ fn intent_has_the_adversary_attack_the_findings_and_the_plan() {
         "{pass4}"
     );
 
-    // Step 3: it attacks the plan before I see it.
+    // Step 3: it checks the plan before I see it.
     let plan = section(
         text,
         "## 3. Plan and get my approval",

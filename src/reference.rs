@@ -60,7 +60,7 @@ const AGENT_FIELDS: &[Field] = &[
                  the coordinator run its check last, send \
                  Critical/High findings back to the implementer for up to 2 rework rounds, and \
                  report what is left as UNRESOLVED. /deliver runs the same check after \
-                 execution, and /intent has it challenge the findings and attack the plan.",
+                 execution, and /intent has it challenge the findings and check the plan for accidents.",
         example: "reviewer",
     },
     Field {

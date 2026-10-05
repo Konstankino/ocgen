@@ -121,7 +121,7 @@ Critical and High findings that hold up become numbered findings (F#) like yours
 
 ## 3. Plan and get my approval
 {% if scope_guard -%}
-Before you present the plan{% if adversary %}, and before `{{ adversary }}` attacks it{% endif %}, give `{{ scope_guard }}` the problem, the findings and the plan,
+Before you present the plan{% if adversary %}, and before `{{ adversary }}` checks it{% endif %}, give `{{ scope_guard }}` the problem, the findings and the plan,
 and ask it to check the plan in both directions, once:
 - **Gaps:** every acceptance criterion and every risk needs a task. Add the missing tasks, or show me what the plan
   can't cover as a gap.
@@ -131,8 +131,8 @@ and ask it to check the plan in both directions, once:
 
 {% endif -%}
 {% if adversary -%}
-Before you present the plan, give `{{ adversary }}` the plan and the findings it rests on, and ask it to attack the
-proposed fix as an outside attacker and a skeptic. On `Verdict: REWORK`, revise the plan for its Critical and High
+Before you present the plan, give `{{ adversary }}` the plan and the findings it rests on, and ask it to check the
+proposed fix for accidents, as a skeptic. On `Verdict: REWORK`, revise the plan for its Critical and High
 findings and have it check again — at most {{ rounds }} rounds. A Critical or High finding still open after that is
 **UNRESOLVED**: show it to me with the plan.
 

@@ -204,6 +204,33 @@ An override `manifest.toml` from before this setting asks no answer-language que
 projects answer in the instruction language until you add the `response_language` variable to
 the override.
 
+### The agents' mindset: accidents, not insiders
+
+Every project ocgen sets up protects against accidents, not against insiders. An accident is harm
+done in good faith: a user or agent takes an ordinary action and it does more than they meant (a
+plain command, a default, a typo, a wrong path, a platform difference, a check that silently lets
+everything through). An insider is anyone with legitimate access (you, the maintainers, the other
+agents), and insiders are not treated as adversaries: someone who deliberately misuses access
+they already have is out of scope. The sandbox, permissions, hooks, gates and withheld
+credentials are guard-rails against accidents, not a wall against insiders.
+
+ocgen gives every agent this mindset, in the instruction language: each subagent's file ends with
+it (OpenCode agents and prompt files too), and so does the coordinator's text, before its answer
+line. A Claude project without a coordinator agent gives it to the main session whenever that
+session runs the scope or adversary loop. In short:
+- **Agents never get around a safeguard.** One that is blocked stops and says what it needs.
+- **One test for every safety question:** could someone acting in good faith cause this through
+  ordinary use? Then it is an accident and in scope.
+- **Accidents get** a safe default, blocking when a check fails, a confirmation before anything
+  destructive, a way back (backup, dry run, undo), a message that says what happened, and a test.
+- **Insider scenarios** are not fixed, hardened or tested, never rated above Low, never sent back
+  for rework, and noted once in a final `Insider (out of scope):` section of the report.
+
+The mindset overrides any threat model in a role's own text. A project made before it existed
+gets it with `ocgen doctor`, even though its adversary keeps the outside-attacker text it was
+created with. To change the wording, edit `mindset.md.j2` (see
+[Customising the templates](#customising-the-templates)).
+
 ### Other commands
 
 ```bash
@@ -521,8 +548,8 @@ plan before you see it: a criterion or risk with no task is a gap, a task that t
 is shown as **Deferred by the scope check**, and the predicted blast radius goes into the intent
 file's Consequences. Teams without a scope guard render exactly as before.
 
-**The adversary loop.** The default team ends with `adversary`, a skeptic and outside
-attacker. It checks what the explorer found, the implementer built and the reviewer approved,
+**The adversary loop.** The default team ends with `adversary`, a skeptic that hunts accidents:
+the ways ordinary, good-faith use of the change does harm. It checks what the explorer found, the implementer built and the reviewer approved,
 and accepts no claim ("tests pass", "Confidence: 97%") without evidence. It has
 `Read, Grep, Glob, Bash`, so it can run the tests, the built binary and PoC inputs, with
 `Edit, Write, NotebookEdit` denied. Each finding carries `file:line`, a scenario, the impact and a
@@ -543,7 +570,8 @@ The two commands that produce work use it too, naming the adversary by its own n
   change. The implementer's worktree branch is merged first, and the same REWORK rounds apply.
   Unresolved findings are reported in the synthesis, never as done.
 - **`/intent`:** the adversary challenges the findings in Pass 4, in place of the explorer.
-  It then attacks the plan before you are asked to approve it, revising it for up to 2 rounds.
+  It then checks the plan for accidents before you are asked to approve it, revising it for up
+  to 2 rounds.
   Any Critical or High finding still open is listed as **UNRESOLVED** in the intent file's Risks
   and in the issue draft, and the tone check makes sure both have it.
 
@@ -1760,6 +1788,7 @@ refuses them, and a copy left by an older ocgen is marked `[embedded; override i
 ```
 manifest.toml            # wizard questions (with help text) + default provider(s)
 archetypes/*.toml        # agent role presets (mode, permissions, colour, text)
+mindset.md.j2            # the mindset every agent and the coordinator end with (accidents, not insiders)
 coordination/scope-guard.md.j2   # the coordinator's scope loop (when the team has a scope guard)
 coordination/adversary.md.j2     # the coordinator's adversary loop (when the team has one)
 coordination/response.md.j2      # the coordinator's answer line (when answers differ from instructions)
