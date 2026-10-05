@@ -23,7 +23,7 @@ use serde_json::Value;
 /// embedded in the ocgen that generated the project (hook scripts can't be
 /// overridden from the template dir), so they implement the same protocol —
 /// unless someone edits the project's copies by hand.
-pub const PROTOCOL: &str = "ocgen-hooks 12";
+pub const PROTOCOL: &str = "ocgen-hooks 13";
 
 /// Every hook `ocgen hook <name>` accepts (matching the script names minus `.sh`).
 pub const NAMES: [&str; 14] = [
@@ -1146,65 +1146,34 @@ impl<'a> Hook<'a> {
         }
     }
 
-    /// UserPromptSubmit: the word `draft`, sent on its own, opens the newest
-    /// /intent issue draft in the browser editor — from here, outside the Bash
-    /// sandbox, where a local server can start — and tells Claude what happened.
-    /// Any other prompt passes untouched. Never blocks.
+    /// UserPromptSubmit: the word `draft`, sent on its own, opens the /intent
+    /// issue draft in the browser editor — or, with several, their list, with
+    /// the one this session wrote last selected — from here, outside the Bash
+    /// sandbox, where a local server can start, and tells Claude what happened.
+    /// Any other prompt passes untouched.
+    ///
+    /// PostToolUse (Write|Edit|MultiEdit): a write to a draft makes it this
+    /// session's ([`crate::notes::draft::remember`]), silently. Never blocks.
     fn intent_draft(&self) -> Outcome {
-        use crate::notes::{draft, Shown};
+        use crate::notes::draft;
+        if self.field("hook_event_name") == "PostToolUse" {
+            self.remember_draft();
+            return Outcome::allow();
+        }
         if !draft::is_prompt(&self.field("prompt")) {
             return Outcome::allow();
         }
         let dir = self.project().join(draft::DIR);
-        let note = match draft::find(&dir, None) {
-            Err(_) => format!(
+        let all = draft::drafts(&dir);
+        let note = match all.as_slice() {
+            [] => format!(
                 "The user typed `draft` to open the /intent issue draft in their browser, but there is \
                  no issue draft in {}/ yet, so nothing was opened. /intent and /review-intent write \
                  one when they draft a GitHub issue.",
                 draft::DIR
             ),
-            Ok(md) => {
-                let rel = format!(
-                    "{}/{}",
-                    draft::DIR,
-                    md.file_name().unwrap_or_default().to_string_lossy()
-                );
-                let terminal = "`ocgen draft` in a terminal opens it in their browser";
-                let gaps = draft::gaps_of(&md);
-                let warn = if gaps.is_empty() {
-                    String::new()
-                } else {
-                    format!(
-                        " Also tell them: the draft {} — the project's approvers are now {}; GitHub \
-                         notifies only the people an issue @mentions (the page shows the same warning).",
-                        gaps.describe(),
-                        draft::approvers_for(&md).join(", ")
-                    )
-                };
-                let note = match draft::show(&md, self.env, true) {
-                    Ok(Shown::Off) => format!(
-                        "The user typed `draft`, but opening a browser is switched off here \
-                         (OCGEN_NOTES_OPEN=0). Tell them the issue draft is {rel} and that {terminal}."
-                    ),
-                    Ok(Shown::Reloaded(_) | Shown::Pending) => format!(
-                        "The user typed `draft`: the issue draft {rel} is already open in a tab of \
-                         their browser. Say so in one line and wait. Re-read the file before you use \
-                         the draft again — they may have changed it there."
-                    ),
-                    Ok(_) => format!(
-                        "The user typed `draft`: ocgen opened the issue draft {rel} in their browser, \
-                         where they can edit the raw Markdown and save it to that file, preview it the \
-                         way GitHub shows it, and copy it. Say so in one line and wait (if they meant \
-                         something else by `draft`, answer that instead). Re-read the file before you \
-                         use the draft again — they may have changed it."
-                    ),
-                    Err(e) => format!(
-                        "The user typed `draft`, but ocgen could not open the issue draft {rel} in the \
-                         browser ({e:#}). Tell them so, and that {terminal}."
-                    ),
-                };
-                format!("{note}{warn}")
-            }
+            [md] => self.open_draft(md),
+            _ => self.open_draft_list(&dir, all.len()),
         };
         let out = serde_json::json!({
             "hookSpecificOutput": { "hookEventName": "UserPromptSubmit", "additionalContext": note }
@@ -1214,6 +1183,134 @@ impl<'a> Hook<'a> {
             stdout: format!("{out}\n"),
             stderr: String::new(),
         }
+    }
+
+    /// After a write: remember the draft written, if it is one of this project's.
+    /// A probe changes nothing.
+    fn remember_draft(&self) {
+        use crate::notes::draft;
+        let path = self
+            .json
+            .pointer("/tool_input/file_path")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        if path.is_empty() || self.probe() {
+            return;
+        }
+        let root = self.project();
+        let file = match Path::new(path) {
+            p if p.is_absolute() => p.to_path_buf(),
+            p => root.join(p),
+        };
+        let Some(rel) = relative_to(&file, &root) else {
+            return;
+        };
+        let Some(slug) = draft::draft_target(&format!("/{rel}")) else {
+            return;
+        };
+        if rel == format!("{}/{slug}.md", draft::DIR) && file.is_file() {
+            draft::remember(&root.join(draft::DIR), &self.field("session_id"), &slug);
+        }
+    }
+
+    /// The approvers warning for draft `md`, if it falls short of them.
+    fn draft_gaps_warning(md: &Path) -> String {
+        use crate::notes::draft;
+        let gaps = draft::gaps_of(md);
+        if gaps.is_empty() {
+            return String::new();
+        }
+        format!(
+            " Also tell them: the draft {} — the project's approvers are now {}; GitHub \
+             notifies only the people an issue @mentions (the page shows the same warning).",
+            gaps.describe(),
+            draft::approvers_for(md).join(", ")
+        )
+    }
+
+    /// The one draft there is, opened in the editor: what to tell Claude.
+    fn open_draft(&self, md: &Path) -> String {
+        use crate::notes::{draft, Shown};
+        let rel = format!(
+            "{}/{}",
+            draft::DIR,
+            md.file_name().unwrap_or_default().to_string_lossy()
+        );
+        let terminal = "`ocgen draft` in a terminal opens it in their browser";
+        let note = match draft::show(md, self.env, true) {
+            Ok(Shown::Off) => format!(
+                "The user typed `draft`, but opening a browser is switched off here \
+                 (OCGEN_NOTES_OPEN=0). Tell them the issue draft is {rel} and that {terminal}."
+            ),
+            Ok(Shown::Reloaded(_) | Shown::Pending) => format!(
+                "The user typed `draft`: the issue draft {rel} is already open in a tab of \
+                 their browser. Say so in one line and wait. Re-read the file before you use \
+                 the draft again — they may have changed it there."
+            ),
+            Ok(_) => format!(
+                "The user typed `draft`: ocgen opened the issue draft {rel} in their browser, \
+                 where they can edit the raw Markdown and save it to that file, preview it the \
+                 way GitHub shows it, and copy it. Say so in one line and wait (if they meant \
+                 something else by `draft`, answer that instead). Re-read the file before you \
+                 use the draft again — they may have changed it."
+            ),
+            Err(e) => format!(
+                "The user typed `draft`, but ocgen could not open the issue draft {rel} in the \
+                 browser ({e:#}). Tell them so, and that {terminal}."
+            ),
+        };
+        format!("{note}{}", Self::draft_gaps_warning(md))
+    }
+
+    /// Several drafts: their list, opened with this session's draft selected —
+    /// what to tell Claude.
+    fn open_draft_list(&self, dir: &Path, count: usize) -> String {
+        use crate::notes::{draft, Shown};
+        let mine = draft::session_draft(dir, &self.field("session_id"));
+        let rel = mine.as_ref().map(|s| format!("{}/{s}.md", draft::DIR));
+        let reread = "Re-read whichever draft they name before you use it again — they may have \
+                      changed it there.";
+        let note = match draft::show_list(dir, mine.as_deref(), self.env, true) {
+            Ok(Shown::Off) => format!(
+                "The user typed `draft`, but opening a browser is switched off here \
+                 (OCGEN_NOTES_OPEN=0). Tell them that `ocgen draft` in a terminal opens the list \
+                 of the {count} issue drafts in {}/ to pick from, and `ocgen draft <name>` opens \
+                 one{}.",
+                draft::DIR,
+                rel.as_ref()
+                    .map(|r| format!("; the one this session last wrote is {r}"))
+                    .unwrap_or_default()
+            ),
+            Ok(Shown::Reloaded(_) | Shown::Pending) => format!(
+                "The user typed `draft`: the list of {count} issue drafts is already open in a tab \
+                 of their browser, and ocgen moved it {}. Say so in one line and wait: they pick \
+                 the draft there. {reread}",
+                match &rel {
+                    Some(r) => format!("to {r}, the draft this session last wrote"),
+                    None => "to its first page (this session hasn't written a draft)".to_string(),
+                }
+            ),
+            Ok(_) => format!(
+                "The user typed `draft`: ocgen opened the list of {count} issue drafts in their \
+                 browser ({} a page, newest first), {}. They pick the one to open there, in the \
+                 browser editor. Say so in one line and wait (if they meant something else by \
+                 `draft`, answer that instead). {reread}",
+                draft::PER_PAGE,
+                match &rel {
+                    Some(r) => format!("with {r} — the draft this session last wrote — selected"),
+                    None => "with none selected (this session hasn't written a draft)".to_string(),
+                }
+            ),
+            Err(e) => format!(
+                "The user typed `draft`, but ocgen could not open the list of issue drafts in the \
+                 browser ({e:#}). Tell them so, and that `ocgen draft` in a terminal lists them and \
+                 `ocgen draft <name>` opens one."
+            ),
+        };
+        let warn = mine
+            .map(|s| Self::draft_gaps_warning(&dir.join(format!("{s}.md"))))
+            .unwrap_or_default();
+        format!("{note}{warn}")
     }
 
     /// PostToolUse (Write|Edit|MultiEdit): after a write to a pending /intent file

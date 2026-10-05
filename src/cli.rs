@@ -158,10 +158,13 @@ pub enum Command {
     /// and copy it.
     ///
     /// /intent writes the GitHub issue description to .claude/intent/drafts/<name>.md.
-    /// Typing `draft` on its own in Claude Code opens the newest one the same way.
+    /// With several drafts and no name, it opens their list to pick from, 10 a page,
+    /// newest first. Typing `draft` on its own in Claude Code does the same, with the
+    /// draft that session wrote last selected.
     #[command(after_help = DRAFT_EXAMPLES)]
     Draft {
-        /// The draft's name, or its start (e.g. ADR-0007); default: the newest.
+        /// The draft's name, or its start (e.g. ADR-0007); default: the only draft, or
+        /// the list of them.
         name: Option<String>,
         /// Directory inside the project (default: current dir).
         #[arg(long, short, default_value = ".")]
@@ -170,7 +173,7 @@ pub enum Command {
 }
 
 const DRAFT_EXAMPLES: &str = "Examples:
-  ocgen draft                            the most recently changed draft
+  ocgen draft                            the only draft, or the list of them to pick from
   ocgen draft ADR-0007                   by the intent it belongs to
   ocgen draft issue-retry-budget         by file name
   ocgen draft issue-review-feat-retry    a /review-intent draft, by file name

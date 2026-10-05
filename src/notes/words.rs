@@ -103,6 +103,25 @@ pub struct DraftWords {
     /// The button that joins them.
     pub join_lines: &'static str,
     pub footer: &'static str,
+    /// The editor's link to the list of drafts.
+    pub all_drafts: &'static str,
+    /// The list of drafts: its title, its pager (`{page}`, `{pages}`) and its
+    /// count (`{count}`).
+    pub list_title: &'static str,
+    pub newer: &'static str,
+    pub older: &'static str,
+    pub page_of: &'static str,
+    pub count: &'static str,
+    /// Before the approvers a listed draft doesn't @mention.
+    pub misses: &'static str,
+    /// A listed draft still says "No approvers configured".
+    pub says_none_short: &'static str,
+    /// The list's keys (HTML: `<kbd>`), its footer, its offline banner (HTML: it
+    /// names a command), and what it shows with no drafts.
+    pub list_keys: &'static str,
+    pub list_footer: &'static str,
+    pub list_offline: &'static str,
+    pub none_yet: &'static str,
 }
 
 pub static ENGLISH: Words = Words {
@@ -169,6 +188,18 @@ pub static ENGLISH: Words = Words {
         wrapped: "GitHub shows every newline in an issue as a line break. Lines wrapped by hand mid-sentence:",
         join_lines: "Join them",
         footer: "Save writes the file named above — the one gh issue create --body-file files on GitHub.",
+        all_drafts: "All drafts",
+        list_title: "Issue drafts",
+        newer: "‹ Newer",
+        older: "Older ›",
+        page_of: "Page {page} of {pages}",
+        count: "{count} drafts · newest first",
+        misses: "Doesn’t @mention:",
+        says_none_short: "Says “No approvers configured”",
+        list_keys: "<kbd>↑</kbd> <kbd>↓</kbd> choose · <kbd>Enter</kbd> opens · <kbd>←</kbd> <kbd>→</kbd> newer or older",
+        list_footer: "Open a draft to edit it. The list follows the folder: it refreshes when a draft changes.",
+        list_offline: "Editor disconnected — this list won’t refresh. Run <code>ocgen draft</code> to reconnect.",
+        none_yet: "No issue drafts yet.",
     },
     lenses: [
         ("Structure", "Structure"),
@@ -258,6 +289,18 @@ pub static UKRAINIAN: Words = Words {
         wrapped: "GitHub показує кожен перенос рядка в задачі як розрив рядка. Рядків, перенесених вручну посеред речення:",
         join_lines: "Об’єднати їх",
         footer: "Кнопка «Зберегти» записує файл, указаний вище, — саме його подає на GitHub команда gh issue create --body-file.",
+        all_drafts: "Усі чернетки",
+        list_title: "Чернетки GitHub issue",
+        newer: "‹ Новіші",
+        older: "Старіші ›",
+        page_of: "Сторінка {page} з {pages}",
+        count: "Чернеток: {count} · найновіші вгорі",
+        misses: "Не згадує через @:",
+        says_none_short: "Досі написано «No approvers configured»",
+        list_keys: "<kbd>↑</kbd> <kbd>↓</kbd> — вибрати · <kbd>Enter</kbd> — відкрити · <kbd>←</kbd> <kbd>→</kbd> — новіші або старіші",
+        list_footer: "Відкрийте чернетку, щоб редагувати її. Список стежить за текою й оновлюється, коли чернетка змінюється.",
+        list_offline: "Редактор від’єднано — список не оновлюватиметься. Щоб під’єднатися знову, виконайте <code>ocgen draft</code>.",
+        none_yet: "Чернеток ще немає.",
     },
     lenses: [
         ("Structure", "Структура"),

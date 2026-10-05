@@ -984,7 +984,7 @@ fn inquire_notes_renders_the_view_and_the_script_is_a_no_op() {
     assert_eq!(o.code, 0);
     assert!(o.stderr.starts_with("inquire-notes:"), "{o:?}");
     assert!(ocgen::hooks::NAMES.contains(&"inquire-notes"));
-    assert_eq!(ocgen::hooks::PROTOCOL, "ocgen-hooks 12");
+    assert_eq!(ocgen::hooks::PROTOCOL, "ocgen-hooks 13");
 }
 
 // ---------------------------------------------------------- intent-draft --
@@ -1013,6 +1013,15 @@ fn intent_draft_parity() {
             step(r#"{"prompt":"draft the issue"}"#, write_draft),
             step(r#"{"prompt":""}"#, none),
             step("not json", none),
+            // A write is remembered silently (the binary) or not at all (the script).
+            step(
+                r#"{"hook_event_name":"PostToolUse","session_id":"s-1","tool_name":"Write","tool_input":{"file_path":"{dir}/.claude/intent/drafts/adr-0001-cache.md"}}"#,
+                write_draft,
+            ),
+            step(
+                r#"{"hook_event_name":"PostToolUse","session_id":"s-1","tool_name":"Write","tool_input":{"file_path":"{dir}/src/main.rs"}}"#,
+                none,
+            ),
         ],
     );
 }
@@ -1134,22 +1143,27 @@ fn intent_draft_opens_on_the_one_word_and_the_script_is_a_no_op() {
     let ctx = draft_context(&run("draft", &env));
     assert!(ctx.contains("no issue draft"), "{ctx}");
 
-    // With a draft: the word (any case, surrounding space) finds the newest one.
+    // One draft: the word (any case, surrounding space) opens it.
     write_draft(dir.path());
-    std::thread::sleep(std::time::Duration::from_millis(20));
-    let newer = dir
-        .path()
-        .join(".claude/intent/drafts/issue-retry-budget.md");
-    fs::write(&newer, ISSUE_DRAFT).unwrap();
     for word in ["draft", " Draft \n", "DRAFT"] {
         let ctx = draft_context(&run(word, &env));
         assert!(
-            ctx.contains(".claude/intent/drafts/issue-retry-budget.md"),
+            ctx.contains(".claude/intent/drafts/adr-0001-cache.md"),
             "{word:?}: {ctx}"
         );
         // Opening is switched off here: the model hears why and the way round it.
         assert!(ctx.contains("ocgen draft"), "{ctx}");
     }
+    // Several: the list to pick from.
+    let newer = dir
+        .path()
+        .join(".claude/intent/drafts/issue-retry-budget.md");
+    fs::write(&newer, ISSUE_DRAFT).unwrap();
+    let ctx = draft_context(&run("draft", &env));
+    assert!(
+        ctx.contains("2 issue drafts") && ctx.contains("ocgen draft <name>"),
+        "{ctx}"
+    );
     // Only the word on its own.
     for other in ["draft it", "a draft", "drafts", "/draft"] {
         assert_eq!(draft_context(&run(other, &env)), "", "{other:?}");
@@ -1160,6 +1174,83 @@ fn intent_draft_opens_on_the_one_word_and_the_script_is_a_no_op() {
     let (code, out, _) = sh(dir.path(), "intent-draft", &env, &payload);
     assert_eq!((code, out.as_str()), (0, ""));
     assert!(ocgen::hooks::NAMES.contains(&"intent-draft"));
+}
+
+#[test]
+fn intent_draft_remembers_the_draft_a_session_writes_and_names_it() {
+    let dir = project();
+    let d = ocgen::paths::for_shell(dir.path());
+    let mut env: HashMap<String, String> = NO_BROWSER
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+    env.insert("CLAUDE_PROJECT_DIR".into(), d.clone());
+    let drafts = dir.path().join(".claude/intent/drafts");
+    write_draft(dir.path());
+    fs::write(drafts.join("issue-retry-budget.md"), ISSUE_DRAFT).unwrap();
+    let wrote = |sid: &str, path: &str, env: &HashMap<String, String>| {
+        let payload = serde_json::json!({
+            "hook_event_name": "PostToolUse", "session_id": sid, "tool_name": "Edit",
+            "tool_input": { "file_path": path }
+        });
+        let o = ocgen::hooks::run("intent-draft", &payload.to_string(), env);
+        assert_eq!(
+            (o.code, o.stdout.as_str(), o.stderr.as_str()),
+            (0, "", ""),
+            "{o:?}"
+        );
+    };
+    let said = |sid: &str| {
+        let payload = serde_json::json!({
+            "hook_event_name": "UserPromptSubmit", "session_id": sid, "prompt": "draft"
+        });
+        draft_context(&ocgen::hooks::run(
+            "intent-draft",
+            &payload.to_string(),
+            &env,
+        ))
+    };
+
+    // A write to a draft, by absolute or project-relative path, is remembered.
+    wrote(
+        "s-1",
+        &format!("{d}/.claude/intent/drafts/adr-0001-cache.md"),
+        &env,
+    );
+    wrote("s-2", ".claude/intent/drafts/issue-retry-budget.md", &env);
+    let rec = |sid| ocgen::notes::draft::session_draft(&drafts, sid);
+    assert_eq!(rec("s-1").as_deref(), Some("adr-0001-cache"));
+    assert_eq!(rec("s-2").as_deref(), Some("issue-retry-budget"));
+    // Anything else, or a probe, is not.
+    wrote("s-3", &format!("{d}/src/main.rs"), &env);
+    wrote(
+        "s-3",
+        &format!("{d}/.claude/intent/view/adr-0001-cache.md"),
+        &env,
+    );
+    let mut probe = env.clone();
+    probe.insert("OCGEN_HOOK_PROBE".into(), "1".into());
+    wrote(
+        "s-3",
+        &format!("{d}/.claude/intent/drafts/adr-0001-cache.md"),
+        &probe,
+    );
+    assert_eq!(rec("s-3"), None);
+
+    // `draft` names the session's own draft, whichever is newest.
+    let ctx = said("s-1");
+    assert!(
+        ctx.contains("2 issue drafts") && ctx.contains(".claude/intent/drafts/adr-0001-cache.md"),
+        "{ctx}"
+    );
+    let ctx = said("s-2");
+    assert!(ctx.contains("issue-retry-budget.md"), "{ctx}");
+    // A session that wrote none: the list, nothing named.
+    let ctx = said("s-9");
+    assert!(
+        ctx.contains("2 issue drafts") && !ctx.contains(".md"),
+        "{ctx}"
+    );
 }
 
 // ---------------------------------------------------------- drop-noop-cd --

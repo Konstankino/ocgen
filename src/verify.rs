@@ -1806,7 +1806,8 @@ fn intent_approvers(project: &Project, root: &Path) -> Check {
 }
 
 /// The /intent draft review: the word `draft` gets a note for Claude about
-/// opening the issue draft, and any other prompt passes untouched. Probed with
+/// opening the issue draft, and any other prompt passes untouched; a write to a
+/// draft passes silently (the hook remembers it as the session's). Probed with
 /// the browser switched off, in the project itself (it writes nothing then).
 fn draft_review(p: &Probe) -> Check {
     let name = "/intent draft review";
@@ -1816,19 +1817,52 @@ fn draft_review(p: &Probe) -> Check {
     if let Some(what) = p.hand_edited(&event, &group, &cmd) {
         return check(name, Status::Warn, not_run(&what));
     }
+    // Without the write hook, `draft` can't select the session's draft.
+    let Some((w_event, w_group, w_cmd)) = p.find("PostToolUse", "intent-draft") else {
+        return check(
+            name,
+            Status::Fail,
+            "no write hook to remember the session's draft — run `ocgen doctor`",
+        );
+    };
+    if let Some(what) = p.hand_edited(&w_event, &w_group, &w_cmd) {
+        return check(name, Status::Warn, not_run(&what));
+    }
     let mut env = p.env.clone();
     env.insert("OCGEN_NOTES_OPEN".into(), "0".into());
-    let run = |prompt: &str| {
-        let ev = serde_json::json!({
-            "session_id": "ocgen-verify", "hook_event_name": "UserPromptSubmit", "prompt": prompt
-        })
-        .to_string();
-        run_sh(p.sh, &cmd, &ev, &env, p.root, Duration::from_secs(20))
+    let run = |cmd: &str, ev: serde_json::Value| {
+        run_sh(
+            p.sh,
+            cmd,
+            &ev.to_string(),
+            &env,
+            p.root,
+            Duration::from_secs(20),
+        )
     };
-    let (Some(other), Some(word)) = (run("ocgen verify"), run(crate::notes::draft::WORD)) else {
+    let prompt = |prompt: &str| {
+        run(
+            &cmd,
+            serde_json::json!({
+                "session_id": "ocgen-verify", "hook_event_name": "UserPromptSubmit", "prompt": prompt
+            }),
+        )
+    };
+    let wrote = run(
+        &w_cmd,
+        serde_json::json!({
+            "session_id": "ocgen-verify", "hook_event_name": "PostToolUse", "tool_name": "Write",
+            "tool_input": { "file_path": format!("{}/ocgen-verify.md", crate::notes::draft::DIR) }
+        }),
+    );
+    let (Some(other), Some(word), Some(wrote)) = (
+        prompt("ocgen verify"),
+        prompt(crate::notes::draft::WORD),
+        wrote,
+    ) else {
         return check(name, Status::Fail, "the hook did not finish");
     };
-    if let Some((code, _, err)) = [&other, &word].into_iter().find(|o| o.0 != 0) {
+    if let Some((code, _, err)) = [&other, &word, &wrote].into_iter().find(|o| o.0 != 0) {
         return check(
             name,
             Status::Fail,
@@ -1845,11 +1879,18 @@ fn draft_review(p: &Probe) -> Check {
             "the hook answered a prompt other than `draft` — run `ocgen doctor`",
         );
     }
+    if !wrote.1.trim().is_empty() {
+        return check(
+            name,
+            Status::Fail,
+            "the hook answered a write to a draft — run `ocgen doctor`",
+        );
+    }
     if word.1.contains("additionalContext") {
         check(
             name,
             Status::Pass,
-            "`draft` on its own opens the issue draft in a browser editor",
+            "`draft` on its own opens the issue draft (or their list) in a browser editor",
         )
     } else if !ocgen_hook_ok() {
         check(

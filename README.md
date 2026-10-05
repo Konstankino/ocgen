@@ -955,9 +955,18 @@ its trigger, impact and severity, plus its evidence or a link to it in the inten
 comments stay in the template and out of the draft.
 
 **Review the draft in your browser.** When `/intent` shows the draft it suggests this. Type
-**`draft`** (the word alone, as your whole message) and the newest issue draft opens in your
+**`draft`** (the word alone, as your whole message) and the issue draft opens in your
 browser, in a quiet local editor: one centered column of text on a black page (a **White** palette
-is one click away), with the controls fading while you type. There you can:
+is one click away), with the controls fading while you type.
+
+**Several drafts: you pick.** With more than one draft, `draft` opens their list first: 10 a page,
+newest first, each with its first line, when it changed, its issue and status, and a warning if it
+misses an approver. The draft this session wrote last is already selected, on its page, even when
+another draft changed after it. ↑/↓ and Enter (or a click) open one, ←/→ turn the page, and the
+editor's **← All drafts** leads back. The list refreshes when a draft changes; `draft` sent again
+moves the open list to the session's draft instead of opening another tab.
+
+In the editor you can:
 
 - **Edit it as text:** headings, bold, lists, task lists and tables show formatted, with the
   Markdown syntax hidden ([Milkdown](https://milkdown.dev)). Type Markdown as you go (`## ` makes a
@@ -996,9 +1005,12 @@ tone check, so if one drops or softens a flaw of Medium or higher, Claude tells 
 you decide.
 A change Claude makes while the page is open shows up in it; if you have unsaved edits, the page asks
 whether to load the file or keep yours. Saving never silently replaces a newer file. From a
-terminal, `ocgen draft [name]` does the same (`ocgen draft ADR-0007` picks a draft by its intent).
+terminal, `ocgen draft [name]` does the same: with several drafts and no name it opens the list with
+nothing selected, and `ocgen draft ADR-0007` opens a draft by its intent.
 
-A `UserPromptSubmit` hook (`intent-draft`) catches the word and starts the editor. Hooks run outside
+A `UserPromptSubmit` hook (`intent-draft`) catches the word and starts the editor. The same hook runs
+after each write (`PostToolUse`) and remembers the draft the session wrote last, one small file per
+session in `.claude/intent/drafts/.sessions/` (git-ignored like the drafts, kept a month). Hooks run outside
 Claude Code's Bash sandbox, where a local server can start; inside the sandbox it can't. Any other
 prompt passes through untouched. The editor is the same loopback viewer as `/inquire`'s pages,
 behind a random token and same-origin checks for saving. The draft's text can't run scripts or load
@@ -1375,7 +1387,7 @@ and inside the ocgen binary (`ocgen hook <name>`). The generated hook command us
 binary when a compatible ocgen is installed, and the script otherwise:
 
 ```sh
-if [ "$(ocgen hook --check 2>/dev/null)" = "ocgen-hooks 12" ]; then ocgen hook team-approval-gate; else sh ".../team-approval-gate.sh"; fi
+if [ "$(ocgen hook --check 2>/dev/null)" = "ocgen-hooks 13" ]; then ocgen hook team-approval-gate; else sh ".../team-approval-gate.sh"; fi
 ```
 
 - **The binary gives you** real JSON parsing instead of `grep`, and hooks that work on
@@ -1654,7 +1666,7 @@ for a plugin; `--team` is off by default. (The `--base-url` flag is OpenCode-onl
 | `ocgen verify [dir] --run-check` | Also run the project's committed check command, as you and unsandboxed (only on a repository you trust). |
 | `ocgen notes open [topic]` | Show an `/inquire` ledger's HTML page: refresh the tab that shows it, or open one ([details](#the-visual-ledger)). |
 | `ocgen notes render <file.md>…` | Render `/inquire` ledgers (`.claude/notes/<topic-slug>.md`) and `/intent` reading copies (`.claude/intent/view/<name>.md`) to their HTML pages without opening them; any other file is refused. |
-| `ocgen draft [name] [-p dir]` | Open an `/intent` or `/review-intent` issue draft (`.claude/intent/drafts/<name>.md`) in a local browser editor: edit it as formatted text (Markdown syntax hidden) or as Markdown source, save it back as plain Markdown (untouched blocks keep their exact text), preview it as GitHub shows it, and copy it. A calm black page by default (white on request), the text around the cursor dimmed, and a Focus button for full screen. With no name, the newest; `ADR-0007` picks by intent. Typing `draft` in Claude Code does the same ([details](#from-findings-to-a-github-issue-intent)). |
+| `ocgen draft [name] [-p dir]` | Open an `/intent` or `/review-intent` issue draft (`.claude/intent/drafts/<name>.md`) in a local browser editor: edit it as formatted text (Markdown syntax hidden) or as Markdown source, save it back as plain Markdown (untouched blocks keep their exact text), preview it as GitHub shows it, and copy it. A calm black page by default (white on request), the text around the cursor dimmed, and a Focus button for full screen. With no name, the only draft, or with several, their list to pick from (10 a page, newest first); `ADR-0007` picks by intent. Typing `draft` in Claude Code does the same, with the draft that session wrote last selected in the list ([details](#from-findings-to-a-github-issue-intent)). |
 | `ocgen managed-settings` | Print a recommended organisation policy (`managed-settings.json`): no bypass mode, secrets unreadable, high-impact commands always ask, strict sandbox. |
 | `ocgen fields` (alias `reference`) | Explain every configurable field, including the Claude-specific ones (alias, tools, skills, output/plugin, agent teams). |
 

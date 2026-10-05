@@ -1,14 +1,15 @@
 //! The /intent issue draft's browser review: the Markdown preview, the editor
-//! page, and — end to end through the real binary — `ocgen draft` opening the
-//! newest draft in a local editor that saves back to the file. The browser is a
-//! fake (`OCGEN_NOTES_BROWSER`) that logs the URLs it is asked to open.
+//! page, the list of drafts, and — end to end through the real binary — `ocgen
+//! draft` and the `draft` word opening a draft (or, with several, the list) in a
+//! local editor that saves back to the file. The browser is a fake
+//! (`OCGEN_NOTES_BROWSER`) that logs the URLs it is asked to open.
 
 use std::fs;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use ocgen::notes::draft;
 use ocgen::notes::viewer::{self, Info};
@@ -363,6 +364,173 @@ fn drafts_are_found_newest_first_and_by_name() {
     assert_eq!(draft::draft_target("/p/.claude/intent/drafts/X Y.md"), None);
 }
 
+/// Set `p`'s modification time.
+fn touch(p: &Path, t: SystemTime) {
+    fs::File::options()
+        .write(true)
+        .open(p)
+        .unwrap()
+        .set_modified(t)
+        .unwrap();
+}
+
+/// `n` drafts, `adr-0001-topic` to `adr-00nn-topic`, each a minute newer than
+/// the one before: the last is the newest.
+fn many_drafts(drafts: &Path, n: usize) -> Vec<String> {
+    let base = SystemTime::now() - Duration::from_secs(24 * 3600);
+    (1..=n)
+        .map(|i| {
+            let slug = format!("adr-{i:04}-topic");
+            let p = drafts.join(format!("{slug}.md"));
+            fs::write(&p, format!("## Intent\nTopic number {i}.\n")).unwrap();
+            touch(&p, base + Duration::from_secs(60 * i as u64));
+            slug
+        })
+        .collect()
+}
+
+#[test]
+fn drafts_are_listed_ten_a_page_newest_first() {
+    let dir = tempfile::tempdir().unwrap();
+    let drafts = dir.path().join(".claude/intent/drafts");
+    fs::create_dir_all(&drafts).unwrap();
+    let slugs = many_drafts(&drafts, 23);
+    let all = draft::drafts(&drafts);
+    assert_eq!(draft::PER_PAGE, 10);
+    for (n, pages) in [(0, 1), (1, 1), (10, 1), (11, 2), (23, 3)] {
+        assert_eq!(draft::pages(n), pages, "{n} drafts");
+    }
+    // Newest first: 23 to 14 on page 1, 13 to 4 on page 2, 3 to 1 on page 3.
+    for (i, page) in [(22, 1), (13, 1), (12, 2), (3, 2), (2, 3), (0, 3)] {
+        assert_eq!(draft::page_of(&all, Some(&slugs[i])), page, "{}", slugs[i]);
+    }
+    assert_eq!(draft::page_of(&all, None), 1);
+    assert_eq!(draft::page_of(&all, Some("adr-9999-gone")), 1);
+}
+
+#[test]
+fn a_session_remembers_the_draft_it_wrote_last() {
+    let dir = tempfile::tempdir().unwrap();
+    let drafts = dir.path().join(".claude/intent/drafts");
+    fs::create_dir_all(&drafts).unwrap();
+    fs::write(drafts.join("adr-0082-cache.md"), DRAFT).unwrap();
+    fs::write(drafts.join("adr-0084-retry.md"), DRAFT).unwrap();
+    assert_eq!(draft::session_draft(&drafts, "s-1"), None);
+
+    assert!(draft::remember(&drafts, "s-1", "adr-0082-cache"));
+    assert!(draft::remember(&drafts, "s-1", "adr-0084-retry"));
+    assert!(draft::remember(&drafts, "s-2", "adr-0082-cache"));
+    assert_eq!(
+        draft::session_draft(&drafts, "s-1").as_deref(),
+        Some("adr-0084-retry")
+    );
+    assert_eq!(
+        draft::session_draft(&drafts, "s-2").as_deref(),
+        Some("adr-0082-cache")
+    );
+    // The records are neither drafts nor in git (the folder ignores itself).
+    assert_eq!(draft::drafts(&drafts).len(), 2);
+
+    // A draft that is gone is no session's.
+    fs::remove_file(drafts.join("adr-0084-retry.md")).unwrap();
+    assert_eq!(draft::session_draft(&drafts, "s-1"), None);
+
+    // Only a plain session id and a draft's slug make a record.
+    for bad in ["", "../x", "a/b", "x y", "s\\1"] {
+        assert!(!draft::remember(&drafts, bad, "adr-0082-cache"), "{bad:?}");
+    }
+    assert!(!draft::remember(&drafts, "s-3", "../../etc/passwd"));
+    assert_eq!(draft::session_draft(&drafts, "../s-1"), None);
+
+    // A record older than a month is dropped on the next write.
+    let old = drafts.join(draft::SESSIONS).join("s-old");
+    fs::write(&old, "adr-0082-cache").unwrap();
+    touch(
+        &old,
+        SystemTime::now() - Duration::from_secs(31 * 24 * 3600),
+    );
+    assert!(draft::remember(&drafts, "s-1", "adr-0082-cache"));
+    assert!(!old.exists(), "pruned");
+    assert!(drafts.join(draft::SESSIONS).join("s-2").exists(), "kept");
+}
+
+#[test]
+fn a_draft_is_summed_up_by_its_first_line_of_text() {
+    assert_eq!(draft::summary(DRAFT), "Deploys keep the cache warm.");
+    assert_eq!(
+        draft::summary("<!-- Issue: https://github.com/o/r/issues/84 -->\n<!--\nmany\nlines\n-->\n\n# Title\n\n**Bold** start\n"),
+        "**Bold** start"
+    );
+    assert_eq!(draft::summary("## Only headings\n"), "");
+    let long = format!("## Intent\n{}\n", "word ".repeat(60));
+    let s = draft::summary(&long);
+    assert!(s.chars().count() <= 121 && s.ends_with('…'), "{s}");
+}
+
+#[test]
+fn the_list_shows_ten_drafts_a_page_with_the_selected_one_marked() {
+    let dir = tempfile::tempdir().unwrap();
+    let drafts = dir.path().join(".claude/intent/drafts");
+    fs::create_dir_all(&drafts).unwrap();
+    let slugs = many_drafts(&drafts, 23);
+    // Its text is the draft's, never markup.
+    let tricky = drafts.join(format!("{}.md", slugs[5]));
+    fs::write(
+        &tricky,
+        "<!-- Issue: https://github.com/o/r/issues/84 -->\n<!-- Status: Accepted -->\n## Intent\n<img src=x onerror=alert(1)> cache\n",
+    )
+    .unwrap();
+    touch(
+        &tricky,
+        SystemTime::now() - Duration::from_secs(24 * 3600) + Duration::from_secs(6 * 60),
+    );
+
+    let page = draft::list_page(&drafts, None, Some(&slugs[12]), "../", "n0nce").unwrap();
+    // Page 2 of 3: drafts 13 to 4, newest first.
+    let shown: Vec<&str> = regex::Regex::new(r#"data-slug="([^"]+)""#)
+        .unwrap()
+        .captures_iter(&page)
+        .map(|c| c.get(1).unwrap().as_str())
+        .collect();
+    let want: Vec<&str> = slugs[3..=12].iter().rev().map(String::as_str).collect();
+    assert_eq!(shown, want);
+    // The selected one is marked, and each links to its editor.
+    let selected = regex::Regex::new(r#"data-slug="([^"]+)"[^>]*aria-current="true""#)
+        .unwrap()
+        .captures(&page)
+        .expect("a selected row")[1]
+        .to_string();
+    assert_eq!(selected, slugs[12]);
+    assert!(
+        page.contains(&format!(r#"href="../{}.html""#, slugs[12])),
+        "{page}"
+    );
+    // The pager: newer is page 1, older page 3.
+    assert!(
+        page.contains(r#"href="?page=1""#) && page.contains(r#"href="?page=3""#),
+        "{page}"
+    );
+    assert!(page.contains("Page 2 of 3"), "{page}");
+    assert!(page.contains(r#"<script nonce="n0nce">"#));
+    // The draft's markers, and its text as text.
+    assert!(page.contains("https://github.com/o/r/issues/84") && page.contains("Accepted"));
+    assert!(
+        page.contains("&lt;img src=x") && !page.contains("<img src=x"),
+        "{page}"
+    );
+
+    // Asked for a page: that page, the selection kept; out of range: the last.
+    let page3 = draft::list_page(&drafts, Some(3), Some(&slugs[12]), "../", "n").unwrap();
+    assert_eq!(page3.matches("data-slug=").count(), 3);
+    assert!(!page3.contains(r#"aria-current="true""#));
+    let last = draft::list_page(&drafts, Some(9), None, "./", "n").unwrap();
+    assert!(last.contains("Page 3 of 3"));
+    // Nothing selected: page 1, no mark.
+    let first = draft::list_page(&drafts, None, None, "./", "n").unwrap();
+    assert!(first.contains("Page 1 of 3") && !first.contains(r#"aria-current="true""#));
+    assert!(first.contains(&format!(r#"href="./{}.html""#, slugs[22])));
+}
+
 // ------------------------------------------------------ live editor e2e --
 
 struct Project {
@@ -415,6 +583,60 @@ impl Project {
             .unwrap();
         assert_eq!(out.status.code(), Some(0), "{out:?}");
         out
+    }
+
+    /// `ocgen hook intent-draft` with `event` on stdin, as Claude Code runs it.
+    fn hook(&self, event: serde_json::Value) -> String {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_ocgen"))
+            .args(["hook", "intent-draft"])
+            .current_dir(self.dir.path())
+            .env(
+                "CLAUDE_PROJECT_DIR",
+                ocgen::paths::for_shell(self.dir.path()),
+            )
+            .env("OCGEN_NOTES_OPEN", "1")
+            .env("OCGEN_NOTES_BROWSER", &self.browser)
+            .env("OCGEN_NOTES_BROWSER_WAIT", "1")
+            .env("OCGEN_NOTES_GRACE_MS", "5000")
+            .env("OCGEN_NOTES_IDLE_SECS", "60")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(event.to_string().as_bytes())
+            .unwrap();
+        let out = child.wait_with_output().unwrap();
+        assert_eq!(out.status.code(), Some(0), "never blocks: {out:?}");
+        let said = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if said.is_empty() {
+            return said;
+        }
+        let v: serde_json::Value = serde_json::from_str(&said).unwrap();
+        v["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    }
+
+    /// The hook after Claude writes draft `name` in session `sid`.
+    fn wrote(&self, sid: &str, name: &str) -> String {
+        let file = ocgen::paths::for_shell(&self.drafts().join(name));
+        self.hook(serde_json::json!({
+            "hook_event_name": "PostToolUse", "session_id": sid,
+            "tool_name": "Write", "tool_input": { "file_path": file }
+        }))
+    }
+
+    /// The hook when the user sends `draft` in session `sid`.
+    fn word(&self, sid: &str) -> String {
+        self.hook(serde_json::json!({
+            "hook_event_name": "UserPromptSubmit", "session_id": sid, "prompt": "draft"
+        }))
     }
 
     fn opened(&self) -> Vec<String> {
@@ -506,10 +728,15 @@ struct Tab(TcpStream);
 
 impl Tab {
     fn connect(info: &Info, rev: &str) -> Tab {
+        Tab::on(info, "adr-0001-cache", rev)
+    }
+
+    /// A tab of `topic`: a draft's slug, or the list's.
+    fn on(info: &Info, topic: &str, rev: &str) -> Tab {
         let mut s = TcpStream::connect(SocketAddr::from(([127, 0, 0, 1], info.port))).unwrap();
         write!(
             s,
-            "GET /{}/events?topic=adr-0001-cache&rev={rev} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\n\r\n",
+            "GET /{}/events?topic={topic}&rev={rev} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\n\r\n",
             info.token, info.port
         )
         .unwrap();
@@ -598,6 +825,117 @@ fn ocgen_draft_opens_the_newest_draft_in_a_local_editor() {
     assert!(
         String::from_utf8_lossy(&out.stdout).contains("already open"),
         "{out:?}"
+    );
+}
+
+#[test]
+fn draft_lists_the_drafts_with_the_one_this_session_wrote_selected() {
+    let p = Project::new();
+    let drafts = p.drafts();
+    // The reported case: the session works on 0084; 0082 changes after it.
+    fs::write(drafts.join("adr-0084-retry.md"), DRAFT).unwrap();
+    assert_eq!(
+        p.wrote("s-1", "adr-0084-retry.md"),
+        "",
+        "a write gets no note"
+    );
+    fs::write(drafts.join("adr-0082-cache.md"), DRAFT).unwrap();
+    touch(
+        &drafts.join("adr-0082-cache.md"),
+        SystemTime::now() + Duration::from_secs(60),
+    );
+    assert!(draft::find(&drafts, None)
+        .unwrap()
+        .ends_with("adr-0082-cache.md"));
+
+    // `draft`: the list, open on the session's draft, not on the newest.
+    let said = p.word("s-1");
+    let info = p.info();
+    let opened = p.opened();
+    assert_eq!(opened, [info.list_url(Some("adr-0084-retry"))]);
+    assert!(
+        ocgen::notes::browser::is_viewer_url(&opened[0]),
+        "{}",
+        opened[0]
+    );
+    assert!(
+        said.contains("list of 3 issue drafts")
+            && said.contains(".claude/intent/drafts/adr-0084-retry.md")
+            && said.contains("this session last wrote"),
+        "{said}"
+    );
+    assert!(!said.contains("adr-0082"), "{said}");
+
+    // The page it opens: the session's draft selected, a strict policy.
+    let (code, head, page) = http(
+        &info,
+        "GET",
+        &format!("/{}/{}/adr-0084-retry", info.token, draft::LIST),
+        &[],
+        "",
+    );
+    assert_eq!(code, 200, "{page}");
+    assert!(
+        regex::Regex::new(r#"data-slug="adr-0084-retry"[^>]*aria-current="true""#)
+            .unwrap()
+            .is_match(&page),
+        "{page}"
+    );
+    assert!(page.contains(r#"href="../adr-0082-cache.html""#), "{page}");
+    assert!(head.contains("script-src 'nonce-") && head.contains("default-src 'none'"));
+    // With nothing selected, and only for drafts directories.
+    let (code, _, page) = http(
+        &info,
+        "GET",
+        &format!("/{}/{}", info.token, draft::LIST),
+        &[],
+        "",
+    );
+    assert_eq!(code, 200);
+    assert!(page.contains(r#"href="./adr-0082-cache.html""#) && !page.contains("aria-current"));
+
+    // A list tab is open: `draft` moves it instead of opening a second one.
+    let mut tab = Tab::on(&info, draft::LIST, "");
+    let said = p.word("s-2");
+    assert!(
+        tab.wait_for(&format!("event: show\ndata: {}", draft::LIST)),
+        "the tab is moved"
+    );
+    assert_eq!(p.opened().len(), 1, "{:?}", p.opened());
+    assert!(
+        said.contains("already open") && said.contains("hasn't written"),
+        "{said}"
+    );
+
+    // A draft changes on disk: the open list reloads.
+    fs::write(drafts.join("adr-0001-cache.md"), "## Changed\n").unwrap();
+    assert!(tab.wait_for("event: reload"), "the list hears of it");
+}
+
+#[test]
+fn ocgen_draft_lists_several_drafts_and_opens_one_by_name() {
+    let p = Project::new();
+    fs::write(p.drafts().join("issue-retry-budget.md"), DRAFT).unwrap();
+    let out = p.draft(&[]);
+    let info = p.info();
+    assert_eq!(p.opened(), [info.list_url(None)]);
+    let said = String::from_utf8_lossy(&out.stdout);
+    assert!(said.contains("2 issue drafts"), "{said}");
+
+    // A name still opens that draft.
+    p.draft(&["adr-0001"]);
+    assert_eq!(p.opened()[1], info.url("adr-0001-cache"));
+    let (_, _, page) = http(
+        &info,
+        "GET",
+        &format!("/{}/adr-0001-cache.html", info.token),
+        &[],
+        "",
+    );
+    // The editor links back to the list, open on this draft.
+    assert!(
+        page.contains(&format!(r#"href="{}/adr-0001-cache""#, draft::LIST)),
+        "a way back to the list"
     );
 }
 

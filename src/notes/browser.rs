@@ -34,11 +34,14 @@ pub fn decide(env: &HashMap<String, String>, os: &str, explicit: bool) -> bool {
 }
 
 /// A viewer URL we are willing to pass to a shell (`cmd /C start` treats `&`,
-/// `^`, `|` specially): loopback, a port, a hex token and a slug.
+/// `^`, `|` specially): loopback, a port, a hex token and a slug's page — or the
+/// list of drafts, optionally open on a slug.
 pub fn is_viewer_url(url: &str) -> bool {
-    regex::Regex::new(r"^http://127\.0\.0\.1:\d{1,5}/[0-9a-f]{8,64}/[a-z0-9][a-z0-9-]{0,79}\.html$")
-        .unwrap()
-        .is_match(url)
+    regex::Regex::new(
+        r"^http://127\.0\.0\.1:\d{1,5}/[0-9a-f]{8,64}/(?:[a-z0-9][a-z0-9-]{0,79}\.html|_drafts(?:/[a-z0-9][a-z0-9-]{0,79})?)$",
+    )
+    .unwrap()
+    .is_match(url)
 }
 
 /// Open `target` (a viewer URL or a file path) in the default browser, without

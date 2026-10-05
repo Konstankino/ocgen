@@ -177,6 +177,25 @@ fn run_draft(name: Option<&str>, path: &str) -> Result<()> {
             draft::DIR
         )
     })?;
+    let all = draft::drafts(&dir);
+    if name.is_none() && all.len() > 1 {
+        let env: std::collections::HashMap<String, String> = std::env::vars().collect();
+        let count = all.len();
+        let at = format!("{count} issue drafts in {}/", draft::DIR);
+        match draft::show_list(&dir, None, &env, true)? {
+            Shown::Off => {
+                println!("{at} (not opened: OCGEN_NOTES_OPEN=0) — name one: ocgen draft <name>")
+            }
+            Shown::Reloaded(_) | Shown::Pending => {
+                println!("The list of the {at} is already open in your browser")
+            }
+            Shown::Opened(url) => println!("Opened the list of the {at} in your browser: {url}"),
+            Shown::OpenedFile(p) | Shown::FileAlreadyOpened(p) => {
+                println!("Opened {}", p.display())
+            }
+        }
+        return Ok(());
+    }
     let md = draft::find(&dir, name)?;
     let rel = format!(
         "{}/{}",

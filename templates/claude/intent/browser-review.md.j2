@@ -1,9 +1,11 @@
 {# /intent's shared text (claude::INTENT_PARTIALS), included by /intent and /review-intent
    (where `review` is set). /intent renders exactly as it did before the split. -#}
 - **The browser review:** "Type `draft` to review it in your browser — edit it as formatted text or
-    as Markdown, preview it the way GitHub shows it, and copy it." That word, sent alone, makes ocgen open the newest draft
+    as Markdown, preview it the way GitHub shows it, and copy it." That word, sent alone, makes ocgen open the draft — with
+    several, their list in the browser to pick from, with the one this session last wrote pre-selected
     (its hook adds a note saying what it did): reply in one line and wait — it is not a request to
-    write a draft. If no note came, tell me to run `ocgen draft` in a terminal.
+    write a draft. If no note came, tell me to run `ocgen draft` in a terminal (`ocgen draft <name>`
+    opens one draft).
   - **The command** for me to run: `gh issue create --title "<title>" --body-file .claude/intent/drafts/<name>.md`
     — it files the draft as it stands, my edits included.
 - **Never create the issue yourself** — no `gh issue create`, no API call. Wait for me to file it.

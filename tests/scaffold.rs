@@ -5192,14 +5192,40 @@ fn verify_reports_the_draft_review() {
     let drafts = dir.path().join(".claude/intent/drafts");
     fs::create_dir_all(&drafts).unwrap();
     fs::write(drafts.join("adr-0001-x.md"), "## Intent\n").unwrap();
+    // The hook is there twice: on the word, and after each write (to remember
+    // the draft this session works on).
+    let s = settings_of(dir.path());
+    for event in ["UserPromptSubmit", "PostToolUse"] {
+        assert!(
+            s["hooks"][event].to_string().contains("intent-draft.sh"),
+            "{event}: {s:#}"
+        );
+    }
     // Whatever ocgen is on PATH, a working project never fails this check.
     let checks = verify_no_claude(dir.path());
     let status = status_of(&checks, "draft review");
     assert!(matches!(status, Status::Pass | Status::Warn), "{checks:#?}");
     assert!(
-        !drafts.join(".gitignore").exists(),
+        !drafts.join(".gitignore").exists() && !drafts.join(".sessions").exists(),
         "the probe wrote a file"
     );
+
+    // Without the write hook, `draft` can't pre-select the session's draft.
+    let mut s = settings_of(dir.path());
+    s["hooks"]["PostToolUse"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|g| !g.to_string().contains("intent-draft"));
+    let path = dir.path().join(".claude/settings.json");
+    let kept = fs::read_to_string(&path).unwrap();
+    fs::write(&path, serde_json::to_string_pretty(&s).unwrap()).unwrap();
+    let checks = verify_no_claude(dir.path());
+    assert_eq!(
+        status_of(&checks, "draft review"),
+        Status::Warn,
+        "{checks:#?}"
+    );
+    fs::write(&path, kept).unwrap();
 
     // A hand-edited hook command is reported, never run.
     let mut s = settings_of(dir.path());
@@ -5645,7 +5671,7 @@ fn inquire_registers_the_notes_hook() {
     assert_eq!(notes["matcher"], "Write|Edit|MultiEdit");
     let cmd = notes["hooks"][0]["command"].as_str().unwrap();
     assert!(
-        cmd.contains("ocgen hook inquire-notes") && cmd.contains("ocgen-hooks 12"),
+        cmd.contains("ocgen hook inquire-notes") && cmd.contains("ocgen-hooks 13"),
         "{cmd}"
     );
     assert_eq!(notes["hooks"][0]["shell"], "bash");

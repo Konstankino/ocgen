@@ -7,6 +7,12 @@
 //! that copy it. Save writes the file back as plain Markdown: unedited, byte
 //! for byte; edited, with the original text of every block left untouched.
 //!
+//! With several drafts, the same editor serves their list ([`LIST`]) to pick
+//! from, [`PER_PAGE`] a page, newest first. The hook also runs after each write
+//! and remembers, per session, the draft that session wrote last
+//! ([`remember`]): the word opens the list with that draft selected, whichever
+//! draft changed last.
+//!
 //! The editor is a prebuilt bundle (built by `tools/milkdown`, never by Cargo)
 //! inlined into the page's one nonce-tagged script, so the page's policy still
 //! allows nothing from outside. In the editor a draft's raw HTML is text, and
@@ -21,6 +27,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
 
 use anyhow::{bail, Context, Result};
 use minijinja::{AutoEscape, Environment, Value};
@@ -34,10 +41,24 @@ use crate::templates;
 
 /// Where /intent keeps issue drafts, relative to the project root.
 pub const DIR: &str = ".claude/intent/drafts";
-/// The one-word prompt that opens the newest draft.
+/// The one-word prompt that opens the draft, or with several, their list.
 pub const WORD: &str = "draft";
 /// The editor page.
 pub const TEMPLATE: &str = "claude/notes/draft.html.j2";
+/// The list of drafts.
+pub const LIST_TEMPLATE: &str = "claude/notes/drafts.html.j2";
+/// The two calm palettes both draft pages share, black (the default) and white.
+pub const PALETTE: &str = "claude/notes/palette.css";
+/// The list's path under the editor's token, and its tabs' topic: not a slug,
+/// so no draft can take it.
+pub const LIST: &str = "_drafts";
+/// Drafts on each page of the list.
+pub const PER_PAGE: usize = 10;
+/// Where each session's last-written draft is kept, in the drafts directory
+/// (which git-ignores itself): one file per session id, holding a slug.
+pub const SESSIONS: &str = ".sessions";
+/// How long a session's record is kept after its last write.
+const SESSION_TTL: Duration = Duration::from_secs(30 * 24 * 3600);
 /// The Milkdown release the editor bundle is built from (pinned in
 /// `tools/milkdown/package.json`).
 pub const MILKDOWN_VERSION: &str = "7.22.2";
@@ -127,11 +148,6 @@ pub fn find(dir: &Path, name: Option<&str>) -> Result<PathBuf> {
         });
     };
     let want = name.trim_end_matches(".md").to_ascii_lowercase();
-    let stem = |p: &PathBuf| {
-        p.file_stem()
-            .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_default()
-    };
     if let Some(p) = all.iter().find(|p| stem(p) == want) {
         return Ok(p.clone());
     }
@@ -141,8 +157,80 @@ pub fn find(dir: &Path, name: Option<&str>) -> Result<PathBuf> {
     bail!(
         "no issue draft matches '{name}' in {} (drafts: {})",
         dir.display(),
-        all.iter().map(stem).collect::<Vec<_>>().join(", ")
+        all.iter().map(|p| stem(p)).collect::<Vec<_>>().join(", ")
     )
+}
+
+/// A draft's slug: its file name without `.md`.
+fn stem(p: &Path) -> String {
+    p.file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+// ------------------------------------------------------------- sessions --
+
+/// A session id fit to name a file: letters, digits, `-` and `_`.
+fn plain_id(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 128
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
+/// Remember that `session` wrote draft `slug` last (see [`SESSIONS`]), and drop
+/// records older than a month. False when nothing was recorded: an id or slug
+/// that can't name a file, or a write that failed.
+pub fn remember(dir: &Path, session: &str, slug: &str) -> bool {
+    if !plain_id(session) || !super::is_slug(slug) {
+        return false;
+    }
+    let at = dir.join(SESSIONS);
+    if fs::create_dir_all(&at).is_err() {
+        return false;
+    }
+    ignore_self(dir);
+    let now = SystemTime::now();
+    for e in fs::read_dir(&at).into_iter().flatten().flatten() {
+        let stale = e
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| now.duration_since(t).ok())
+            .is_some_and(|age| age > SESSION_TTL);
+        if stale {
+            let _ = fs::remove_file(e.path());
+        }
+    }
+    let file = at.join(session);
+    if super::write_if_changed(&file, slug.as_bytes()).is_err() {
+        return false;
+    }
+    // An unchanged record isn't rewritten: keep it fresh all the same.
+    let _ = fs::File::options()
+        .write(true)
+        .open(&file)
+        .and_then(|f| f.set_modified(now));
+    true
+}
+
+/// The draft `session` wrote last, while it still exists.
+pub fn session_draft(dir: &Path, session: &str) -> Option<String> {
+    if !plain_id(session) {
+        return None;
+    }
+    let slug = fs::read_to_string(dir.join(SESSIONS).join(session)).ok()?;
+    let slug = slug.trim();
+    (super::is_slug(slug) && dir.join(format!("{slug}.md")).is_file()).then(|| slug.to_string())
+}
+
+/// Drafts are working copies — the issue on GitHub is the record — so their
+/// directory git-ignores itself.
+fn ignore_self(dir: &Path) {
+    let ignore = dir.join(".gitignore");
+    if !ignore.exists() {
+        let _ = fs::write(ignore, "*\n");
+    }
 }
 
 // ------------------------------------------------------------- preview --
@@ -316,6 +404,8 @@ pub fn page(
     env.set_auto_escape_callback(|_| AutoEscape::Html);
     env.add_template_owned("page.css", templates::load(super::html::STYLE)?)
         .context("parsing the notes page style")?;
+    env.add_template_owned("palette.css", templates::load(PALETTE)?)
+        .context("parsing the draft pages' palettes")?;
     env.add_template_owned("draft.html", templates::load(TEMPLATE)?)
         .context("parsing the draft editor template")?;
     let name = source.rsplit('/').next().unwrap_or(source).to_string();
@@ -325,6 +415,7 @@ pub fn page(
     let ctx = minijinja::context! {
         w => words_value(w),
         name => safe(&name),
+        slug => safe(name.trim_end_matches(".md")),
         source => safe(source),
         rev => safe(rev),
         nonce => safe(nonce),
@@ -337,6 +428,7 @@ pub fn page(
         says_none => gaps.says_none,
         gaps => !gaps.is_empty(),
         wraps => crate::intent::hard_wraps(md).len(),
+        list => LIST,
     };
     let mut page = env
         .get_template("draft.html")?
@@ -346,6 +438,170 @@ pub fn page(
         page.push('\n');
     }
     Ok(page)
+}
+
+// ---------------------------------------------------------------- list --
+
+/// How many pages of [`PER_PAGE`] drafts `count` drafts fill (at least one).
+pub fn pages(count: usize) -> usize {
+    count.div_ceil(PER_PAGE).max(1)
+}
+
+/// The page of `all` (newest first, as [`drafts`] lists them) that holds draft
+/// `selected`; the first when there is none or it is gone.
+pub fn page_of(all: &[PathBuf], selected: Option<&str>) -> usize {
+    selected
+        .and_then(|s| all.iter().position(|p| stem(p) == s))
+        .map_or(1, |i| i / PER_PAGE + 1)
+}
+
+/// What a draft is about, for the list: its first line of text — not a heading
+/// or a comment — at most 120 characters.
+pub fn summary(md: &str) -> String {
+    let mut comment = false;
+    for line in md.lines() {
+        let l = line.trim();
+        if comment {
+            comment = !l.contains("-->");
+            continue;
+        }
+        if l.starts_with("<!--") {
+            comment = !l.contains("-->");
+            continue;
+        }
+        if l.is_empty() || l.starts_with('#') {
+            continue;
+        }
+        return match l.char_indices().nth(120) {
+            Some((i, _)) => format!("{}…", l[..i].trim_end()),
+            None => l.to_string(),
+        };
+    }
+    String::new()
+}
+
+/// The value of a draft's hidden `<!-- Key: value -->` line, if it has one.
+fn marker(md: &str, key: &str) -> Option<String> {
+    md.lines().find_map(|l| {
+        let inner = l.trim().strip_prefix("<!--")?.strip_suffix("-->")?.trim();
+        let (k, v) = inner.split_once(':')?;
+        (k.trim().eq_ignore_ascii_case(key) && !v.trim().is_empty()).then(|| v.trim().to_string())
+    })
+}
+
+/// A revision of the list: the drafts' names, sizes and times. It changes when
+/// a draft is written, added, removed or renamed.
+pub fn listing_rev(dir: &Path) -> String {
+    let mut sig = String::new();
+    for p in drafts(dir) {
+        let m = fs::metadata(&p).ok();
+        let t = m
+            .as_ref()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map_or(0, |d| d.as_nanos());
+        let len = m.map_or(0, |m| m.len());
+        sig.push_str(&format!("{}\t{len}\t{t}\n", stem(&p)));
+    }
+    super::rev(sig.as_bytes())
+}
+
+/// The list page of drafts directory `dir`: page `page` (out of range: the
+/// nearest), or with none, the page holding `selected`, which is marked. Its
+/// links lead from `root`, the editor's root as seen from the page (`./`, or
+/// `../` under [`LIST`]); its one script carries `nonce`.
+pub fn list_page(
+    dir: &Path,
+    page: Option<usize>,
+    selected: Option<&str>,
+    root: &str,
+    nonce: &str,
+) -> Result<String> {
+    let all = drafts(dir);
+    let total = pages(all.len());
+    let page = page
+        .unwrap_or_else(|| page_of(&all, selected))
+        .clamp(1, total);
+    // Any path in the directory finds the project.
+    let probe = dir.join("draft.md");
+    let w = words::for_language(&super::answer_language(&probe));
+    let approvers = approvers_for(&probe);
+    let issue_no = Regex::new(r"/issues/(\d+)/?$").unwrap();
+    // Escaped here: minijinja's own escaping also turns `/` into `&#x2f;`.
+    let safe = |s: &str| Value::from_safe_string(escape(s));
+    let rows: Vec<Value> = all
+        .iter()
+        .skip((page - 1) * PER_PAGE)
+        .take(PER_PAGE)
+        .map(|p| {
+            let slug = stem(p);
+            let text = fs::read_to_string(p).unwrap_or_default();
+            let when = fs::metadata(p)
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map_or(0, |d| d.as_secs() as i64);
+            let (y, mo, d, h, mi, _) = crate::clock::civil(when);
+            let issue = marker(&text, "Issue").filter(|u| safe_url(u) && !u.starts_with("mailto:"));
+            let issue_label = issue.as_deref().map(|u| {
+                issue_no
+                    .captures(u)
+                    .map_or_else(|| "issue".to_string(), |c| format!("#{}", &c[1]))
+            });
+            let gaps = (!approvers.is_empty())
+                .then(|| crate::intent::check_file(p, &approvers))
+                .flatten()
+                .unwrap_or_default();
+            minijinja::context! {
+                slug => safe(&slug),
+                name => safe(&format!("{slug}.md")),
+                summary => safe(&summary(&text)),
+                when_iso => safe(&format!("{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:00Z")),
+                when_text => safe(&format!("{y:04}-{mo:02}-{d:02} {h:02}:{mi:02} UTC")),
+                status => marker(&text, "Status").map(|s| safe(&s)),
+                issue => issue.map(|u| safe(&u)),
+                issue_label => issue_label.map(|l| safe(&l)),
+                missing => safe(&gaps.missing.join(", ")),
+                says_none => gaps.says_none,
+                selected => selected == Some(slug.as_str()),
+            }
+        })
+        .collect();
+    let mut env = Environment::new();
+    env.set_auto_escape_callback(|_| AutoEscape::Html);
+    env.add_template_owned("page.css", templates::load(super::html::STYLE)?)
+        .context("parsing the notes page style")?;
+    env.add_template_owned("palette.css", templates::load(PALETTE)?)
+        .context("parsing the draft pages' palettes")?;
+    env.add_template_owned("drafts.html", templates::load(LIST_TEMPLATE)?)
+        .context("parsing the draft list template")?;
+    let fill = |s: &str| {
+        s.replace("{page}", &page.to_string())
+            .replace("{pages}", &total.to_string())
+            .replace("{count}", &all.len().to_string())
+    };
+    let d = &w.draft;
+    let ctx = minijinja::context! {
+        w => words_value(w),
+        page_of => safe(&fill(d.page_of)),
+        count => safe(&fill(d.count)),
+        rows => rows,
+        newer => (page > 1).then(|| page - 1),
+        older => (page < total).then(|| page + 1),
+        root => safe(root),
+        nonce => safe(nonce),
+        list => LIST,
+        rev => safe(&listing_rev(dir)),
+        source => safe(DIR),
+    };
+    let mut out = env
+        .get_template("drafts.html")?
+        .render(ctx)
+        .context("rendering the draft list")?;
+    if !out.ends_with('\n') {
+        out.push('\n');
+    }
+    Ok(out)
 }
 
 fn words_value(w: &'static Words) -> Value {
@@ -384,12 +640,28 @@ fn words_value(w: &'static Words) -> Value {
         ("wrapped", d.wrapped),
         ("join_lines", d.join_lines),
         ("footer", d.footer),
+        ("all_drafts", d.all_drafts),
+        ("list_title", d.list_title),
+        ("newer", d.newer),
+        ("older", d.older),
+        ("misses", d.misses),
+        ("says_none_short", d.says_none_short),
+        ("list_footer", d.list_footer),
+        ("none_yet", d.none_yet),
     ] {
         m.insert(k, Value::from(v));
     }
     // Ours, not the draft's: they name a command or keys in markup.
     m.insert("offline", Value::from_safe_string(d.offline.to_string()));
     m.insert("keys", Value::from_safe_string(d.keys.to_string()));
+    m.insert(
+        "list_offline",
+        Value::from_safe_string(d.list_offline.to_string()),
+    );
+    m.insert(
+        "list_keys",
+        Value::from_safe_string(d.list_keys.to_string()),
+    );
     Value::from(m)
 }
 
@@ -423,19 +695,52 @@ pub fn show(md: &Path, env: &HashMap<String, String>, explicit: bool) -> Result<
         return Ok(Shown::Off);
     }
     let dir = md.parent().unwrap_or(Path::new("."));
-    // Drafts are working copies: the issue on GitHub is the record.
-    let ignore = dir.join(".gitignore");
-    if !ignore.exists() {
-        let _ = fs::write(ignore, "*\n");
+    ignore_self(dir);
+    let info = editor(dir, env)?;
+    let action = super::viewer::reload(&info, &slug, explicit);
+    shown(action, || info.url(&slug), env)
+}
+
+/// Open the list of the drafts in `dir` — on the page holding `selected`, which
+/// is marked — in a tab that shows the list already, or a new one.
+pub fn show_list(
+    dir: &Path,
+    selected: Option<&str>,
+    env: &HashMap<String, String>,
+    explicit: bool,
+) -> Result<Shown> {
+    if !is_drafts_dir(dir) {
+        bail!("{} is not an /intent drafts directory", dir.display());
     }
-    let info = super::viewer::ensure(dir, env).context(
+    if !super::browser::decide(env, super::browser::this_os(), explicit) {
+        return Ok(Shown::Off);
+    }
+    let selected = selected.filter(|s| super::is_slug(s));
+    ignore_self(dir);
+    let info = editor(dir, env)?;
+    let action = super::viewer::reload_list(&info, selected, explicit);
+    shown(action, || info.list_url(selected), env)
+}
+
+/// The editor for drafts directory `dir`, started if need be.
+fn editor(dir: &Path, env: &HashMap<String, String>) -> Result<super::viewer::Info> {
+    super::viewer::ensure(dir, env).context(
         "could not start the local editor (it needs the ocgen binary and a free loopback port)",
-    )?;
-    match super::viewer::reload(&info, &slug, explicit) {
+    )
+}
+
+/// What the editor did with a request to show a page, opening `url` in a new
+/// tab when no tab shows it.
+fn shown(
+    action: Option<super::viewer::Action>,
+    url: impl FnOnce() -> String,
+    env: &HashMap<String, String>,
+) -> Result<Shown> {
+    match action {
         Some(super::viewer::Action::Reloaded(n)) => Ok(Shown::Reloaded(n)),
         Some(super::viewer::Action::Pending) => Ok(Shown::Pending),
         Some(super::viewer::Action::Open) => {
-            let url = info.url(&slug);
+            let url = url();
             super::browser::open(&url, env).context("opening the browser")?;
             Ok(Shown::Opened(url))
         }

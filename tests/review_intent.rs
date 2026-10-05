@@ -305,6 +305,12 @@ fn the_draft_is_an_issue_draft_reviewed_in_the_browser() {
     assert!(md.contains("the blocks don't count"));
     assert!(md.contains(".claude/intent/issue-template.md"));
     assert!(md.contains("Type `draft` to review it in your browser"));
+    // Several drafts: a list to pick from, this session's already chosen.
+    assert!(
+        md.contains("the one this session last wrote pre-selected")
+            && md.contains("`ocgen draft <name>`"),
+        "{md}"
+    );
     assert!(md.contains("gh issue create --title"));
     // Sign-off and the issue link stay /intent's.
     assert!(md.contains("/intent issue-review-<slug>"), "{md}");

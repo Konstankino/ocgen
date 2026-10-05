@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="{{ w.lang }}" data-palette="black">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta name="generator" content="ocgen — the /intent issue drafts, to pick the one to edit">
+<title>{{ w.list_title }}</title>
+<style>
+{% include "page.css" %}
+[hidden] { display: none !important; }
+{% include "palette.css" %}
+body.drafts { background: var(--bg); color: var(--z-text);
+  font: 15px/1.5 "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, Helvetica, Arial, sans-serif; }
+.drafts main { max-width: 46rem; margin: 0 auto; padding: 28px 16px 64px; }
+.drafts header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px 16px; margin-bottom: 18px; }
+.drafts h1 { margin: 0; font-size: 20px; font-weight: 600; letter-spacing: 0; color: var(--text); }
+.drafts .meta { color: var(--faint); font-size: 13px; }
+.drafts .meta code { color: var(--muted); overflow-wrap: anywhere; }
+.drafts .palette { display: inline-flex; gap: 2px; margin-left: 8px; }
+.drafts .palette button { font: inherit; font-size: 12.5px; color: var(--muted); background: transparent; border: 0; border-radius: 6px;
+  padding: 2px 8px; cursor: pointer; }
+.drafts .palette button:hover, .drafts .palette button[aria-pressed="true"] { color: var(--text); background: var(--surface-2); }
+.drafts ol { list-style: none; margin: 0; padding: 0; }
+.drafts li + li { margin-top: 2px; }
+.drafts a.row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 16px; padding: 10px 12px; border: 1px solid transparent;
+  border-radius: 8px; color: inherit; text-decoration: none; }
+.drafts a.row:hover { background: var(--surface-2); }
+.drafts a.row:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; }
+.drafts a.row.sel { border-color: var(--border-strong); background: var(--surface); }
+.drafts .name { font: 13.5px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: var(--text); overflow-wrap: anywhere; }
+.drafts .when { color: var(--faint); font-size: 12.5px; white-space: nowrap; text-align: right; }
+.drafts .sum { grid-column: 1 / -1; color: var(--muted); font-size: 14px; overflow-wrap: anywhere; }
+.drafts .tags { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; font-size: 12px; }
+.drafts .tag { color: var(--muted); border: 1px solid var(--border); border-radius: 999px; padding: 0 8px; }
+.drafts .tag.warn { color: var(--c-orange); border-color: color-mix(in oklab, var(--c-orange) 45%, var(--border)); }
+.drafts .none { color: var(--muted); }
+.drafts nav.pager { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 18px; font-size: 14px; }
+.drafts nav.pager a { color: var(--accent); text-decoration: none; padding: 4px 8px; border-radius: 6px; }
+.drafts nav.pager a:hover { background: var(--surface-2); }
+.drafts nav.pager .off { visibility: hidden; padding: 4px 8px; }
+.drafts nav.pager .at { color: var(--faint); }
+.drafts footer { margin-top: 28px; color: var(--faint); font-size: 12.5px; line-height: 1.7; }
+.drafts footer kbd { font: 11.5px ui-monospace, Menlo, Consolas, monospace; padding: 0 4px; border: 1px solid var(--border); border-radius: 4px; }
+@media (max-width: 600px) {
+  .drafts main { padding-top: 18px; }
+  .drafts a.row { grid-template-columns: minmax(0, 1fr); }
+  .drafts .when { text-align: left; }
+}
+</style>
+</head>
+<body class="drafts" data-rev="{{ rev }}" data-root="{{ root }}" data-list="{{ list }}">
+<div class="offline">{{ w.list_offline }}</div>
+<main>
+  <header>
+    <h1>{{ w.list_title }}</h1>
+    <span class="meta">{{ count }} · <code>{{ source }}/</code>
+      <span class="palette" role="group" aria-label="{{ w.palette }}">
+        <button type="button" id="palette-black" aria-pressed="true">{{ w.black }}</button>
+        <button type="button" id="palette-white" aria-pressed="false">{{ w.white }}</button>
+      </span>
+    </span>
+  </header>
+{%- if rows %}
+  <ol id="rows">
+{%- for r in rows %}
+    <li><a class="row{% if r.selected %} sel{% endif %}" href="{{ root }}{{ r.slug }}.html" data-slug="{{ r.slug }}"{% if r.selected %} aria-current="true"{% endif %}>
+      <span class="name">{{ r.name }}</span>
+      <time class="when" datetime="{{ r.when_iso }}">{{ r.when_text }}</time>
+{%- if r.summary %}
+      <span class="sum">{{ r.summary }}</span>
+{%- endif %}
+{%- if r.status or r.issue or r.missing or r.says_none %}
+      <span class="tags">
+{%- if r.issue %}<span class="tag" title="{{ r.issue }}">{{ r.issue_label }}</span>{% endif %}
+{%- if r.status %}<span class="tag">{{ r.status }}</span>{% endif %}
+{%- if r.missing %}<span class="tag warn">{{ w.misses }} {{ r.missing }}</span>{% endif %}
+{%- if r.says_none %}<span class="tag warn">{{ w.says_none_short }}</span>{% endif -%}
+      </span>
+{%- endif %}
+    </a></li>
+{%- endfor %}
+  </ol>
+  <nav class="pager" aria-label="{{ page_of }}">
+    {% if newer %}<a id="newer" href="?page={{ newer }}">{{ w.newer }}</a>{% else %}<span class="off">{{ w.newer }}</span>{% endif %}
+    <span class="at">{{ page_of }}</span>
+    {% if older %}<a id="older" href="?page={{ older }}">{{ w.older }}</a>{% else %}<span class="off">{{ w.older }}</span>{% endif %}
+  </nav>
+{%- else %}
+  <p class="none">{{ w.none_yet }}</p>
+{%- endif %}
+  <footer>{{ w.list_footer }}<br>{{ w.list_keys }}</footer>
+</main>
+<script nonce="{{ nonce }}">
+(function () {
+  "use strict";
+  var page = document.body;
+  var root = page.getAttribute("data-root");
+  var rows = Array.prototype.slice.call(document.querySelectorAll("a.row"));
+
+  // The selected draft (or the first) has the keyboard.
+  var start = document.querySelector("a.row.sel") || rows[0];
+  if (start) { start.focus(); start.scrollIntoView({ block: "nearest" }); }
+  document.addEventListener("keydown", function (e) {
+    if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      if (!rows.length) return;
+      e.preventDefault();
+      var i = rows.indexOf(document.activeElement);
+      var next = i < 0 ? 0 : Math.min(rows.length - 1, Math.max(0, i + (e.key === "ArrowDown" ? 1 : -1)));
+      rows[next].focus();
+    } else if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+      var to = document.getElementById(e.key === "ArrowLeft" ? "newer" : "older");
+      if (to) { e.preventDefault(); location.href = to.href; }
+    }
+  });
+
+  // Times in this computer's zone and language.
+  document.querySelectorAll("time[datetime]").forEach(function (t) {
+    var d = new Date(t.getAttribute("datetime"));
+    if (!isNaN(d)) {
+      try { t.textContent = d.toLocaleString(document.documentElement.lang, { dateStyle: "medium", timeStyle: "short" }); }
+      catch (err) { t.textContent = d.toLocaleString(); }
+    }
+  });
+
+  function palette(p) {
+    document.documentElement.setAttribute("data-palette", p);
+    ["black", "white"].forEach(function (q) {
+      document.getElementById("palette-" + q).setAttribute("aria-pressed", String(q === p));
+    });
+  }
+  document.getElementById("palette-black").addEventListener("click", function () { palette("black"); });
+  document.getElementById("palette-white").addEventListener("click", function () { palette("white"); });
+
+  // `draft` sent again moves this tab to the session's draft; a change to the
+  // drafts refreshes it.
+  var errors = 0;
+  var es = new EventSource(root + "events?topic=" + encodeURIComponent(page.getAttribute("data-list")) +
+    "&rev=" + encodeURIComponent(page.getAttribute("data-rev")));
+  es.addEventListener("show", function (e) { es.close(); location.href = root + e.data; });
+  es.addEventListener("reload", function () { es.close(); location.reload(); });
+  es.onopen = function () { errors = 0; page.removeAttribute("data-viewer"); };
+  es.onerror = function () { if (++errors > 5) page.setAttribute("data-viewer", "offline"); };
+  window.addEventListener("pageshow", function (e) { if (e.persisted) location.reload(); });
+})();
+</script>
+</body>
+</html>

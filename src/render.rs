@@ -2346,6 +2346,12 @@ impl Project {
                 "UserPromptSubmit",
                 json!({ "hooks": [ command_hook(hook_cmd(prefix, dir, "intent-draft.sh")) ] }),
             );
+            // With several drafts it opens their list, with the one this session
+            // wrote last selected: each write to a draft is remembered.
+            push(
+                "PostToolUse",
+                json!({ "matcher": "Write|Edit|MultiEdit", "hooks": [ command_hook(hook_cmd(prefix, dir, "intent-draft.sh")) ] }),
+            );
             // The approvers are baked into the /intent skill, so a session started
             // before they changed drafts with the old list: check each write
             // against the state instead.

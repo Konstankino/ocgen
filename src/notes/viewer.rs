@@ -8,7 +8,9 @@
 //! editor ([`super::draft`]): it serves an editor page per draft, saves what the
 //! page sends back to the file (only over the version the page last saw, and
 //! only from the page itself: its `Origin`), renders the preview, and tells open
-//! tabs when the file changes on disk.
+//! tabs when the file changes on disk. It also serves the list of drafts
+//! ([`super::draft::LIST`]), whose tabs are moved to a draft when `draft` is
+//! sent again and refreshed when the drafts change.
 //!
 //! One server per notes directory, found through `.viewer.json` (port, token,
 //! pid). The token is in every URL and the `Host` header must be loopback, so
@@ -33,7 +35,7 @@ use super::is_slug;
 
 /// Bump when the server's HTTP contract changes; a hook never talks to a server
 /// of another protocol (it asks it to quit and starts its own).
-pub const VIEWER_PROTOCOL: u32 = 1;
+pub const VIEWER_PROTOCOL: u32 = 2;
 /// The server's address card, in the notes directory.
 pub const INFO_FILE: &str = ".viewer.json";
 const APP: &str = "ocgen-notes";
@@ -54,6 +56,25 @@ impl Info {
     /// The page URL for ledger `slug`.
     pub fn url(&self, slug: &str) -> String {
         format!("http://127.0.0.1:{}/{}/{slug}.html", self.port, self.token)
+    }
+
+    /// The URL of the list of drafts, open on draft `selected`.
+    pub fn list_url(&self, selected: Option<&str>) -> String {
+        format!(
+            "http://127.0.0.1:{}/{}/{}",
+            self.port,
+            self.token,
+            list_path(selected)
+        )
+    }
+}
+
+/// The list's path under the token: `_drafts`, or `_drafts/<slug>` with a draft
+/// selected.
+fn list_path(selected: Option<&str>) -> String {
+    match selected {
+        Some(s) => format!("{}/{s}", super::draft::LIST),
+        None => super::draft::LIST.to_string(),
     }
 }
 
@@ -139,11 +160,29 @@ pub fn ping(info: &Info, root: &str) -> Ping {
 /// Tell the server ledger `slug` changed. `force` opens a tab even right after
 /// one was opened (an explicit `ocgen notes open`).
 pub fn reload(info: &Info, slug: &str, force: bool) -> Option<Action> {
+    ask_reload(info, &format!("topic={slug}"), force)
+}
+
+/// Move the list's open tabs to draft `selected` (or the list's first page), or
+/// say whether to open one. `force` as for [`reload`].
+pub fn reload_list(info: &Info, selected: Option<&str>, force: bool) -> Option<Action> {
+    let select = selected
+        .filter(|s| is_slug(s))
+        .map(|s| format!("&select={s}"))
+        .unwrap_or_default();
+    ask_reload(
+        info,
+        &format!("topic={}{select}", super::draft::LIST),
+        force,
+    )
+}
+
+fn ask_reload(info: &Info, query: &str, force: bool) -> Option<Action> {
     let force = if force { "&force=1" } else { "" };
     let (code, body) = request(
         info.port,
         "POST",
-        &format!("/{}/reload?topic={slug}{force}", info.token),
+        &format!("/{}/reload?{query}{force}", info.token),
         Duration::from_secs(3),
     )?;
     if code != 200 {
@@ -645,6 +684,9 @@ fn inject(page: &str, slug: &str, rev: &str) -> String {
     }
 }
 
+/// The event that reloads a tab.
+const RELOAD: &str = "event: reload\ndata: 1\n\n";
+
 /// The event that tells a draft's tabs the file is now at revision `rev`.
 fn changed_event(rev: &str) -> String {
     format!("event: changed\ndata: {rev}\n\n")
@@ -695,7 +737,12 @@ impl Server {
         // anything probing the port must not keep an idle viewer alive.
         self.touch();
         let q = query(q);
-        let topic = q.get("topic").copied().filter(|t| is_slug(t));
+        let list = self.kind == Kind::Drafts;
+        let topic = q
+            .get("topic")
+            .copied()
+            .filter(|t| is_slug(t) || (list && *t == super::draft::LIST));
+        let selected = q.get("select").copied().filter(|t| is_slug(t));
         match (req.method.as_str(), rest) {
             ("GET", "ping") => json_reply(
                 &mut s,
@@ -703,7 +750,7 @@ impl Server {
             ),
             ("POST", "reload") => match topic {
                 Some(t) => {
-                    let action = self.decide(t, q.get("force") == Some(&"1"));
+                    let action = self.decide(t, q.get("force") == Some(&"1"), selected);
                     let v = match action {
                         Action::Reloaded(n) => json!({ "action": "reloaded", "tabs": n }),
                         Action::Pending => json!({ "action": "pending" }),
@@ -721,7 +768,17 @@ impl Server {
                 Some(t) => self.events(s, t, q.get("rev").copied().unwrap_or("")),
                 None => plain(&mut s, 400, "bad topic"),
             },
-            ("POST", "render") if self.kind == Kind::Drafts => self.preview(s, &req),
+            ("POST", "render") if list => self.preview(s, &req),
+            // The list: `_drafts`, or `_drafts/<slug>` open on that draft.
+            ("GET", page) if list && page.split('/').next() == Some(super::draft::LIST) => {
+                let selected = page.split_once('/').map(|(_, slug)| slug);
+                if selected.is_some_and(|slug| !is_slug(slug)) {
+                    return plain(&mut s, 404, "not found");
+                }
+                let root = if selected.is_some() { "../" } else { "./" };
+                let n = q.get("page").and_then(|n| n.parse().ok());
+                self.list_page(s, n, selected, root)
+            }
             (_, "ping" | "reload" | "quit" | "events" | "render") => {
                 plain(&mut s, 405, "method not allowed")
             }
@@ -900,6 +957,31 @@ impl Server {
         }
     }
 
+    /// The list of drafts, page `page` or the one holding `selected`; `root`
+    /// leads from the page back to the token (see [`super::draft::list_page`]).
+    fn list_page(&self, mut s: TcpStream, page: Option<usize>, selected: Option<&str>, root: &str) {
+        let nonce = random_token();
+        match super::draft::list_page(&self.dir, page, selected, root, &nonce) {
+            Ok(html) => respond(
+                &mut s,
+                200,
+                "text/html; charset=utf-8",
+                &draft_csp(&nonce),
+                html.as_bytes(),
+            ),
+            Err(e) => plain(&mut s, 500, &format!("{e:#}")),
+        }
+    }
+
+    /// The current revision of `topic`: a draft's, or the list's.
+    fn topic_rev(&self, topic: &str) -> String {
+        if topic == super::draft::LIST {
+            super::draft::listing_rev(&self.dir)
+        } else {
+            self.draft_rev(topic)
+        }
+    }
+
     fn events(&self, mut s: TcpStream, topic: &str, rev: &str) {
         let head =
             "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-store\r\n\
@@ -915,7 +997,7 @@ impl Server {
             Kind::Notes => fs::read(self.dir.join(format!("{topic}.html")))
                 .map(|b| super::rev(&b))
                 .unwrap_or_default(),
-            Kind::Drafts => self.draft_rev(topic),
+            Kind::Drafts => self.topic_rev(topic),
         };
         let id = {
             let mut st = self.lock();
@@ -924,8 +1006,8 @@ impl Server {
             // The page is older than the file (it loaded mid-update): refresh now.
             if !rev.is_empty() && rev != current {
                 let msg = match self.kind {
-                    Kind::Notes => "event: reload\ndata: 1\n\n".to_string(),
-                    Kind::Drafts => changed_event(&current),
+                    Kind::Drafts if topic != super::draft::LIST => changed_event(&current),
+                    _ => RELOAD.to_string(),
                 };
                 let _ = writer.write_all(msg.as_bytes());
             }
@@ -956,11 +1038,15 @@ impl Server {
     }
 
     /// Reload `topic`'s tabs, or say whether a new one should be opened —
-    /// decided under one lock, so concurrent updates never open two tabs.
-    fn decide(&self, topic: &str, force: bool) -> Action {
+    /// decided under one lock, so concurrent updates never open two tabs. The
+    /// list's tabs are moved to draft `selected` (or the list's first page).
+    fn decide(&self, topic: &str, force: bool, selected: Option<&str>) -> Action {
         // A draft's tabs are told its revision, never reloaded: they may hold edits.
         let msg = match self.kind {
-            Kind::Notes => "event: reload\ndata: 1\n\n".to_string(),
+            Kind::Notes => RELOAD.to_string(),
+            Kind::Drafts if topic == super::draft::LIST => {
+                format!("event: show\ndata: {}\n\n", list_path(selected))
+            }
             Kind::Drafts => changed_event(&self.draft_rev(topic)),
         };
         let mut st = self.lock();
@@ -1010,12 +1096,18 @@ impl Server {
             };
             drop(st);
             // Drafts change under open tabs (Claude, another editor): tell them.
+            // The list is redrawn: what it shows has changed.
             for topic in open {
-                let now = self.draft_rev(&topic);
+                let now = self.topic_rev(&topic);
                 let mut st = self.lock();
                 if st.revs.get(&topic) != Some(&now) {
                     st.revs.insert(topic.clone(), now.clone());
-                    Self::tell(&mut st, &topic, &changed_event(&now));
+                    let msg = if topic == super::draft::LIST {
+                        RELOAD.to_string()
+                    } else {
+                        changed_event(&now)
+                    };
+                    Self::tell(&mut st, &topic, &msg);
                 }
             }
             if !self.dir.is_dir() {
