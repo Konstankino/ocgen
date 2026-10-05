@@ -9,12 +9,20 @@
 //! copy (`.claude/intent/view/<slug>.md`, the English intent file translated
 //! into that language) gets a page of its own the same way. The /intent issue
 //! draft (`.claude/intent/drafts/<name>.md`) gets an editor instead ([`draft`]).
+//!
+//! The word `note` or `notes`, sent alone in Claude Code and caught by the same
+//! hook, opens the ledger there is, or their list ([`LIST`], [`listing`]) with
+//! the one this session wrote last selected ([`session`]). The intent files get
+//! a read-only page and a list of their own ([`intents`]).
 
 pub mod blocks;
 pub mod browser;
 pub mod draft;
 pub mod html;
+pub mod intents;
 pub mod ledger;
+pub mod listing;
+pub mod session;
 pub mod viewer;
 pub mod words;
 
@@ -373,6 +381,96 @@ pub fn notes_dir(start: &Path) -> Option<PathBuf> {
         .map(|a| a.join(".claude/notes"))
         .find(|d| d.is_dir())
         .map(|d| crate::paths::plain(&d))
+}
+
+// ---------------------------------------------------------------- the word --
+
+/// The words that open the ledgers, sent alone.
+pub const WORDS: [&str; 2] = ["note", "notes"];
+/// The list of ledgers' path under the viewer's token, and its tabs' topic: not
+/// a slug, so no ledger can take it.
+pub const LIST: &str = "_notes";
+/// Where /inquire keeps its ledgers, relative to the project root.
+pub const DIR: &str = ".claude/notes";
+
+/// Whether a prompt is a word that opens the ledgers (any case, nothing else).
+pub fn is_prompt(prompt: &str) -> bool {
+    WORDS.iter().any(|w| prompt.trim().eq_ignore_ascii_case(w))
+}
+
+/// Remember that `session` wrote ledger `slug` (in notes directory `dir`) last.
+pub fn remember(dir: &Path, session_id: &str, slug: &str) -> bool {
+    session::remember(dir, session_id, slug, is_slug)
+}
+
+/// The ledger `session` wrote last, while it still exists.
+pub fn session_ledger(dir: &Path, session_id: &str) -> Option<String> {
+    session::recall(dir, dir, session_id, is_slug)
+}
+
+/// The list page of the ledgers in notes directory `dir`, newest first: page
+/// `page`, or the one holding `selected` (see [`listing::page`]).
+pub fn list_page(
+    dir: &Path,
+    page: Option<usize>,
+    selected: Option<&str>,
+    root: &str,
+    nonce: &str,
+) -> Result<String> {
+    let all = ledgers(dir);
+    let w = words::for_language(&answer_language(dir));
+    let row = |_: &Path, text: &str| {
+        let l = ledger::parse(text);
+        let mut tags = Vec::new();
+        if !l.status.trim().is_empty() {
+            tags.push(l.status.trim().to_string());
+        }
+        if !l.updated.trim().is_empty() {
+            tags.push(format!("{} {}", w.docs.updated, l.updated.trim()));
+        }
+        listing::Row {
+            summary: l.topic.replace('`', ""),
+            tags,
+        }
+    };
+    listing::page(
+        &listing::List {
+            kind: listing::Kind::Notes,
+            docs: &all,
+            row: &row,
+            source: DIR,
+            list: LIST,
+            skipped: &[],
+            language: &answer_language(dir),
+        },
+        page,
+        selected,
+        root,
+        nonce,
+    )
+}
+
+/// Open the list of the ledgers in notes directory `dir` — on the page holding
+/// `selected`, which is marked — in a tab that shows the list already, or a new
+/// one.
+pub fn show_list(
+    dir: &Path,
+    selected: Option<&str>,
+    env: &HashMap<String, String>,
+    explicit: bool,
+) -> Result<Shown> {
+    if !is_notes_dir(dir) {
+        bail!("{} is not a .claude/notes directory", dir.display());
+    }
+    if !browser::decide(env, browser::this_os(), explicit) {
+        return Ok(Shown::Off);
+    }
+    let selected = selected.filter(|s| is_slug(s));
+    let info = viewer::ensure(dir, env).context(
+        "could not start the local viewer (it needs the ocgen binary and a free loopback port)",
+    )?;
+    let action = viewer::reload_list_of(&info, LIST, selected, explicit);
+    draft::shown(action, || info.list_url_of(LIST, selected), env)
 }
 
 /// `s` as a topic slug (`Request flow!` → `request-flow`).

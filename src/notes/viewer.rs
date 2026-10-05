@@ -12,6 +12,11 @@
 //! ([`super::draft::LIST`]), whose tabs are moved to a draft when `draft` is
 //! sent again and refreshed when the drafts change.
 //!
+//! The ledgers get a list the same way ([`super::LIST`]), and so do the intent
+//! files ([`super::intents`]), whose server runs for `.claude/intent/viewer` —
+//! the intent files themselves are tracked, so nothing is written beside them —
+//! and serves a read-only page per file. Neither saves anything.
+//!
 //! One server per notes directory, found through `.viewer.json` (port, token,
 //! pid). The token is in every URL and the `Host` header must be loopback, so
 //! other local pages can't read the notes. The server exits after a long idle
@@ -35,7 +40,7 @@ use super::is_slug;
 
 /// Bump when the server's HTTP contract changes; a hook never talks to a server
 /// of another protocol (it asks it to quit and starts its own).
-pub const VIEWER_PROTOCOL: u32 = 2;
+pub const VIEWER_PROTOCOL: u32 = 3;
 /// The server's address card, in the notes directory.
 pub const INFO_FILE: &str = ".viewer.json";
 const APP: &str = "ocgen-notes";
@@ -60,21 +65,27 @@ impl Info {
 
     /// The URL of the list of drafts, open on draft `selected`.
     pub fn list_url(&self, selected: Option<&str>) -> String {
+        self.list_url_of(super::draft::LIST, selected)
+    }
+
+    /// The URL of list `list` (the drafts', the ledgers' or the intent files'),
+    /// open on document `selected`.
+    pub fn list_url_of(&self, list: &str, selected: Option<&str>) -> String {
         format!(
             "http://127.0.0.1:{}/{}/{}",
             self.port,
             self.token,
-            list_path(selected)
+            list_path(list, selected)
         )
     }
 }
 
-/// The list's path under the token: `_drafts`, or `_drafts/<slug>` with a draft
-/// selected.
-fn list_path(selected: Option<&str>) -> String {
+/// A list's path under the token: `_drafts`, or `_drafts/<slug>` with a draft
+/// selected (the same for `_notes` and `_intents`).
+fn list_path(list: &str, selected: Option<&str>) -> String {
     match selected {
-        Some(s) => format!("{}/{s}", super::draft::LIST),
-        None => super::draft::LIST.to_string(),
+        Some(s) => format!("{list}/{s}"),
+        None => list.to_string(),
     }
 }
 
@@ -166,15 +177,22 @@ pub fn reload(info: &Info, slug: &str, force: bool) -> Option<Action> {
 /// Move the list's open tabs to draft `selected` (or the list's first page), or
 /// say whether to open one. `force` as for [`reload`].
 pub fn reload_list(info: &Info, selected: Option<&str>, force: bool) -> Option<Action> {
+    reload_list_of(info, super::draft::LIST, selected, force)
+}
+
+/// [`reload_list`] for list `list`: the drafts', the ledgers' or the intent
+/// files'.
+pub fn reload_list_of(
+    info: &Info,
+    list: &str,
+    selected: Option<&str>,
+    force: bool,
+) -> Option<Action> {
     let select = selected
         .filter(|s| super::draft::is_name(s))
         .map(|s| format!("&select={s}"))
         .unwrap_or_default();
-    ask_reload(
-        info,
-        &format!("topic={}{select}", super::draft::LIST),
-        force,
-    )
+    ask_reload(info, &format!("topic={list}{select}"), force)
 }
 
 fn ask_reload(info: &Info, query: &str, force: bool) -> Option<Action> {
@@ -330,16 +348,19 @@ struct Client {
     stream: TcpStream,
 }
 
-/// What a server serves: /inquire ledger pages, or /intent issue draft editors.
+/// What a server serves: /inquire ledger pages, /intent issue draft editors, or
+/// intent file pages.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Kind {
     Notes,
     Drafts,
+    Intents,
 }
 
 struct State {
     clients: HashMap<String, Vec<Client>>,
-    /// Drafts: the revision each draft's tabs were last told of.
+    /// The revision each watched topic's tabs were last told of (see
+    /// [`Server::watched`]).
     revs: HashMap<String, String>,
     opened: HashMap<String, Instant>,
     left: HashMap<String, Instant>,
@@ -411,8 +432,8 @@ fn close_inherited_fds() {
 
 /// Run the viewer for notes directory `dir` until it is idle or superseded.
 /// Only a `.claude/notes` directory — the server writes `.viewer.json` there and
-/// renders pages next to their ledgers — or an /intent drafts directory, whose
-/// drafts it edits.
+/// renders pages next to their ledgers — an /intent drafts directory, whose
+/// drafts it edits, or a project's `.claude/intent/viewer`, for its intent files.
 pub fn serve(dir: &Path) -> Result<()> {
     #[cfg(unix)]
     close_inherited_fds();
@@ -420,11 +441,14 @@ pub fn serve(dir: &Path) -> Result<()> {
         Kind::Notes
     } else if super::draft::is_drafts_dir(dir) {
         Kind::Drafts
+    } else if super::intents::is_viewer_dir(dir) {
+        Kind::Intents
     } else {
         anyhow::bail!(
-            "{} is not a .claude/notes or {} directory",
+            "{} is not a .claude/notes, {} or {} directory",
             dir.display(),
-            super::draft::DIR
+            super::draft::DIR,
+            super::intents::VIEWER_DIR
         );
     };
     let dir = dir.canonicalize()?;
@@ -737,19 +761,16 @@ impl Server {
         // anything probing the port must not keep an idle viewer alive.
         self.touch();
         let q = query(q);
-        let list = self.kind == Kind::Drafts;
-        // A page's name: a ledger's slug, or a draft's (longer) name.
+        let list = self.list();
+        // A page's name: a ledger's slug, or a draft's or intent file's (longer) name.
         let named = |t: &str| {
-            if list {
-                super::draft::is_name(t)
-            } else {
+            if self.kind == Kind::Notes {
                 is_slug(t)
+            } else {
+                super::draft::is_name(t)
             }
         };
-        let topic = q
-            .get("topic")
-            .copied()
-            .filter(|t| named(t) || (list && *t == super::draft::LIST));
+        let topic = q.get("topic").copied().filter(|t| named(t) || *t == list);
         let selected = q.get("select").copied().filter(|t| named(t));
         match (req.method.as_str(), rest) {
             ("GET", "ping") => json_reply(
@@ -776,9 +797,10 @@ impl Server {
                 Some(t) => self.events(s, t, q.get("rev").copied().unwrap_or("")),
                 None => plain(&mut s, 400, "bad topic"),
             },
-            ("POST", "render") if list => self.preview(s, &req),
-            // The list: `_drafts`, or `_drafts/<name>` open on that draft.
-            ("GET", page) if list && page.split('/').next() == Some(super::draft::LIST) => {
+            ("POST", "render") if self.kind == Kind::Drafts => self.preview(s, &req),
+            // The list: `_drafts`, or `_drafts/<name>` open on that draft (and
+            // `_notes`, `_intents` the same way).
+            ("GET", page) if page.split('/').next() == Some(list) => {
                 let selected = page.split_once('/').map(|(_, name)| name);
                 if selected.is_some_and(|name| !named(name)) {
                     return plain(&mut s, 404, "not found");
@@ -912,8 +934,10 @@ impl Server {
     }
 
     fn page(&self, mut s: TcpStream, slug: &str) {
-        if self.kind == Kind::Drafts {
-            return self.draft_page(s, slug);
+        match self.kind {
+            Kind::Drafts => return self.draft_page(s, slug),
+            Kind::Intents => return self.intent_page(s, slug),
+            Kind::Notes => {}
         }
         let html = self.dir.join(format!("{slug}.html"));
         let md = self.dir.join(format!("{slug}.md"));
@@ -965,11 +989,78 @@ impl Server {
         }
     }
 
-    /// The list of drafts, page `page` or the one holding `selected`; `root`
-    /// leads from the page back to the token (see [`super::draft::list_page`]).
+    /// The list's path under the token, and its tabs' topic.
+    fn list(&self) -> &'static str {
+        match self.kind {
+            Kind::Notes => super::LIST,
+            Kind::Drafts => super::draft::LIST,
+            Kind::Intents => super::intents::LIST,
+        }
+    }
+
+    /// The project and /intent settings an intent file server reads, now.
+    fn intents(&self) -> Option<(PathBuf, crate::claude::IntentSettings)> {
+        let root = super::intents::project_of_viewer(&self.dir)?;
+        let s = super::intents::settings(&root);
+        Some((root, s))
+    }
+
+    /// The intent file `slug` names: a regular file in the project's intent
+    /// directory, named like an intent file.
+    fn intent_file(&self, slug: &str) -> Option<PathBuf> {
+        let (root, s) = self.intents()?;
+        let rel = format!("{}/{slug}.md", s.dir.trim_matches('/'));
+        super::intents::target(&s, &rel)?;
+        let p = root.join(&rel);
+        fs::symlink_metadata(&p)
+            .is_ok_and(|m| m.file_type().is_file())
+            .then_some(p)
+    }
+
+    /// The read-only page for intent file `slug`, rendered fresh from the file.
+    fn intent_page(&self, mut s: TcpStream, slug: &str) {
+        let (Some(path), Some((_, set))) = (self.intent_file(slug), self.intents()) else {
+            return plain(&mut s, 404, "not found");
+        };
+        let Ok(text) = fs::read_to_string(&path) else {
+            return plain(&mut s, 404, "not found");
+        };
+        let nonce = random_token();
+        let source = format!("{}/{slug}.md", set.dir.trim_matches('/'));
+        let language = super::answer_language(&path);
+        match super::intents::page(
+            &text,
+            &source,
+            &super::rev(text.as_bytes()),
+            &nonce,
+            &language,
+        ) {
+            Ok(page) => respond(
+                &mut s,
+                200,
+                "text/html; charset=utf-8",
+                &draft_csp(&nonce),
+                page.as_bytes(),
+            ),
+            Err(e) => plain(&mut s, 500, &format!("{e:#}")),
+        }
+    }
+
+    /// The list, page `page` or the one holding `selected`; `root` leads from
+    /// the page back to the token (see [`super::draft::list_page`]).
     fn list_page(&self, mut s: TcpStream, page: Option<usize>, selected: Option<&str>, root: &str) {
         let nonce = random_token();
-        match super::draft::list_page(&self.dir, page, selected, root, &nonce) {
+        let html = match self.kind {
+            Kind::Drafts => super::draft::list_page(&self.dir, page, selected, root, &nonce),
+            Kind::Notes => super::list_page(&self.dir, page, selected, root, &nonce),
+            Kind::Intents => match self.intents() {
+                Some((project, set)) => {
+                    super::intents::list_page(&project, &set, page, selected, root, &nonce)
+                }
+                None => Err(anyhow::anyhow!("no project above {}", self.dir.display())),
+            },
+        };
+        match html {
             Ok(html) => respond(
                 &mut s,
                 200,
@@ -981,12 +1072,45 @@ impl Server {
         }
     }
 
-    /// The current revision of `topic`: a draft's, or the list's.
+    /// The current revision of `topic`: a page's, or the list's.
     fn topic_rev(&self, topic: &str) -> String {
-        if topic == super::draft::LIST {
-            super::draft::listing_rev(&self.dir)
+        let list = topic == self.list();
+        match self.kind {
+            Kind::Drafts if list => super::draft::listing_rev(&self.dir),
+            Kind::Drafts => self.draft_rev(topic),
+            Kind::Notes if list => super::listing::rev(&super::ledgers(&self.dir)),
+            Kind::Notes => fs::read(self.dir.join(format!("{topic}.html")))
+                .map(|b| super::rev(&b))
+                .unwrap_or_default(),
+            Kind::Intents if list => self
+                .intents()
+                .map(|(root, s)| {
+                    let dir = super::intents::dir(&root, &s);
+                    super::listing::rev(&super::intents::files(&dir, &s))
+                })
+                .unwrap_or_default(),
+            Kind::Intents => self
+                .intent_file(topic)
+                .and_then(|p| fs::read(p).ok())
+                .map(|b| super::rev(&b))
+                .unwrap_or_default(),
+        }
+    }
+
+    /// Whether the server watches `topic`'s files for changes under its open
+    /// tabs: a draft and an intent file change without a hook telling it (a
+    /// ledger's hook re-renders and reloads it), and a list shows its folder.
+    fn watched(&self, topic: &str) -> bool {
+        self.kind != Kind::Notes || topic == self.list()
+    }
+
+    /// What tells `topic`'s open tabs it changed: a draft's editor is told the
+    /// revision (it may hold edits); every other page reloads.
+    fn change_event(&self, topic: &str) -> String {
+        if self.kind == Kind::Drafts && topic != self.list() {
+            changed_event(&self.topic_rev(topic))
         } else {
-            self.draft_rev(topic)
+            RELOAD.to_string()
         }
     }
 
@@ -1001,12 +1125,7 @@ impl Server {
             return;
         };
         let _ = writer.set_write_timeout(Some(Duration::from_secs(1)));
-        let current = match self.kind {
-            Kind::Notes => fs::read(self.dir.join(format!("{topic}.html")))
-                .map(|b| super::rev(&b))
-                .unwrap_or_default(),
-            Kind::Drafts => self.topic_rev(topic),
-        };
+        let current = self.topic_rev(topic);
         let id = {
             let mut st = self.lock();
             st.next_id += 1;
@@ -1019,7 +1138,7 @@ impl Server {
                 };
                 let _ = writer.write_all(msg.as_bytes());
             }
-            if self.kind == Kind::Drafts {
+            if self.watched(topic) {
                 st.revs.entry(topic.to_string()).or_insert(current);
             }
             st.clients
@@ -1047,15 +1166,13 @@ impl Server {
 
     /// Reload `topic`'s tabs, or say whether a new one should be opened —
     /// decided under one lock, so concurrent updates never open two tabs. The
-    /// list's tabs are moved to draft `selected` (or the list's first page).
+    /// list's tabs are moved to document `selected` (or the list's first page).
     fn decide(&self, topic: &str, force: bool, selected: Option<&str>) -> Action {
         // A draft's tabs are told its revision, never reloaded: they may hold edits.
-        let msg = match self.kind {
-            Kind::Notes => RELOAD.to_string(),
-            Kind::Drafts if topic == super::draft::LIST => {
-                format!("event: show\ndata: {}\n\n", list_path(selected))
-            }
-            Kind::Drafts => changed_event(&self.draft_rev(topic)),
+        let msg = if topic == self.list() {
+            format!("event: show\ndata: {}\n\n", list_path(topic, selected))
+        } else {
+            self.change_event(topic)
         };
         let mut st = self.lock();
         let now = Instant::now();
@@ -1093,27 +1210,24 @@ impl Server {
             if tabs == 0 && st.last_activity.elapsed() >= self.idle {
                 return;
             }
-            let open: Vec<String> = match self.kind {
-                Kind::Drafts => st
-                    .clients
-                    .iter()
-                    .filter(|(_, l)| !l.is_empty())
-                    .map(|(t, _)| t.clone())
-                    .collect(),
-                Kind::Notes => Vec::new(),
-            };
+            let open: Vec<String> = st
+                .clients
+                .iter()
+                .filter(|(t, l)| !l.is_empty() && self.watched(t))
+                .map(|(t, _)| t.clone())
+                .collect();
             drop(st);
-            // Drafts change under open tabs (Claude, another editor): tell them.
-            // The list is redrawn: what it shows has changed.
+            // Drafts and intent files change under open tabs (Claude, another
+            // editor): tell them. A list is redrawn: what it shows has changed.
             for topic in open {
                 let now = self.topic_rev(&topic);
                 let mut st = self.lock();
                 if st.revs.get(&topic) != Some(&now) {
                     st.revs.insert(topic.clone(), now.clone());
-                    let msg = if topic == super::draft::LIST {
-                        RELOAD.to_string()
-                    } else {
+                    let msg = if self.kind == Kind::Drafts && topic != super::draft::LIST {
                         changed_event(&now)
+                    } else {
+                        RELOAD.to_string()
                     };
                     Self::tell(&mut st, &topic, &msg);
                 }

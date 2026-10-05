@@ -460,6 +460,7 @@ repo used for a plugin's marketplace and release workflow; `--team` enables
 .claude/skills/recap/SKILL.md        # /recap — fast-forward your branches, then a per-branch report of what changed since the last recap, plus new GitHub comments and reviews (you run it)
 .claude/intent/issue-template.md     # /intent's GitHub issue structure — yours, written once
 .claude/intent/drafts/<name>.md      # /intent's issue draft — type `draft` to edit, preview and copy it in your browser (git-ignored)
+.claude/intent/viewer/               # the intent files' viewer and session records — type `adr` to read them (git-ignored)
 .claude/intent/intent-template.md    # /intent's intent-file (ADR) structure — yours, written once
 .claude/skills/fanout/SKILL.md       # /fanout — worktree-isolated parallel writers (you run it)
 .claude/skills/improve-prompt/SKILL.md
@@ -861,6 +862,16 @@ converted on their next update.
 | `OCGEN_NOTES_OPEN=0` | Never open a browser (pages are still rendered). `=1` always does. |
 | `OCGEN_NOTES_BROWSER` | Open pages with this command instead of the system default (`open`, `xdg-open`, `start`). Like those, it runs detached: ocgen doesn't wait for it or check how it exits, so a plain `firefox` is fine. |
 
+**Open them from the prompt.** Type **`note`** or **`notes`** (the word alone, as your whole
+message, any case) and the ledger opens in your browser. With several, their list opens first: 10 a
+page, newest first, each with its topic, status and date, and the ledger this session wrote last
+already selected; ↑/↓ and Enter open one, ←/→ turn the page. With none, nothing opens and Claude
+says there are no `/inquire` notes yet. An open tab is reused: sent again, the word refreshes the
+ledger's tab or moves the list's. Any other prompt (`note this`) reaches Claude untouched. The same
+`inquire-notes` hook catches the word (`UserPromptSubmit`) and remembers the ledger each write
+makes the session's, one small file per session in `.claude/notes/.sessions/`. Projects created
+before get the word with `ocgen doctor [dir]`.
+
 **When nothing opens.** In CI (`CI` is set) and on Linux without a display, the hook only renders
 the pages; `ocgen notes open` still opens one when you ask. The page and the live view need the
 ocgen binary on `PATH` (the bundled script fallback does nothing), and `ocgen verify` tells you
@@ -1030,6 +1041,24 @@ Markdown, without scripts or event attributes. The editor is built into the bina
 the page's one script, so the page loads nothing from the network. It needs
 the ocgen binary on `PATH`; without it the word reaches Claude, which tells you to run
 `ocgen draft`. `ocgen verify` checks the hook.
+
+**Read the intent files the same way.** Type the project's intent prefix in lowercase — **`adr`**
+by default, `rfc` if the prefix is `RFC` (`ocgen edit intent`) — and the intent file opens in your
+browser, read-only; with several, their list opens first, 10 a page, **highest number first**
+(numbers say which is newest: a fresh clone gives every file the same time), with the file this
+session wrote last selected. With none, nothing opens and Claude is told why. The page uses the
+drafts' black and white palettes and is made safe like the draft's preview: raw HTML keeps only
+the tags GitHub allows, links only `http(s)` and `mailto` targets (a relative link shows as text),
+images become links, and the page's one script is ocgen's own. It follows the file: a change on
+disk refreshes it. To edit, edit the `.md` file. From a terminal, `ocgen adr [name]` does the same,
+by name, by its start, or by number (`ocgen adr 7`, `0007`, `ADR-7`).
+
+The same `intent-draft` hook catches this word and remembers the intent file the session wrote last
+(by path, or by what a Bash call changed), so projects created before get it with the new binary,
+without regenerating. The intent files are tracked, so nothing is written beside them: the viewer
+and the session records live in `.claude/intent/viewer/`, which ignores itself. A prefix spelled
+like a word ocgen already has (`draft`, `note`, `notes`) leaves that word alone; `ocgen adr` still
+opens its files.
 
 **Blameless, but completely honest.** The team that wrote the code reads these drafts, so they
 follow a writing standard: **soften the framing, never the facts**. The code, design or behaviour
@@ -1403,11 +1432,11 @@ if [ "$(ocgen hook --check 2>/dev/null)" = "ocgen-hooks 13" ]; then ocgen hook t
 - **The binary gives you** real JSON parsing instead of `grep`, and hooks that work on
   **native Windows**.
 - **The scripts keep the project working** for teammates and CI machines without ocgen.
-  The exceptions are `inquire-notes`, which renders `/inquire`'s HTML view, `intent-draft`,
-  which opens `/intent`'s issue draft in the browser, `intent-approvers`, which checks drafts
-  against the current approvers, and `recap-github`, which answers `/recap`'s GitHub request:
-  their scripts do nothing, so without ocgen the ledgers stay Markdown only, `draft` reaches
-  Claude as typed, only `ocgen verify` and `ocgen edit intent` report a draft that misses an
+  The exceptions are `inquire-notes`, which renders `/inquire`'s HTML view and opens it on
+  `note`, `intent-draft`, which opens `/intent`'s issue draft (and, on `adr`, its intent files)
+  in the browser, `intent-approvers`, which checks drafts against the current approvers, and
+  `recap-github`, which answers `/recap`'s GitHub request: their scripts do nothing, so without
+  ocgen the ledgers stay Markdown only, `draft`, `note` and `adr` reach Claude as typed, only `ocgen verify` and `ocgen edit intent` report a draft that misses an
   approver, and `/recap` reports GitHub as not checked.
   They need only a POSIX `sh` (Git Bash on Windows): `jq` is used when present and is never
   required (without it, JSON escapes are decoded, and a command holding a `\b`, `\f` or `\u`
@@ -1671,12 +1700,13 @@ for a plugin; `--team` is off by default. (The `--base-url` flag is OpenCode-onl
 |---|---|
 | `ocgen landscape [dir]` (alias `horizon`) | Read-only overview: agents (alias/tools/colour), skills, workflow/output/team setup, delegation topology, and a **Checks** section. |
 | `ocgen doctor [dir] [--dry-run] [--yes]` | Repair the project and rewrite files (invalid models, colours, empty roles, bad enum values, older state files). Shows a per-file plan with diffs, flags hand edits, offers to keep hand-added permission rules and MCP servers, removes files ocgen no longer generates, asks first, and backs up to `.ocgen-backup/`. |
-| `ocgen verify [dir] [--no-claude]` | Check the project works: up to date, settings valid, no local/user/managed setting turns hooks off or weakens a gate, hooks run (in bash; Git Bash present on Windows), every gate is ocgen's own and the approval gate blocks, http:// WebFetch is blocked, a no-op `cd` is dropped, `/inquire` ledgers get their HTML view, `draft` opens the `/intent` issue draft, `/recap`'s GitHub request gets an answer, pending intents and drafts name the current approvers, the sandbox is on behind the gate, the pre-push hook blocks Claude and lets you through, scripts use LF, the statusline renders, ocgen on PATH is current, Claude Code validation passes. Runs only what ocgen generates. Exits 1 on failure. |
+| `ocgen verify [dir] [--no-claude]` | Check the project works: up to date, settings valid, no local/user/managed setting turns hooks off or weakens a gate, hooks run (in bash; Git Bash present on Windows), every gate is ocgen's own and the approval gate blocks, http:// WebFetch is blocked, a no-op `cd` is dropped, `/inquire` ledgers get their HTML view, `note` opens them, `draft` opens the `/intent` issue draft and `adr` its intent files, `/recap`'s GitHub request gets an answer, pending intents and drafts name the current approvers, the sandbox is on behind the gate, the pre-push hook blocks Claude and lets you through, scripts use LF, the statusline renders, ocgen on PATH is current, Claude Code validation passes. Runs only what ocgen generates. Exits 1 on failure. |
 | `ocgen approve [dir] [--minutes N] [--status] [--revoke]` | You approve high-impact actions for 1–1440 minutes (default 30). Refuses to run under Claude Code or without a terminal. |
 | `ocgen verify [dir] --run-check` | Also run the project's committed check command, as you and unsandboxed (only on a repository you trust). |
 | `ocgen notes open [topic]` | Show an `/inquire` ledger's HTML page: refresh the tab that shows it, or open one ([details](#the-visual-ledger)). |
 | `ocgen notes render <file.md>…` | Render `/inquire` ledgers (`.claude/notes/<topic-slug>.md`) and `/intent` reading copies (`.claude/intent/view/<name>.md`) to their HTML pages without opening them; any other file is refused. |
 | `ocgen draft [name] [-p dir]` | Open an `/intent` or `/review-intent` issue draft (`.claude/intent/drafts/<name>.md`) in a local browser editor: edit it as formatted text (Markdown syntax hidden) or as Markdown source, save it back as plain Markdown (untouched blocks keep their exact text), preview it as GitHub shows it, and copy it. A calm black page by default (white on request), the text around the cursor dimmed, and a Focus button for full screen. With no name, the only draft, or with several, their list to pick from (10 a page, newest first); `ADR-0007` picks by intent. Typing `draft` in Claude Code does the same, with the draft that session wrote last selected in the list ([details](#from-findings-to-a-github-issue-intent)). |
+| `ocgen adr [name] [-p dir]` | Read an `/intent` file (`docs/adr/ADR-0007-<slug>.md` by default; the project's prefix and directory) in a local browser page, read-only and sanitized like the draft's preview, in the drafts' black or white palette. With no name, the only file, or with several, their list to pick from (10 a page, highest number first); a name, its start, or a number (`7`, `0007`, `ADR-7`) picks one. Typing the prefix in lowercase (`adr`) in Claude Code does the same, with the file that session wrote last selected ([details](#from-findings-to-a-github-issue-intent)). |
 | `ocgen managed-settings` | Print a recommended organisation policy (`managed-settings.json`): no bypass mode, secrets unreadable, high-impact commands always ask, strict sandbox. |
 | `ocgen fields` (alias `reference`) | Explain every configurable field, including the Claude-specific ones (alias, tools, skills, output/plugin, agent teams). |
 

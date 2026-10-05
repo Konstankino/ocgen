@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="{{ w.lang }}" data-palette="black">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta name="generator" content="ocgen — an /intent file, read-only; edit the .md file">
+<title>{{ title }} · {{ w.intent_title }}</title>
+<style>
+{% include "page.css" %}
+[hidden] { display: none !important; }
+{% include "palette.css" %}
+body.intent-file { background: var(--bg); color: var(--z-text);
+  font: 16px/1.6 "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, Helvetica, Arial, sans-serif; }
+.intent-file main { max-width: 48rem; margin: 0 auto; padding: 0 16px 64px; }
+.intent-file .bar { position: sticky; top: 0; z-index: 3; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+  gap: 4px 20px; padding: 12px 24px; background: var(--bg); font-size: 13.5px; line-height: 1.4; }
+.intent-file .where { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; min-width: 0; margin: 0;
+  font: inherit; letter-spacing: 0; color: var(--faint); }
+.intent-file .where code { font-size: 12.5px; color: var(--muted); overflow-wrap: anywhere; }
+.intent-file .where .all { color: var(--muted); text-decoration: none; border-radius: 6px; padding: 0 4px; margin-left: -4px; }
+.intent-file .where .all:hover { color: var(--text); background: var(--surface-2); }
+.intent-file .palette { display: inline-flex; gap: 2px; }
+.intent-file .palette button { font: inherit; color: var(--muted); background: transparent; border: 0; border-radius: 6px; padding: 5px 9px; cursor: pointer; }
+.intent-file .palette button:hover, .intent-file .palette button[aria-pressed="true"] { color: var(--text); background: var(--surface-2); }
+.intent-file :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.intent-file h1.title { margin: 18px 0 10px; font-size: 1.75em; font-weight: 600; line-height: 1.3; letter-spacing: 0; color: var(--text); }
+.intent-file .fields { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 24px; padding: 0; list-style: none; font-size: 13px; }
+.intent-file .fields li { color: var(--muted); border: 1px solid var(--border); border-radius: 999px; padding: 1px 10px; overflow-wrap: anywhere; }
+.intent-file .fields b { font-weight: 600; color: var(--text); }
+.intent-file .fields a { color: var(--accent); }
+/* the file, close to how GitHub draws a Markdown file */
+.markdown-body { font-size: 16px; line-height: 1.6; overflow-wrap: anywhere; }
+.markdown-body > :first-child { margin-top: 0; }
+.markdown-body > :last-child { margin-bottom: 0; }
+.markdown-body a { color: var(--accent); }
+.markdown-body h1, .markdown-body h2 { padding-bottom: .3em; border-bottom: 1px solid var(--border); }
+.markdown-body h1 { font-size: 2em; margin: 24px 0 16px; }
+.markdown-body h2 { font-size: 1.5em; margin: 24px 0 16px; }
+.markdown-body h3 { font-size: 1.25em; margin: 24px 0 16px; }
+.markdown-body h4, .markdown-body h5, .markdown-body h6 { font-size: 1em; margin: 24px 0 16px; }
+.markdown-body p, .markdown-body ul, .markdown-body ol, .markdown-body table, .markdown-body pre,
+.markdown-body blockquote, .markdown-body details { margin: 0 0 16px; }
+.markdown-body ul, .markdown-body ol { padding-left: 2em; }
+.markdown-body li + li { margin-top: .25em; }
+.markdown-body li:has(> input[type="checkbox"]) { list-style: none; }
+.markdown-body input[type="checkbox"] { margin: 0 .3em .2em -1.4em; vertical-align: middle; }
+.markdown-body summary { cursor: pointer; }
+.markdown-body details > :not(summary):first-of-type { margin-top: 12px; }
+.markdown-body table { display: block; max-width: 100%; overflow-x: auto; width: auto; border-collapse: collapse; }
+.markdown-body th, .markdown-body td { padding: 6px 13px; border: 1px solid var(--border); }
+.markdown-body th { text-transform: none; letter-spacing: 0; font-size: 15px; font-weight: 600; color: var(--text); }
+.markdown-body blockquote { padding: 0 1em; color: var(--muted); border-left: .25em solid var(--border-strong); }
+.markdown-body code { background: var(--surface-2); padding: .2em .4em; border-radius: 6px; }
+.markdown-body pre { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 12px 16px; overflow-x: auto; }
+.markdown-body pre code { padding: 0; background: transparent; }
+.markdown-body hr { border: 0; border-top: 1px solid var(--border); margin: 24px 0; }
+.markdown-body kbd { font: 12px ui-monospace, Menlo, Consolas, monospace; padding: 2px 5px; border: 1px solid var(--border-strong);
+  border-bottom-width: 2px; border-radius: 6px; background: var(--surface-2); }
+.intent-file footer { margin-top: 36px; color: var(--faint); font-size: 12.5px; line-height: 1.7; }
+.intent-file footer code { overflow-wrap: anywhere; }
+@media (max-width: 600px) {
+  .intent-file .bar { padding: 10px 16px; }
+}
+</style>
+</head>
+<body class="intent-file" data-rev="{{ rev }}" data-slug="{{ slug }}">
+<div class="offline">{{ w.intent_offline }}</div>
+<header class="bar">
+  <p class="where"><a class="all" href="{{ list }}/{{ slug }}">← {{ w.all_intents }}</a> <span>/intent · {{ w.intent_title }}</span> <code>{{ source }}</code></p>
+  <span class="palette" role="group" aria-label="{{ w.palette }}">
+    <button type="button" id="palette-black" aria-pressed="true">{{ w.black }}</button>
+    <button type="button" id="palette-white" aria-pressed="false">{{ w.white }}</button>
+  </span>
+</header>
+<main>
+  <article>
+    <h1 class="title">{{ title }}</h1>
+{%- if fields %}
+    <ul class="fields">
+{%- for f in fields %}<li><b>{{ f.key }}:</b> {{ f.value }}</li>{% endfor -%}
+    </ul>
+{%- endif %}
+    <div class="markdown-body">{{ body }}</div>
+  </article>
+  <footer>{{ w.intent_footer }} <code>{{ source }}</code></footer>
+</main>
+<script nonce="{{ nonce }}">
+(function () {
+  "use strict";
+  var page = document.body;
+  function palette(p) {
+    document.documentElement.setAttribute("data-palette", p);
+    ["black", "white"].forEach(function (q) {
+      document.getElementById("palette-" + q).setAttribute("aria-pressed", String(q === p));
+    });
+  }
+  document.getElementById("palette-black").addEventListener("click", function () { palette("black"); });
+  document.getElementById("palette-white").addEventListener("click", function () { palette("white"); });
+
+  // The file changes on disk (or the word is sent again): show it as it is now.
+  var errors = 0;
+  var es = new EventSource("events?topic=" + encodeURIComponent(page.getAttribute("data-slug")) +
+    "&rev=" + encodeURIComponent(page.getAttribute("data-rev")));
+  es.addEventListener("reload", function () { es.close(); location.reload(); });
+  es.onopen = function () { errors = 0; page.removeAttribute("data-viewer"); };
+  es.onerror = function () { if (++errors > 5) page.setAttribute("data-viewer", "offline"); };
+  window.addEventListener("pageshow", function (e) { if (e.persisted) location.reload(); });
+})();
+</script>
+</body>
+</html>

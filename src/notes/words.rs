@@ -41,12 +41,43 @@ pub struct Words {
     pub intent_footer: &'static str,
     /// The issue draft's editor page.
     pub draft: DraftWords,
+    /// The read-only pages: the lists of notes and of intent files, and an
+    /// intent file's page. Their palette, pager and keys are the drafts'.
+    pub docs: DocsWords,
     /// Lens keys → shown names.
     lenses: [(&'static str, &'static str); 7],
     /// Footnote prefixes → shown prefixes.
     footnotes: [(&'static str, &'static str); 6],
     /// The counts line: questions, verified, inferred, stale (0 = left out).
     counts: fn(usize, usize, usize, usize) -> String,
+}
+
+/// What the read-only pages say by themselves.
+pub struct DocsWords {
+    /// The list of /inquire notes: its title, its count (`{count}`), its
+    /// footer, its offline banner (HTML: it names a command), and what it shows
+    /// with none.
+    pub notes_title: &'static str,
+    pub notes_count: &'static str,
+    pub notes_footer: &'static str,
+    pub notes_offline: &'static str,
+    pub notes_none: &'static str,
+    /// Before a listed ledger's `Updated:` date.
+    pub updated: &'static str,
+    /// The list of intent files, the same way.
+    pub intents_title: &'static str,
+    pub intents_count: &'static str,
+    pub intents_footer: &'static str,
+    pub intents_offline: &'static str,
+    pub intents_none: &'static str,
+    /// Before the intent files whose names ocgen can't open.
+    pub intents_skipped: &'static str,
+    /// An intent file's page: its name, its link to the list, its footer and
+    /// its offline banner (HTML: it names a command).
+    pub intent_title: &'static str,
+    pub all_intents: &'static str,
+    pub intent_footer: &'static str,
+    pub intent_offline: &'static str,
 }
 
 /// What the issue draft's editor page says by itself.
@@ -204,6 +235,24 @@ pub static ENGLISH: Words = Words {
         none_yet: "No issue drafts yet.",
         skipped: "Not listed, because ocgen can’t open these names — rename them to letters, digits, - and _ (at most 200 characters):",
     },
+    docs: DocsWords {
+        notes_title: "/inquire notes",
+        notes_count: "{count} notes · newest first",
+        notes_footer: "Open a note to read it. The list follows the folder: it refreshes when a note changes.",
+        notes_offline: "Viewer disconnected — this list won’t refresh. Run <code>ocgen notes open</code> to reconnect.",
+        notes_none: "No /inquire notes yet.",
+        updated: "Updated",
+        intents_title: "Intent files",
+        intents_count: "{count} intent files · highest number first",
+        intents_footer: "Open an intent file to read it. The list follows the folder: it refreshes when a file changes.",
+        intents_offline: "Viewer disconnected — this list won’t refresh. Run <code>ocgen adr</code> to reconnect.",
+        intents_none: "No intent files yet.",
+        intents_skipped: "Not listed, because ocgen can’t open these names — rename them to letters, digits, - and _ (at most 200 characters):",
+        intent_title: "Intent file",
+        all_intents: "All intent files",
+        intent_footer: "Read-only. Edit the file named above; this page follows it.",
+        intent_offline: "Viewer disconnected — this page won’t refresh. Run <code>ocgen adr</code> to reconnect.",
+    },
     lenses: [
         ("Structure", "Structure"),
         ("Flow", "Flow"),
@@ -305,6 +354,24 @@ pub static UKRAINIAN: Words = Words {
         list_offline: "Редактор від’єднано — список не оновлюватиметься. Щоб під’єднатися знову, виконайте <code>ocgen draft</code>.",
         none_yet: "Чернеток ще немає.",
         skipped: "Не в списку, бо ocgen не може відкрити файли з такими назвами — перейменуйте їх: лише букви, цифри, - і _ (до 200 символів):",
+    },
+    docs: DocsWords {
+        notes_title: "Нотатки /inquire",
+        notes_count: "Нотаток: {count} · найновіші вгорі",
+        notes_footer: "Відкрийте нотатку, щоб прочитати її. Список стежить за текою й оновлюється, коли нотатка змінюється.",
+        notes_offline: "Переглядач від’єднано — список не оновлюватиметься. Щоб під’єднатися знову, виконайте <code>ocgen notes open</code>.",
+        notes_none: "Нотаток /inquire ще немає.",
+        updated: "Оновлено",
+        intents_title: "Файли намірів",
+        intents_count: "Файлів: {count} · спершу з найбільшим номером",
+        intents_footer: "Відкрийте файл наміру, щоб прочитати його. Список стежить за текою й оновлюється, коли файл змінюється.",
+        intents_offline: "Переглядач від’єднано — список не оновлюватиметься. Щоб під’єднатися знову, виконайте <code>ocgen adr</code>.",
+        intents_none: "Файлів намірів ще немає.",
+        intents_skipped: "Не в списку, бо ocgen не може відкрити файли з такими назвами — перейменуйте їх: лише букви, цифри, - і _ (до 200 символів):",
+        intent_title: "Файл наміру",
+        all_intents: "Усі файли намірів",
+        intent_footer: "Лише для читання. Редагуйте файл, указаний вище, — ця сторінка стежить за ним.",
+        intent_offline: "Переглядач від’єднано — сторінка не оновлюватиметься. Щоб під’єднатися знову, виконайте <code>ocgen adr</code>.",
     },
     lenses: [
         ("Structure", "Структура"),

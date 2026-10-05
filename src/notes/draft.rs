@@ -27,7 +27,6 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime};
 
 use anyhow::{bail, Context, Result};
 use minijinja::{AutoEscape, Environment, Value};
@@ -35,6 +34,7 @@ use pulldown_cmark::{Event, LinkType, Options, Parser, Tag, TagEnd};
 use regex::Regex;
 
 use super::html::escape;
+use super::session;
 use super::words::{self, Words};
 use super::Shown;
 use crate::templates;
@@ -56,14 +56,10 @@ pub const LIST: &str = "_drafts";
 pub const PER_PAGE: usize = 10;
 /// Where each session's last-written draft is kept, in the drafts directory
 /// (which git-ignores itself): one file per session id, holding a slug.
-pub const SESSIONS: &str = ".sessions";
-/// How long a session's record is kept after its last write.
-const SESSION_TTL: Duration = Duration::from_secs(30 * 24 * 3600);
+pub const SESSIONS: &str = session::SESSIONS;
 /// Where, in [`SESSIONS`], the drafts' state is kept from just before a Bash
 /// call to just after it: one file per tool call.
-pub const BEFORE: &str = ".before";
-/// How long the state kept for a call that never finished is kept.
-const BEFORE_TTL: Duration = Duration::from_secs(24 * 3600);
+pub const BEFORE: &str = session::BEFORE;
 /// The longest draft name (without `.md`): it leaves room for the editor's
 /// temporary file beside it within the 255 bytes a file name may have.
 pub const MAX_NAME: usize = 200;
@@ -228,71 +224,11 @@ fn stem(p: &Path) -> String {
 
 // ------------------------------------------------------------- sessions --
 
-/// A session id fit to name a file: letters, digits, `-` and `_`.
-fn plain_id(s: &str) -> bool {
-    !s.is_empty()
-        && s.len() <= 128
-        && s.bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
-}
-
 /// Remember that `session` wrote draft `slug` last (see [`SESSIONS`]), and drop
 /// records older than a month. False when nothing was recorded: an id or slug
 /// that can't name a file, or a write that failed.
 pub fn remember(dir: &Path, session: &str, slug: &str) -> bool {
-    if !plain_id(session) || !is_name(slug) {
-        return false;
-    }
-    let at = dir.join(SESSIONS);
-    if fs::create_dir_all(&at).is_err() {
-        return false;
-    }
-    ignore_self(dir);
-    prune(&at, SESSION_TTL);
-    let now = SystemTime::now();
-    let file = at.join(session);
-    if super::write_if_changed(&file, slug.as_bytes()).is_err() {
-        return false;
-    }
-    // An unchanged record isn't rewritten: keep it fresh all the same.
-    let _ = fs::File::options()
-        .write(true)
-        .open(&file)
-        .and_then(|f| f.set_modified(now));
-    true
-}
-
-/// Remove the files in `at` last changed longer than `ttl` ago.
-fn prune(at: &Path, ttl: Duration) {
-    let now = SystemTime::now();
-    for e in fs::read_dir(at).into_iter().flatten().flatten() {
-        let stale = e
-            .metadata()
-            .and_then(|m| m.modified())
-            .ok()
-            .and_then(|t| now.duration_since(t).ok())
-            .is_some_and(|age| age > ttl);
-        if stale {
-            let _ = fs::remove_file(e.path());
-        }
-    }
-}
-
-/// Each of `drafts`' state — size, time and text — by name.
-fn states(drafts: &[PathBuf]) -> BTreeMap<String, String> {
-    drafts
-        .iter()
-        .map(|p| {
-            let m = fs::metadata(p).ok();
-            let len = m.as_ref().map_or(0, |m| m.len());
-            let t = m
-                .and_then(|m| m.modified().ok())
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map_or(0, |d| d.as_nanos());
-            let rev = fs::read(p).map(|b| super::rev(&b)).unwrap_or_default();
-            (stem(p), format!("{len}:{t}:{rev}"))
-        })
-        .collect()
+    session::remember(dir, session, slug, is_name)
 }
 
 /// Before Bash call `call` (its tool-use id): keep the drafts' state until
@@ -300,20 +236,7 @@ fn states(drafts: &[PathBuf]) -> BTreeMap<String, String> {
 /// command) a day ago. False when nothing was kept: no drafts directory yet, a
 /// call id that can't name a file, or a write that failed.
 pub fn before_bash(dir: &Path, call: &str) -> bool {
-    if !plain_id(call) || !dir.is_dir() {
-        return false;
-    }
-    let at = dir.join(SESSIONS).join(BEFORE);
-    if fs::create_dir_all(&at).is_err() {
-        return false;
-    }
-    ignore_self(dir);
-    prune(&at, BEFORE_TTL);
-    let body: String = states(&drafts(dir))
-        .iter()
-        .map(|(name, state)| format!("{name}\t{state}\n"))
-        .collect();
-    super::write_if_changed(&at.join(call), body.as_bytes()).is_ok()
+    dir.is_dir() && session::before_bash(dir, call, &drafts(dir))
 }
 
 /// After Bash call `call`: the drafts it added or changed — by size, time or
@@ -322,40 +245,19 @@ pub fn before_bash(dir: &Path, call: &str) -> bool {
 /// Whatever command made the change (`cp`, `mv`, `sed -i`, a redirect), the
 /// answer depends only on the files.
 pub fn after_bash(dir: &Path, call: &str, session: &str) -> Option<String> {
-    if !plain_id(call) {
-        return None;
-    }
-    let kept = dir.join(SESSIONS).join(BEFORE).join(call);
-    let before = fs::read_to_string(&kept).ok()?;
-    let _ = fs::remove_file(&kept);
-    let before: BTreeMap<&str, &str> = before.lines().filter_map(|l| l.split_once('\t')).collect();
     // Newest first, then by name: the order the list shows.
-    let all = drafts(dir);
-    let now = states(&all);
-    let name = all
-        .iter()
-        .map(|p| stem(p))
-        .find(|n| before.get(n.as_str()).copied() != now.get(n).map(String::as_str))?;
-    remember(dir, session, &name).then_some(name)
+    session::after_bash(dir, call, session, &drafts(dir), is_name)
 }
 
 /// The draft `session` wrote last, while it still exists.
 pub fn session_draft(dir: &Path, session: &str) -> Option<String> {
-    if !plain_id(session) {
-        return None;
-    }
-    let slug = fs::read_to_string(dir.join(SESSIONS).join(session)).ok()?;
-    let slug = slug.trim();
-    (is_name(slug) && dir.join(format!("{slug}.md")).is_file()).then(|| slug.to_string())
+    session::recall(dir, dir, session, is_name)
 }
 
 /// Drafts are working copies — the issue on GitHub is the record — so their
 /// directory git-ignores itself.
 fn ignore_self(dir: &Path) {
-    let ignore = dir.join(".gitignore");
-    if !ignore.exists() {
-        let _ = fs::write(ignore, "*\n");
-    }
+    session::ignore_self(dir);
 }
 
 // ------------------------------------------------------------- preview --
@@ -440,7 +342,7 @@ fn sanitize(html: &str) -> String {
 }
 
 /// A link target the preview may keep: the web or mail.
-fn safe_url(url: &str) -> bool {
+pub(crate) fn safe_url(url: &str) -> bool {
     let u = url.trim().to_ascii_lowercase();
     u.starts_with("https://") || u.starts_with("http://") || u.starts_with("mailto:")
 }
@@ -449,6 +351,13 @@ fn safe_url(url: &str) -> bool {
 /// docs): headings, lists, task lists, tables, code, `<details>` blocks, and a
 /// single newline as a line break.
 pub fn preview(md: &str) -> String {
+    render_safe(md, true)
+}
+
+/// Markdown made safe the way [`preview`] makes a draft safe; a single newline
+/// is a line break with `hard_breaks` (an issue), else a space (a file, as
+/// GitHub shows a `.md` file in a repository).
+pub(crate) fn render_safe(md: &str, hard_breaks: bool) -> String {
     let opts = Options::ENABLE_TABLES
         | Options::ENABLE_STRIKETHROUGH
         | Options::ENABLE_TASKLISTS
@@ -472,7 +381,7 @@ pub fn preview(md: &str) -> String {
             },
             Event::InlineHtml(h) => events.push(Event::InlineHtml(sanitize(&h).into())),
             // An issue keeps the line breaks it was written with.
-            Event::SoftBreak => events.push(Event::HardBreak),
+            Event::SoftBreak if hard_breaks => events.push(Event::HardBreak),
             Event::Start(
                 Tag::Link {
                     link_type,
@@ -858,7 +767,7 @@ fn editor(dir: &Path, env: &HashMap<String, String>) -> Result<super::viewer::In
 
 /// What the editor did with a request to show a page, opening `url` in a new
 /// tab when no tab shows it.
-fn shown(
+pub(crate) fn shown(
     action: Option<super::viewer::Action>,
     url: impl FnOnce() -> String,
     env: &HashMap<String, String>,

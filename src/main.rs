@@ -165,6 +165,57 @@ fn main() -> Result<()> {
         },
         Command::Notes { action } => run_notes(action)?,
         Command::Draft { name, path } => run_draft(name.as_deref(), &path)?,
+        Command::Adr { name, path } => run_adr(name.as_deref(), &path)?,
+    }
+    Ok(())
+}
+
+fn run_adr(name: Option<&str>, path: &str) -> Result<()> {
+    use ocgen::notes::{intents, Shown};
+    let (root, s) = intents::project(std::path::Path::new(path))
+        .ok_or_else(|| anyhow::anyhow!("no ocgen project above {path}"))?;
+    let dir = intents::dir(&root, &s);
+    let at = intents::shown_dir(&s);
+    // Files that can't be opened: an error names them itself ([`intents::find`]).
+    let skipped = || {
+        if let Some(note) = intents::skipped_note(&dir, &s) {
+            println!("warning: {note}");
+        }
+    };
+    let env: std::collections::HashMap<String, String> = std::env::vars().collect();
+    let all = intents::files(&dir, &s);
+    if name.is_none() && all.len() > 1 {
+        let list = format!("{} intent files in {at}", all.len());
+        match intents::show_list(&root, None, &env, true)? {
+            Shown::Off => println!(
+                "{list} (not opened: OCGEN_NOTES_OPEN=0) — name one: ocgen adr <name or number>"
+            ),
+            Shown::Reloaded(_) | Shown::Pending => {
+                println!("The list of the {list} is already open in your browser")
+            }
+            Shown::Opened(url) => println!("Opened the list of the {list} in your browser: {url}"),
+            Shown::OpenedFile(p) | Shown::FileAlreadyOpened(p) => {
+                println!("Opened {}", p.display())
+            }
+        }
+        skipped();
+        return Ok(());
+    }
+    let md = intents::find(&dir, &s, name)?;
+    skipped();
+    let rel = format!(
+        "{at}{}",
+        md.file_name().unwrap_or_default().to_string_lossy()
+    );
+    match intents::show(&root, &md, &env, true)? {
+        Shown::Off => println!("{rel} (not opened: OCGEN_NOTES_OPEN=0)"),
+        Shown::Reloaded(_) | Shown::Pending => {
+            println!("{rel} is already open in your browser")
+        }
+        Shown::Opened(url) => println!("Opened {rel} in your browser: {url}"),
+        Shown::OpenedFile(p) | Shown::FileAlreadyOpened(p) => {
+            println!("Opened {}", p.display())
+        }
     }
     Ok(())
 }

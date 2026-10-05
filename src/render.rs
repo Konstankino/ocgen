@@ -1574,8 +1574,9 @@ impl Project {
             let body = templates::load_embedded("claude/hooks/inquire-notes.sh")?;
             components.push(("hooks/inquire-notes.sh".to_string(), body));
         }
-        // The word `draft` opens /intent's issue draft in a browser editor, and
-        // every write to an intent file or draft is checked against the approvers.
+        // The word `draft` opens /intent's issue draft in a browser editor (and
+        // `adr` its intent files), and every write to an intent file or draft is
+        // checked against the approvers.
         if self.claude.workflow.intent {
             for script in ["intent-draft.sh", "intent-approvers.sh"] {
                 let body = templates::load_embedded(&format!("claude/hooks/{script}"))?;
@@ -2333,14 +2334,21 @@ impl Project {
         }
         if self.renders_notes() {
             // Re-render a ledger's or a reading copy's HTML view after each write
-            // and show it.
+            // and show it (and remember the ledger as the session's).
             push(
                 "PostToolUse",
                 json!({ "matcher": "Write|Edit|MultiEdit", "hooks": [ command_hook(hook_cmd(prefix, dir, "inquire-notes.sh")) ] }),
             );
+            // `note` or `notes`, sent alone, opens the ledger, or their list with
+            // the session's selected: from a hook, outside the Bash sandbox.
+            push(
+                "UserPromptSubmit",
+                json!({ "hooks": [ command_hook(hook_cmd(prefix, dir, "inquire-notes.sh")) ] }),
+            );
         }
         if self.claude.workflow.intent {
-            // `draft`, sent alone, opens /intent's issue draft in a browser editor:
+            // `draft`, sent alone, opens /intent's issue draft in a browser editor,
+            // and the intent prefix in lowercase (`adr`) its intent files, read-only:
             // a hook runs outside the Bash sandbox, where the editor's server can start.
             push(
                 "UserPromptSubmit",

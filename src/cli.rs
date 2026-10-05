@@ -170,7 +170,37 @@ pub enum Command {
         #[arg(long, short, default_value = ".")]
         path: String,
     },
+    /// Read an /intent file in your browser, read-only.
+    ///
+    /// /intent writes its intent files to the project's intent directory
+    /// (docs/adr/ADR-0007-<slug>.md by default; `ocgen edit intent` sets the prefix
+    /// and the directory). With several and no name, it opens their list to pick
+    /// from, 10 a page, highest number first. Typing the prefix in lowercase on its
+    /// own in Claude Code (`adr`) does the same, with the file that session wrote
+    /// last selected.
+    #[command(after_help = ADR_EXAMPLES)]
+    Adr {
+        /// The file's name, its start, or its number (7, 0007, ADR-7); default: the
+        /// only file, or the list of them.
+        name: Option<String>,
+        /// Directory inside the project (default: current dir).
+        #[arg(long, short, default_value = ".")]
+        path: String,
+    },
 }
+
+const ADR_EXAMPLES: &str = "Examples:
+  ocgen adr                              the only intent file, or the list of them to pick from
+  ocgen adr 7                            by number (also 0007 or ADR-7)
+  ocgen adr ADR-0007                     by the start of its name
+  ocgen adr ADR-0007-retry-budget        by file name
+
+The page is local (127.0.0.1, a secret token in its address) and read-only: edit the .md
+file, and an open page follows it.
+
+Environment:
+  OCGEN_NOTES_OPEN=0     never open a browser
+  OCGEN_NOTES_BROWSER    a command to open pages with instead of the system default";
 
 const DRAFT_EXAMPLES: &str = "Examples:
   ocgen draft                            the only draft, or the list of them to pick from

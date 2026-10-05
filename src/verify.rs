@@ -217,6 +217,7 @@ pub fn verify(project: &Project, root: &Path, opts: &Options) -> Vec<Check> {
             out.push(https_only_fetch(&probe));
             out.push(noop_cd(&probe));
             out.push(notes_view(&probe));
+            out.push(notes_word(&probe));
             out.push(draft_review(&probe));
             out.push(recap_github(&probe));
         }
@@ -1773,6 +1774,83 @@ fn notes_view(p: &Probe) -> Check {
     }
 }
 
+/// The /inquire notes word: `note` gets a note for Claude about opening the
+/// ledgers, and any other prompt passes untouched. Probed with the browser
+/// switched off, in the project itself (it writes nothing then).
+fn notes_word(p: &Probe) -> Check {
+    let name = "/inquire notes word";
+    let Some((event, group, cmd)) = p.find("UserPromptSubmit", "inquire-notes") else {
+        return match p.find("PostToolUse", "inquire-notes") {
+            Some(_) => check(
+                name,
+                Status::Warn,
+                "no UserPromptSubmit hook, so `note` reaches Claude as typed — run `ocgen doctor`",
+            ),
+            None => check(name, Status::Skip, "/inquire not enabled"),
+        };
+    };
+    if let Some(what) = p.hand_edited(&event, &group, &cmd) {
+        return check(name, Status::Warn, not_run(&what));
+    }
+    let mut env = p.env.clone();
+    env.insert("OCGEN_NOTES_OPEN".into(), "0".into());
+    let prompt = |prompt: &str| {
+        let ev = serde_json::json!({
+            "session_id": "ocgen-verify", "hook_event_name": "UserPromptSubmit", "prompt": prompt
+        });
+        run_sh(
+            p.sh,
+            &cmd,
+            &ev.to_string(),
+            &env,
+            p.root,
+            Duration::from_secs(20),
+        )
+    };
+    let (Some(other), Some(word)) = (prompt("ocgen verify"), prompt(crate::notes::WORDS[0])) else {
+        return check(name, Status::Fail, "the hook did not finish");
+    };
+    if let Some((code, _, err)) = [&other, &word].into_iter().find(|o| o.0 != 0) {
+        return check(
+            name,
+            Status::Fail,
+            format!(
+                "the hook exited {code} ({}) — it must never stop a prompt; run `ocgen doctor`",
+                err.lines().next().unwrap_or("").trim()
+            ),
+        );
+    }
+    if !other.1.trim().is_empty() {
+        return check(
+            name,
+            Status::Fail,
+            "the hook answered a prompt other than `note` — run `ocgen doctor`",
+        );
+    }
+    if word.1.contains("additionalContext") {
+        check(
+            name,
+            Status::Pass,
+            "`note` on its own opens the ledger (or their list) in the browser",
+        )
+    } else if !ocgen_hook_ok() {
+        check(
+            name,
+            Status::Warn,
+            format!(
+                "needs ocgen ({}) on PATH — without it `note` reaches Claude as typed",
+                crate::hooks::PROTOCOL
+            ),
+        )
+    } else {
+        check(
+            name,
+            Status::Warn,
+            "`note` reaches Claude as typed — the ocgen on PATH may predate it; update ocgen",
+        )
+    }
+}
+
 /// /intent's pending intent files and issue drafts @mention every approver the
 /// project has now: one drafted before the approvers changed keeps the old list,
 /// and an issue filed from it notifies nobody.
@@ -1870,18 +1948,33 @@ fn draft_review(p: &Probe) -> Check {
             }),
         )
     };
-    let (Some(other), Some(word), Some(wrote), Some(before), Some(after)) = (
+    // The intent files' word: the project's prefix in lowercase, unless taken.
+    let intent_word = crate::notes::intents::word(&crate::notes::intents::settings(p.root).prefix);
+    let intents = match &intent_word {
+        Some(w) => prompt(w).map(Some),
+        None => Some(None),
+    };
+    let (Some(other), Some(word), Some(intents), Some(wrote), Some(before), Some(after)) = (
         prompt("ocgen verify"),
         prompt(crate::notes::draft::WORD),
+        intents,
         wrote,
         bash(&before_cmd, "PreToolUse"),
         bash(&w_cmd, "PostToolUse"),
     ) else {
         return check(name, Status::Fail, "the hook did not finish");
     };
-    if let Some((code, _, err)) = [&other, &word, &wrote, &before, &after]
-        .into_iter()
-        .find(|o| o.0 != 0)
+    if let Some((code, _, err)) = [
+        Some(&other),
+        Some(&word),
+        intents.as_ref(),
+        Some(&wrote),
+        Some(&before),
+        Some(&after),
+    ]
+    .into_iter()
+    .flatten()
+    .find(|o| o.0 != 0)
     {
         return check(
             name,
@@ -1909,11 +2002,32 @@ fn draft_review(p: &Probe) -> Check {
             "the hook answered a write or a Bash call — run `ocgen doctor`",
         );
     }
-    if word.1.contains("additionalContext") {
+    let silent = intents
+        .as_ref()
+        .is_some_and(|o| !o.1.contains("additionalContext"));
+    if word.1.contains("additionalContext") && silent {
+        check(
+            name,
+            Status::Warn,
+            format!(
+                "`{}` reaches Claude as typed — the ocgen on PATH may predate it; update ocgen",
+                intent_word.unwrap_or_default()
+            ),
+        )
+    } else if word.1.contains("additionalContext") {
         check(
             name,
             Status::Pass,
-            "`draft` on its own opens the issue draft (or their list) in a browser editor",
+            match &intent_word {
+                Some(w) => format!(
+                    "`draft` on its own opens the issue draft (or their list) in a browser editor, \
+                     and `{w}` the intent files"
+                ),
+                None => {
+                    "`draft` on its own opens the issue draft (or their list) in a browser editor"
+                        .to_string()
+                }
+            },
         )
     } else if !ocgen_hook_ok() {
         check(

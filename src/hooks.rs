@@ -1096,10 +1096,19 @@ impl<'a> Hook<'a> {
     }
 
     /// PostToolUse (Write|Edit|MultiEdit): when an /inquire ledger was written,
-    /// render its HTML view and show it (refresh an open tab, else open one).
-    /// Never blocks — the ledger is already written; problems are one stderr line.
+    /// render its HTML view and show it (refresh an open tab, else open one), and
+    /// remember it as the session's. Never blocks — the ledger is already
+    /// written; problems are one stderr line.
+    ///
+    /// UserPromptSubmit: the word `note` or `notes`, sent on its own, opens the
+    /// ledger there is — or, with several, their list, with the one this session
+    /// wrote last selected — and tells Claude what happened. Any other prompt
+    /// passes untouched.
     fn inquire_notes(&self) -> Outcome {
         use crate::notes;
+        if self.is_prompt_event() {
+            return self.notes_word();
+        }
         let path = self
             .json
             .pointer("/tool_input/file_path")
@@ -1124,19 +1133,27 @@ impl<'a> Hook<'a> {
                 Err(e) => note(format!("could not show the HTML view: {e:#}")),
             };
         }
-        match notes::ledger_target(path) {
+        let slug = match notes::ledger_target(path) {
             notes::Target::NotLedger => return Outcome::allow(),
             notes::Target::BadSlug => {
                 return note(format!(
                     "{path} has no HTML view — name ledgers with a lowercase-hyphen slug (e.g. request-flow.md)"
                 ))
             }
-            notes::Target::Ledger { .. } => {}
-        }
+            notes::Target::Ledger { slug } => slug,
+        };
         let md = match Path::new(path) {
             p if p.is_absolute() => p.to_path_buf(),
             p => self.project().join(p),
         };
+        // This project's ledger: the session's now. A probe changes nothing.
+        let root = self.project();
+        if !self.probe()
+            && md.is_file()
+            && relative_to(&md, &root).as_deref() == Some(&format!("{}/{slug}.md", notes::DIR))
+        {
+            notes::remember(&root.join(notes::DIR), &self.field("session_id"), &slug);
+        }
         if let Err(e) = notes::render_file(&md) {
             return note(format!("could not render the HTML view: {e:#}"));
         }
@@ -1146,15 +1163,140 @@ impl<'a> Hook<'a> {
         }
     }
 
+    /// Whether the event is a prompt (UserPromptSubmit, or an event that carries
+    /// a prompt and names none).
+    fn is_prompt_event(&self) -> bool {
+        match self.field("hook_event_name").as_str() {
+            "UserPromptSubmit" => true,
+            "" => self.json.get("prompt").is_some() && self.json.get("tool_input").is_none(),
+            _ => false,
+        }
+    }
+
+    /// What a UserPromptSubmit hook tells Claude: `note`, as added context.
+    fn prompt_context(note: String) -> Outcome {
+        let out = serde_json::json!({
+            "hookSpecificOutput": { "hookEventName": "UserPromptSubmit", "additionalContext": note }
+        });
+        Outcome {
+            code: 0,
+            stdout: format!("{out}\n"),
+            stderr: String::new(),
+        }
+    }
+
+    /// `note` or `notes` sent alone: open the ledger, or their list.
+    fn notes_word(&self) -> Outcome {
+        use crate::notes;
+        let prompt = self.field("prompt");
+        if !notes::is_prompt(&prompt) {
+            return Outcome::allow();
+        }
+        let word = prompt.trim().to_ascii_lowercase();
+        let dir = self.project().join(notes::DIR);
+        let all = notes::ledgers(&dir);
+        let note = match all.as_slice() {
+            [] => format!(
+                "The user typed `{word}` to open their /inquire notes in the browser, but there \
+                 are no /inquire notes in {}/ yet, so nothing was opened. Tell them so in one line: \
+                 /inquire starts one.",
+                notes::DIR
+            ),
+            [md] => self.open_ledger(md, &word),
+            _ => self.open_ledger_list(&dir, &word, all.len()),
+        };
+        Self::prompt_context(note)
+    }
+
+    /// The one ledger there is, opened: what to tell Claude.
+    fn open_ledger(&self, md: &Path, word: &str) -> String {
+        use crate::notes::{self, Shown};
+        let rel = format!(
+            "{}/{}",
+            notes::DIR,
+            md.file_name().unwrap_or_default().to_string_lossy()
+        );
+        let terminal = "`ocgen notes open` in a terminal opens it in their browser";
+        let shown = notes::render_file(md).and_then(|_| notes::show(md, self.env, true));
+        match shown {
+            Ok(Shown::Off) => format!(
+                "The user typed `{word}`, but opening a browser is switched off here \
+                 (OCGEN_NOTES_OPEN=0). Tell them the /inquire note is {rel} and that {terminal}."
+            ),
+            Ok(Shown::Reloaded(_) | Shown::Pending) => format!(
+                "The user typed `{word}`: the /inquire note {rel} is already open in a tab of their \
+                 browser, and ocgen refreshed it. Say so in one line and wait."
+            ),
+            Ok(_) => format!(
+                "The user typed `{word}`: ocgen opened the /inquire note {rel} in their browser. Say \
+                 so in one line and wait (if they meant something else by `{word}`, answer that \
+                 instead)."
+            ),
+            Err(e) => format!(
+                "The user typed `{word}`, but ocgen could not open the /inquire note {rel} in the \
+                 browser ({e:#}). Tell them so, and that {terminal}."
+            ),
+        }
+    }
+
+    /// Several ledgers: their list, opened with this session's ledger selected —
+    /// what to tell Claude.
+    fn open_ledger_list(&self, dir: &Path, word: &str, count: usize) -> String {
+        use crate::notes::{self, draft, Shown};
+        let mine = notes::session_ledger(dir, &self.field("session_id"));
+        let rel = mine.as_ref().map(|s| format!("{}/{s}.md", notes::DIR));
+        match notes::show_list(dir, mine.as_deref(), self.env, true) {
+            Ok(Shown::Off) => format!(
+                "The user typed `{word}`, but opening a browser is switched off here \
+                 (OCGEN_NOTES_OPEN=0). Tell them that `ocgen notes open <topic>` in a terminal opens \
+                 one of the {count} /inquire notes in {}/{}.",
+                notes::DIR,
+                rel.as_ref()
+                    .map(|r| format!("; the one this session last wrote is {r}"))
+                    .unwrap_or_default()
+            ),
+            Ok(Shown::Reloaded(_) | Shown::Pending) => format!(
+                "The user typed `{word}`: the list of {count} /inquire notes is already open in a tab \
+                 of their browser, and ocgen moved it {}. Say so in one line and wait: they pick the \
+                 note there.",
+                match &rel {
+                    Some(r) => format!("to {r}, the note this session last wrote"),
+                    None => "to its first page (this session hasn't written a note)".to_string(),
+                }
+            ),
+            Ok(_) => format!(
+                "The user typed `{word}`: ocgen opened the list of {count} /inquire notes in {}/ in \
+                 their browser ({} a page, newest first), {}. They pick the one to read there. Say \
+                 so in one line and wait (if they meant something else by `{word}`, answer that \
+                 instead).",
+                notes::DIR,
+                draft::PER_PAGE,
+                match &rel {
+                    Some(r) => format!("with {r} — the note this session last wrote — selected"),
+                    None => "with none selected (this session hasn't written a note)".to_string(),
+                }
+            ),
+            Err(e) => format!(
+                "The user typed `{word}`, but ocgen could not open the list of /inquire notes in the \
+                 browser ({e:#}). Tell them so, and that `ocgen notes open <topic>` in a terminal \
+                 opens one."
+            ),
+        }
+    }
+
     /// UserPromptSubmit: the word `draft`, sent on its own, opens the /intent
     /// issue draft in the browser editor — or, with several, their list, with
     /// the one this session wrote last selected — from here, outside the Bash
     /// sandbox, where a local server can start, and tells Claude what happened.
     /// Any other prompt passes untouched.
     ///
-    /// PostToolUse (Write|Edit|MultiEdit): a write to a draft makes it this
-    /// session's ([`crate::notes::draft::remember`]). PreToolUse and PostToolUse
-    /// (Bash): a draft a command adds or changes does the same
+    /// The project's intent prefix in lowercase (`adr`), sent on its own, does
+    /// the same for its intent files ([`crate::notes::intents`]): the one there
+    /// is, read-only, or their list.
+    ///
+    /// PostToolUse (Write|Edit|MultiEdit): a write to a draft or an intent file
+    /// makes it this session's ([`crate::notes::draft::remember`]). PreToolUse
+    /// and PostToolUse (Bash): one a command adds or changes does the same
     /// ([`crate::notes::draft::after_bash`]), whatever the command. All silent.
     /// Never blocks.
     fn intent_draft(&self) -> Outcome {
@@ -1170,8 +1312,11 @@ impl<'a> Hook<'a> {
             }
             _ => {}
         }
-        if !draft::is_prompt(&self.field("prompt")) {
-            return Outcome::allow();
+        let prompt = self.field("prompt");
+        if !draft::is_prompt(&prompt) {
+            return self
+                .intents_word(&prompt)
+                .map_or_else(Outcome::allow, Self::prompt_context);
         }
         let dir = self.project().join(draft::DIR);
         let all = draft::drafts(&dir);
@@ -1200,12 +1345,14 @@ impl<'a> Hook<'a> {
         }
     }
 
-    /// Before a Bash call: keep the drafts' state, to see what the call changes.
-    /// A probe changes nothing.
+    /// Before a Bash call: keep the drafts' and the intent files' state, to see
+    /// what the call changes. A probe changes nothing.
     fn before_bash(&self) {
-        use crate::notes::draft;
+        use crate::notes::{draft, intents};
         if self.field("tool_name") == "Bash" && !self.probe() {
-            draft::before_bash(&self.project().join(draft::DIR), &self.field("tool_use_id"));
+            let call = self.field("tool_use_id");
+            draft::before_bash(&self.project().join(draft::DIR), &call);
+            intents::before_bash(&self.project(), &call);
         }
     }
 
@@ -1213,14 +1360,12 @@ impl<'a> Hook<'a> {
     /// — by its path, or after a Bash call by what changed. A probe changes
     /// nothing.
     fn remember_draft(&self) {
-        use crate::notes::draft;
+        use crate::notes::{draft, intents};
         if self.field("tool_name") == "Bash" {
             if !self.probe() {
-                draft::after_bash(
-                    &self.project().join(draft::DIR),
-                    &self.field("tool_use_id"),
-                    &self.field("session_id"),
-                );
+                let (call, sid) = (self.field("tool_use_id"), self.field("session_id"));
+                draft::after_bash(&self.project().join(draft::DIR), &call, &sid);
+                intents::after_bash(&self.project(), &call, &sid);
             }
             return;
         }
@@ -1240,11 +1385,146 @@ impl<'a> Hook<'a> {
         let Some(rel) = relative_to(&file, &root) else {
             return;
         };
-        let Some(slug) = draft::draft_target(&format!("/{rel}")) else {
+        if !file.is_file() {
             return;
+        }
+        if let Some(slug) = draft::draft_target(&format!("/{rel}")) {
+            if rel == format!("{}/{slug}.md", draft::DIR) {
+                draft::remember(&root.join(draft::DIR), &self.field("session_id"), &slug);
+            }
+            return;
+        }
+        if let Some(stem) = intents::target(&intents::settings(&root), &rel) {
+            intents::remember(&root, &self.field("session_id"), &stem);
+        }
+    }
+
+    /// The project's intent word sent alone: open its intent file, or their
+    /// list — what to tell Claude. `None` for any other prompt.
+    fn intents_word(&self, prompt: &str) -> Option<String> {
+        use crate::notes::intents;
+        // A prefix is 1–12 letters or digits: anything else isn't the word, and
+        // needs no look at the project's state.
+        let p = prompt.trim();
+        if p.is_empty() || p.len() > 12 || !p.bytes().all(|b| b.is_ascii_alphanumeric()) {
+            return None;
+        }
+        let root = self.project();
+        let s = intents::settings(&root);
+        if !intents::is_prompt(prompt, &s.prefix) {
+            return None;
+        }
+        let word = intents::word(&s.prefix)?;
+        let dir = intents::dir(&root, &s);
+        let all = intents::files(&dir, &s);
+        let note = match all.as_slice() {
+            [] => format!(
+                "The user typed `{word}` to open the project's intent files in their browser, but \
+                 there is no intent file in {} yet, so nothing was opened. Tell them so in one line: \
+                 /intent writes them ({}-<slug>.md).",
+                intents::shown_dir(&s),
+                s.first_id()
+            ),
+            [md] => self.open_intent(&root, &s, &word, md),
+            _ => self.open_intent_list(&root, &s, &word, all.len()),
         };
-        if rel == format!("{}/{slug}.md", draft::DIR) && file.is_file() {
-            draft::remember(&root.join(draft::DIR), &self.field("session_id"), &slug);
+        // A file that can't be served is left out of everything: say so.
+        Some(match intents::skipped_note(&dir, &s) {
+            Some(skipped) => format!("{note} Also tell them: {skipped}."),
+            None => note,
+        })
+    }
+
+    /// The one intent file there is, opened read-only: what to tell Claude.
+    fn open_intent(
+        &self,
+        root: &Path,
+        s: &crate::claude::IntentSettings,
+        word: &str,
+        md: &Path,
+    ) -> String {
+        use crate::notes::{intents, Shown};
+        let rel = format!(
+            "{}{}",
+            intents::shown_dir(s),
+            md.file_name().unwrap_or_default().to_string_lossy()
+        );
+        let terminal = "`ocgen adr` in a terminal opens it in their browser";
+        match intents::show(root, md, self.env, true) {
+            Ok(Shown::Off) => format!(
+                "The user typed `{word}`, but opening a browser is switched off here \
+                 (OCGEN_NOTES_OPEN=0). Tell them the intent file is {rel} and that {terminal}."
+            ),
+            Ok(Shown::Reloaded(_) | Shown::Pending) => format!(
+                "The user typed `{word}`: the intent file {rel} is already open in a tab of their \
+                 browser, and ocgen refreshed it. Say so in one line and wait."
+            ),
+            Ok(_) => format!(
+                "The user typed `{word}`: ocgen opened the intent file {rel} in their browser, \
+                 read-only. Say so in one line and wait (if they meant something else by `{word}`, \
+                 answer that instead)."
+            ),
+            Err(e) => format!(
+                "The user typed `{word}`, but ocgen could not open the intent file {rel} in the \
+                 browser ({e:#}). Tell them so, and that {terminal}."
+            ),
+        }
+    }
+
+    /// Several intent files: their list, opened with this session's selected —
+    /// what to tell Claude.
+    fn open_intent_list(
+        &self,
+        root: &Path,
+        s: &crate::claude::IntentSettings,
+        word: &str,
+        count: usize,
+    ) -> String {
+        use crate::notes::{draft, intents, Shown};
+        let at = intents::shown_dir(s);
+        let mine = intents::session_file(root, s, &self.field("session_id"));
+        let rel = mine.as_ref().map(|m| format!("{at}{m}.md"));
+        match intents::show_list(root, mine.as_deref(), self.env, true) {
+            Ok(Shown::Off) => format!(
+                "The user typed `{word}`, but opening a browser is switched off here \
+                 (OCGEN_NOTES_OPEN=0). Tell them that `ocgen adr` in a terminal opens the list of the \
+                 {count} intent files in {at} to pick from, and `ocgen adr <name or number>` opens \
+                 one{}.",
+                rel.as_ref()
+                    .map(|r| format!("; the one this session last wrote is {r}"))
+                    .unwrap_or_default()
+            ),
+            Ok(Shown::Reloaded(_) | Shown::Pending) => format!(
+                "The user typed `{word}`: the list of {count} intent files in {at} is already open in \
+                 a tab of their browser, and ocgen moved it {}. Say so in one line and wait: they \
+                 pick the file there.",
+                match &rel {
+                    Some(r) => format!("to {r}, the intent file this session last wrote"),
+                    None => {
+                        "to its first page (this session hasn't written an intent file)".to_string()
+                    }
+                }
+            ),
+            Ok(_) => format!(
+                "The user typed `{word}`: ocgen opened the list of {count} intent files in {at} in \
+                 their browser ({} a page, highest number first), {}. They pick the one to read \
+                 there, read-only. Say so in one line and wait (if they meant something else by \
+                 `{word}`, answer that instead).",
+                draft::PER_PAGE,
+                match &rel {
+                    Some(r) => {
+                        format!("with {r} — the intent file this session last wrote — selected")
+                    }
+                    None => {
+                        "with none selected (this session hasn't written an intent file)".to_string()
+                    }
+                }
+            ),
+            Err(e) => format!(
+                "The user typed `{word}`, but ocgen could not open the list of intent files in the \
+                 browser ({e:#}). Tell them so, and that `ocgen adr` in a terminal lists them and \
+                 `ocgen adr <name or number>` opens one."
+            ),
         }
     }
 

@@ -934,9 +934,59 @@ fn inquire_notes_parity() {
                 r#"{"tool_name":"Edit","tool_input":{"file_path":"{dir}/.claude/notes/flow.html"}}"#,
                 none,
             ),
+            // A prompt that isn't the word passes untouched.
+            step(
+                r#"{"hook_event_name":"UserPromptSubmit","session_id":"s-1","prompt":"notes please"}"#,
+                write_ledger,
+            ),
+            step(
+                r#"{"hook_event_name":"UserPromptSubmit","session_id":"s-1","prompt":""}"#,
+                none,
+            ),
             step("not json", none),
         ],
     );
+}
+
+const INTENT_FILE: &str = "# ADR-0001: Cache\n\nStatus: Proposed\n\n## Context\nCold.\n";
+
+fn write_intent(dir: &Path) {
+    let adr = dir.join("docs/adr");
+    fs::create_dir_all(&adr).unwrap();
+    fs::write(adr.join("ADR-0001-cache.md"), INTENT_FILE).unwrap();
+}
+
+/// `note` and the intent word reach Claude through the binary only: the
+/// scripts keep the hooks harmless and say nothing, as they do for `draft`.
+#[test]
+fn the_words_open_documents_through_the_binary_and_the_scripts_are_no_ops() {
+    let mut env: HashMap<String, String> = NO_BROWSER
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+    let dir = project();
+    env.insert(
+        "CLAUDE_PROJECT_DIR".into(),
+        ocgen::paths::for_shell(dir.path()),
+    );
+    write_ledger(dir.path());
+    write_intent(dir.path());
+    for (hook, word, says) in [
+        ("inquire-notes", "note", ".claude/notes/flow.md"),
+        ("intent-draft", "adr", "docs/adr/ADR-0001-cache.md"),
+    ] {
+        let payload = serde_json::json!({
+            "hook_event_name": "UserPromptSubmit", "session_id": "s-1", "prompt": word
+        })
+        .to_string();
+        let ctx = draft_context(&ocgen::hooks::run(hook, &payload, &env));
+        assert!(
+            ctx.contains(says) && ctx.contains("OCGEN_NOTES_OPEN=0"),
+            "{hook}: {ctx}"
+        );
+        let (code, out, _) = sh(dir.path(), hook, &env, &payload);
+        assert_eq!((code, out.as_str()), (0, ""), "{hook}");
+    }
 }
 
 #[test]
@@ -1011,6 +1061,7 @@ fn intent_draft_parity() {
             // Any other prompt passes untouched, whether or not a draft exists.
             step(r#"{"prompt":"fix the cache"}"#, none),
             step(r#"{"prompt":"draft the issue"}"#, write_draft),
+            step(r#"{"prompt":"adr please"}"#, write_intent),
             step(r#"{"prompt":""}"#, none),
             step("not json", none),
             // A write is remembered silently (the binary) or not at all (the script).

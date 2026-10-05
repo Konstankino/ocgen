@@ -216,7 +216,7 @@ fn notes_serve_refuses_a_directory_that_is_not_a_notes_directory() {
         .assert()
         .failure()
         .stderr(contains(
-            "not a .claude/notes or .claude/intent/drafts directory",
+            "not a .claude/notes, .claude/intent/drafts or .claude/intent/viewer directory",
         ));
     assert!(!docs.join(viewer::INFO_FILE).exists());
     // `.claude` itself isn't one either.
