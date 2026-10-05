@@ -1376,17 +1376,35 @@ fn a_hung_check_times_out_the_same_way_and_takes_its_children_with_it() {
     if cfg!(unix) {
         for d in [a.path(), b.path()] {
             let pid = fs::read_to_string(d.join("wt/gc.pid")).unwrap();
-            let alive = Command::new("kill")
-                .args(["-0", pid.trim()])
-                .output()
-                .unwrap()
-                .status
-                .success();
+            let alive = still_runs(pid.trim());
             if alive {
                 let _ = Command::new("kill").args(["-9", pid.trim()]).output();
             }
             assert!(!alive, "the check's child was killed too ({})", d.display());
         }
+    }
+}
+
+/// Whether process `pid` still runs a few seconds on: gone, or a zombie (killed,
+/// not yet reaped by whoever inherited it), is not running. A SIGKILL takes
+/// effect when the process next gets the CPU and init reaps it later, so a single
+/// `kill -0` right after the hook returns can still see it on a busy machine;
+/// unkilled, it would run its full 30 seconds.
+fn still_runs(pid: &str) -> bool {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let out = Command::new("ps")
+            .args(["-o", "stat=", "-p", pid])
+            .output()
+            .unwrap();
+        let stat = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if stat.is_empty() || stat.starts_with('Z') {
+            return false;
+        }
+        if std::time::Instant::now() >= deadline {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
     }
 }
 
