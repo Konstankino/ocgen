@@ -60,7 +60,7 @@ const HELP_DESC: &str =
 const HELP_PERMS: &str =
     "What it may do (YAML): edit, bash rules, webfetch. Primary agents also get a task block.";
 const HELP_BODY: &str = "The agent's system prompt/persona; $ARGUMENTS = the user's task.";
-const HELP_SKILL_BODY: &str = "Numbered steps Claude follows ($ARGUMENTS = the input). Keep it short: long reference goes in reference.md, deterministic logic in scripts/.";
+const HELP_SKILL_BODY: &str = "Numbered steps Claude follows ($ARGUMENTS = the input). Exact steps where a slip does damage, plain guidance for judgment calls; end multi-step work with a check that loops back. Keep it short: long reference goes in reference.md, deterministic logic in scripts/.";
 const HELP_PROMPTFILE: &str = "Keep the prompt in prompts/<name>.txt (good for long coordinators).";
 const HELP_PROMPTBODY: &str =
     "External prompt content; may reference {{ subagents }} to list the team.";

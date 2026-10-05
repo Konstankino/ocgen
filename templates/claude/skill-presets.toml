@@ -1,6 +1,8 @@
 # Skill presets for `ocgen add skill`. Each seeds a SKILL.md with sensible
-# frontmatter and a numbered-step body. Fully editable (copy out with
-# `ocgen templates init`). `body` is language-keyed; falls back to English.
+# frontmatter and a body as strict as its risk: exact steps with a check that
+# loops back for side effects, plain principles for judgment calls. Fully
+# editable (copy out with `ocgen templates init`). `body` is language-keyed;
+# falls back to English.
 
 [[preset]]
 name = "command"
@@ -9,28 +11,36 @@ description = "Run this git task step by step when the user types its /name; Cla
 allowed_tools = "Bash(git status:*), Bash(git add:*), Bash(git commit:*)"
 disable_model_invocation = true
 [preset.body]
-English = """Run this task step by step:
+English = """Run this task exactly as written: its steps have side effects, so don't skip, reorder or
+improvise one.
 
 1. Review the current state (e.g. `git status`).
 2. Make the change described by $ARGUMENTS.
-3. Verify the result and report what you did."""
-Ukrainian = """Виконай задачу крок за кроком:
+3. Check the result: run `git status` and compare it with $ARGUMENTS. If it doesn't match, go back
+   to step 2 — at most 2 more tries; then stop and report what is still wrong.
+4. Report what you did."""
+Ukrainian = """Виконай задачу точно як написано: її кроки мають побічні ефекти, тож не пропускай, не
+переставляй і не вигадуй жодного.
 
 1. Переглянь поточний стан (наприклад, `git status`).
 2. Зроби зміну, описану в $ARGUMENTS.
-3. Перевір результат і звітуй, що зроблено."""
+3. Перевір результат: запусти `git status` і порівняй його з $ARGUMENTS. Якщо не збігається,
+   повернися до кроку 2 — щонайбільше ще 2 спроби; тоді зупинись і повідом, що досі не так.
+4. Звітуй, що зроблено."""
 
 [[preset]]
 name = "knowledge"
 choose_when = "conventions or domain rules Claude should apply automatically when relevant"
 description = "Conventions and gotchas for <topic>. Use when working on <topic> or when its rules apply."
 [preset.body]
-English = """Guidance for <topic>:
+English = """Guidance for <topic>. These are principles with their reasons, not a fixed procedure:
+apply them with judgment.
 
 - Key convention or rule.
 - Another rule, with a short rationale.
 - A gotcha to avoid."""
-Ukrainian = """Настанови щодо <теми>:
+Ukrainian = """Настанови щодо <теми>. Це принципи з поясненням причин, а не жорстка процедура:
+застосовуй їх зважено.
 
 - Ключове правило чи домовленість.
 - Ще одне правило з коротким обґрунтуванням.
@@ -75,9 +85,13 @@ English = """Research $ARGUMENTS thoroughly:
 
 1. Find relevant files with Glob and Grep.
 2. Read and analyze the code.
-3. Summarize findings with specific file references."""
+3. Check each claim against the file you cite; mark what you couldn't confirm as unconfirmed, or
+   drop it.
+4. Summarize findings with specific file references."""
 Ukrainian = """Досліди $ARGUMENTS ретельно:
 
 1. Знайди релевантні файли через Glob і Grep.
 2. Прочитай і проаналізуй код.
-3. Зведи висновки з посиланнями на конкретні файли."""
+3. Звір кожне твердження з файлом, на який посилаєшся; те, що не вдалося підтвердити, познач як
+   непідтверджене або прибери.
+4. Зведи висновки з посиланнями на конкретні файли."""

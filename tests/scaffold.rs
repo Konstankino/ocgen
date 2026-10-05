@@ -3030,6 +3030,20 @@ fn skill_extras_are_created_once_and_survive_regeneration() {
         .path()
         .join(".claude/skills/tf-plan-review/scripts/README.md");
     assert!(reference.exists() && scripts.exists());
+    // The stubs teach the rules: a contents list, one level deep, install notes.
+    let stub = fs::read_to_string(&reference).unwrap();
+    assert!(
+        stub.contains("## Contents") && stub.contains("SKILL.md"),
+        "{stub}"
+    );
+    let readme = fs::read_to_string(&scripts).unwrap();
+    assert!(readme.contains("install"), "{readme}");
+    // good_skill's body links reference.md, so the stubs pass the checks.
+    assert!(
+        p.skill_file_issues(dir.path()).is_empty(),
+        "{:?}",
+        p.skill_file_issues(dir.path())
+    );
 
     // Never overwrites the user's content.
     fs::write(&reference, "my checklist\n").unwrap();
@@ -3069,6 +3083,135 @@ fn renaming_a_skill_carries_its_supporting_files() {
     assert!(new.join("scripts/check.sh").exists());
     assert!(read(dir.path(), ".claude/skills/plan-review/SKILL.md").contains("name: plan-review"));
     assert!(!old.exists(), "old skill dir removed");
+}
+
+/// A skill folder with `files` (relative path → text), checked against `body`.
+fn file_issues(body: &str, files: &[(&str, &str)]) -> Vec<String> {
+    let dir = tempdir().unwrap();
+    for (rel, text) in files {
+        let p = dir.path().join(rel);
+        fs::create_dir_all(p.parent().unwrap()).unwrap();
+        fs::write(p, text).unwrap();
+    }
+    ocgen::claude::skill_file_issues(dir.path(), body)
+}
+
+#[test]
+fn long_reference_needs_a_contents_list() {
+    let body = "Check the plan against reference.md.";
+    let lines = |n: usize, head: &str| format!("# Reference\n\n{head}{}", "detail\n".repeat(n - 2));
+    // Claude may read only the first ~100 lines of a longer file.
+    let long = lines(101, "");
+    let issues = file_issues(body, &[("reference.md", &long)]);
+    assert!(has(&issues, "no contents list"), "{issues:?}");
+    // 100 lines is short enough.
+    let short = lines(100, "");
+    assert!(file_issues(body, &[("reference.md", &short)]).is_empty());
+    // A contents list near the top, in either language, is what it needs.
+    for head in [
+        "## Contents\n- Rules\n- Examples\n\n",
+        "## Table of contents\n- Rules\n\n",
+        "**Contents**\n- Rules\n\n",
+        "## Зміст\n- Правила\n\n",
+    ] {
+        let text = lines(140, head);
+        assert!(
+            file_issues(body, &[("reference.md", &text)]).is_empty(),
+            "{head:?}"
+        );
+    }
+    // A "Contents" heading buried far down doesn't count.
+    let late = format!("{}## Contents\n", lines(140, ""));
+    assert!(has(
+        &file_issues(body, &[("reference.md", &late)]),
+        "no contents list"
+    ));
+}
+
+#[test]
+fn references_stay_one_level_deep() {
+    // SKILL.md → reference.md → details.md: Claude may only partly read details.md.
+    let issues = file_issues(
+        "Check the plan against reference.md.",
+        &[
+            ("reference.md", "# Ref\n\nFor edge cases, see details.md.\n"),
+            ("details.md", "# Details\n"),
+        ],
+    );
+    assert!(
+        has(&issues, "details.md is reached only through reference.md"),
+        "{issues:?}"
+    );
+    assert!(!has(&issues, "reference.md is"), "{issues:?}");
+
+    // Linked from SKILL.md itself, both are one level deep.
+    assert!(file_issues(
+        "Check reference.md, and details.md for edge cases.",
+        &[
+            ("reference.md", "# Ref\n\nSee details.md.\n"),
+            ("details.md", "# Details\n"),
+        ],
+    )
+    .is_empty());
+
+    // A file nothing links is never read. Nested paths use forward slashes.
+    let issues = file_issues(
+        "Steps only.",
+        &[
+            ("docs/api.md", "# API\n"),
+            ("scripts/README.md", "# Scripts\n"),
+        ],
+    );
+    assert!(
+        has(&issues, "docs/api.md isn't linked from SKILL.md"),
+        "{issues:?}"
+    );
+    // scripts/ holds helpers, not reference files.
+    assert!(!has(&issues, "scripts/README.md"), "{issues:?}");
+    assert!(file_issues(
+        "See docs/api.md for the endpoints.",
+        &[("docs/api.md", "# API\n")]
+    )
+    .is_empty());
+    // No folder on disk: nothing to check.
+    assert!(ocgen::claude::skill_file_issues(Path::new("/no/such/skill"), "x").is_empty());
+}
+
+#[test]
+fn scripts_need_an_install_note() {
+    let script = ("scripts/check.sh", "#!/bin/sh\njq . plan.json\n");
+    let issues = file_issues("1. Run `scripts/check.sh`.\n2. Report.", &[script]);
+    assert!(has(&issues, "how to install"), "{issues:?}");
+    // Saying what it needs, in either language, is enough.
+    for body in [
+        "1. Run `scripts/check.sh` (needs jq: `brew install jq` or `apt-get install jq`).",
+        "1. Запусти `scripts/check.sh` (потребує jq: `brew install jq`).",
+    ] {
+        assert!(file_issues(body, &[script]).is_empty(), "{body}");
+    }
+    // The scripts/ README stub alone is no helper.
+    assert!(file_issues("Steps only.", &[("scripts/README.md", "# Scripts\n")]).is_empty());
+}
+
+#[test]
+fn skill_file_issues_reach_landscape_and_name_the_skill() {
+    let mut p = base_project("English");
+    p.target = Target::ClaudeCode;
+    p.agents = agent::claude_default_pipeline("English").unwrap();
+    p.skills.push(good_skill());
+    let dir = tempdir().unwrap();
+    p.scaffold(dir.path(), false).unwrap();
+    assert!(p.skill_file_issues(dir.path()).is_empty());
+
+    let skill = dir.path().join(".claude/skills/tf-plan-review");
+    fs::write(skill.join("reference.md"), "rule\n".repeat(120)).unwrap();
+    let issues = p.skill_file_issues(dir.path());
+    assert!(
+        issues
+            .iter()
+            .any(|i| i.starts_with("skill 'tf-plan-review': reference.md is 120 lines")),
+        "{issues:?}"
+    );
 }
 
 // ------------------------------------------------------ tier 1 defects -----
@@ -3623,6 +3766,57 @@ fn workflow_commands_are_generated_as_skills() {
         !dir.path().join(".claude/commands").exists(),
         "no legacy commands dir"
     );
+}
+
+/// ocgen's own workflow skills follow the rules it checks in yours.
+#[test]
+fn workflow_skills_follow_the_skill_rules() {
+    let dir = tempdir().unwrap();
+    let mut p = claude_default("wf");
+    p.claude.team.enabled = true;
+    p.claude.team.plan_gate = true;
+    p.scaffold(dir.path(), false).unwrap();
+    for entry in fs::read_dir(dir.path().join(".claude/skills")).unwrap() {
+        let skill = entry.unwrap().path();
+        let md = fs::read_to_string(skill.join("SKILL.md")).unwrap();
+        assert!(
+            md.lines().count() < 500,
+            "{}: {} lines",
+            skill.display(),
+            md.lines().count()
+        );
+        let issues = ocgen::claude::skill_file_issues(&skill, &md);
+        assert!(issues.is_empty(), "{}: {issues:?}", skill.display());
+    }
+    // The files /intent and /review-intent tell Claude to read are short enough
+    // to be read whole, and link nothing further.
+    for entry in fs::read_dir(dir.path().join(".claude/intent")).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().is_some_and(|e| e == "md") {
+            let text = fs::read_to_string(&path).unwrap();
+            assert!(
+                text.lines().count() <= 100,
+                "{}: {} lines",
+                path.display(),
+                text.lines().count()
+            );
+            assert!(!text.contains("]("), "{} links on", path.display());
+        }
+    }
+
+    // A check that loops back, not one that runs once.
+    for name in ["intent", "review-intent"] {
+        let md = read(dir.path(), &format!(".claude/skills/{name}/SKILL.md"));
+        assert!(md.contains("fresh tone check"), "{name}");
+        assert!(md.contains("at most 2 rounds"), "{name}");
+        assert_eq!(
+            md.matches("Fix everything it reports").count(),
+            1,
+            "{name}: said once, in the tone check"
+        );
+        // Never assume gh is installed.
+        assert!(md.contains("https://cli.github.com"), "{name}");
+    }
 }
 
 #[test]
@@ -4784,9 +4978,10 @@ fn intent_skill_demands_an_exhaustive_evidence_based_analysis() {
     assert!(md.contains("F1") && md.contains("Assumption"));
     assert!(md.contains("Verified") && md.contains("Inferred"));
 
-    // Web docs only from trusted domains; gh failures don't stop the analysis.
+    // Web docs only from trusted domains; gh failures, a missing gh included,
+    // don't stop the analysis.
     assert!(md.contains("trusted") && md.contains("docs.rs"));
-    assert!(md.contains("not authenticated"));
+    assert!(md.contains("isn't installed") && md.contains("isn't logged in"));
 }
 
 #[test]

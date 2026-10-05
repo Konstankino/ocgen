@@ -112,8 +112,25 @@ pub fn run_add_skill(path_arg: Option<String>) -> Result<()> {
         &target, &name, reference, scripts,
     )?);
     report_written(&written);
+    if let Some(skill) = project.skills.last() {
+        report_file_issues(&target, skill);
+    }
     skill_next_steps(&name);
     Ok(())
+}
+
+/// The rules for the skill's own files (reference files, `scripts/`). They're
+/// reported, not re-prompted: the files are yours, and no prompt can fix them.
+fn report_file_issues(target: &Path, skill: &Skill) {
+    let dir = target.join(".claude/skills").join(&skill.name);
+    let issues = ocgen::claude::skill_file_issues(&dir, &skill.body);
+    if issues.is_empty() {
+        return;
+    }
+    ui::section(&format!("Supporting-file checks ({})", issues.len()));
+    for i in &issues {
+        ui::warning(i);
+    }
 }
 
 /// Run the "what makes a skill good" checks; while any fail, show them and offer
@@ -148,6 +165,7 @@ fn check_and_revise(
 
 fn skill_next_steps(name: &str) {
     ui::tip("test that it triggers: in Claude Code, run the skill-creator skill on it — most skills that \"don't work\" never trigger");
+    ui::tip("test it on each model you'll run it with: smaller models need explicit numbered steps, the strongest do worse when over-prescribed");
     ui::tip(&format!(
         "change it with `ocgen edit skill {name}` — `ocgen doctor` rewrites SKILL.md from saved state; reference.md and scripts/ are yours"
     ));
@@ -209,6 +227,7 @@ pub fn run_edit_skill(path: String, name_arg: Option<String>) -> Result<()> {
         println!("Renamed skill {old_name} → {new_name}");
     }
     report_written(&written);
+    report_file_issues(&target, &project.skills[idx]);
     skill_next_steps(&new_name);
     Ok(())
 }
@@ -304,7 +323,7 @@ fn configure_skill(
     s.model = ask(
         theme,
         "  Model alias for this skill (optional)",
-        "opus / sonnet / haiku / fable / inherit or a full ID; empty = session model.",
+        "opus / sonnet / haiku / fable / inherit or a full ID; empty = session model. Pin the one you tested it on if it only works well there.",
         Some(&s.model),
         true,
     )?;

@@ -76,8 +76,8 @@ reads below yourself (they're pre-approved) and give it their output.{% else %}b
   decision at the time, citing commits), never who: no author names, handles or emails in any output.
 - **Prior work:** existing intents in `{{ dir }}/`; open **and closed** GitHub issues and PRs
   (`gh search issues`, `gh search prs`, `gh issue view`, `gh pr view`) — duplicates, earlier
-  attempts, rejected approaches. If `gh` is not authenticated or can't reach GitHub, say so and
-  continue without it.
+  attempts, rejected approaches. If `gh` isn't installed (the GitHub CLI, https://cli.github.com),
+  isn't logged in (`gh auth login`, which I run) or can't reach GitHub, say so and continue without it.
 {% if trusted_domains %}- **Docs:** the repository's own docs first, then official documentation for the libraries and APIs
   involved — fetched only from the project's trusted documentation sites ({{ trusted_domains }}),
   and only `https://` URLs: never `http://` (if a page is only served over plain HTTP, skip it and
@@ -174,7 +174,7 @@ after the tone check (step 5).
   notice: **Never email**, message or otherwise contact anyone. Don't use `--assignee` for approvers —
   assignees do the work.
 {% include "intent/tone-check.md" %}
-  Fix everything it reports. Then write the intent file (if there is one), and write the description with the Write tool
+  Then write the intent file (if there is one), and write the description with the Write tool
   to the **issue draft** `.claude/intent/drafts/<name>.md` — `<name>` is the intent file's name
   lowercased (e.g. `{{ example|lower }}-cache-invalidation`), or `issue-<kebab-case-slug>` with no intent
   file (pick a slug no draft has yet); make sure `.claude/intent/drafts/.gitignore` exists and holds `*` (drafts stay out of git). Show

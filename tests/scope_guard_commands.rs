@@ -219,6 +219,50 @@ fn without_a_guard_both_commands_read_as_before() {
     }
 }
 
+/// With no scope guard, nothing checked the finished change against the plan:
+/// /deliver does it itself before reporting, and loops back on a miss.
+#[test]
+fn without_a_guard_deliver_checks_the_criteria_before_reporting() {
+    for adversary in [false, true] {
+        let f = files(&project(false, adversary));
+        let execute = section(&f[DELIVER], "## 5. Execute", "## 6. Synthesize");
+        for must in [
+            "**Final check.**",
+            "every success criterion",
+            "run the tests",
+            "go back to the task",
+            "at most 2 rounds",
+            "**not done**",
+            // The tests must see the isolated implementer's change.
+            "after merging `implementer`'s worktree branch",
+        ] {
+            assert!(execute.contains(must), "missing {must:?} in:\n{execute}");
+        }
+        if adversary {
+            // The adversary then checks the finished change, as the scope check does.
+            let fin = execute.find("**Final check.**").unwrap();
+            let adv = execute.find("**Adversary check.**").unwrap();
+            assert!(fin < adv, "{execute}");
+            assert!(
+                execute.contains("and before the adversary check"),
+                "{execute}"
+            );
+        }
+    }
+    // An implementer in the main checkout has nothing to merge.
+    let mut p = project(false, false);
+    p.agents
+        .iter_mut()
+        .find(|a| a.role == "implementer")
+        .unwrap()
+        .isolation
+        .clear();
+    assert!(!files(&p)[DELIVER].contains("after merging"));
+    // The guard's scope check already does it: no second check.
+    let f = files(&project(true, true));
+    assert!(!f[DELIVER].contains("**Final check.**"));
+}
+
 // ------------------------------------------------------ other outputs --
 
 #[test]

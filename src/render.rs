@@ -1355,6 +1355,13 @@ impl Project {
         }
         let checks = self.checkers();
         if self.claude.workflow.deliver {
+            // Without a scope guard, /deliver's own final check runs the tests, so
+            // it merges a worktree-isolated implementer's branch first.
+            let worktree_implementer = self
+                .subagent_for("implementer")
+                .filter(|a| a.isolation.trim() == "worktree")
+                .map(|a| a.name.clone())
+                .unwrap_or_default();
             components.push((
                 "commands/deliver.md".to_string(),
                 env.render_str(
@@ -1368,6 +1375,7 @@ impl Project {
                         scope_guard => checks.scope_guard,
                         implementer => checks.implementer,
                         implementer_isolated => checks.implementer_isolated,
+                        worktree_implementer => worktree_implementer,
                         rounds => checks.rounds,
                         scope_rounds => checks.scope_rounds,
                     },
@@ -3376,6 +3384,23 @@ impl Project {
         w
     }
 
+    /// The rules for each skill's own files on disk under `root` (reference files,
+    /// `scripts/`), prefixed with the skill's name. They're the user's files, so
+    /// unlike [`Self::issues`] these need the project's folder.
+    pub fn skill_file_issues(&self, root: &Path) -> Vec<String> {
+        if self.target != Target::ClaudeCode {
+            return Vec::new();
+        }
+        let mut w = Vec::new();
+        for s in &self.skills {
+            let dir = root.join(".claude/skills").join(&s.name);
+            for issue in crate::claude::skill_file_issues(&dir, &s.body) {
+                w.push(format!("skill '{}': {issue}", s.name));
+            }
+        }
+        w
+    }
+
     /// Invalid values in an agent's enum fields (effort, permission mode, memory),
     /// plus a call-out for `bypassPermissions`.
     fn agent_field_issues(a: &Agent) -> Vec<String> {
@@ -3544,7 +3569,6 @@ impl Project {
         Ok(())
     }
 
-    /// Delete a Claude skill's generated directory (used on rename).
     /// Create a skill's supporting-file stubs — `reference.md` (detail loaded on
     /// demand) and `scripts/README.md` (deterministic helpers) — only where absent.
     /// ocgen never rewrites these, so they're the user's from then on. Returns the
@@ -3572,8 +3596,14 @@ impl Project {
             stub(
                 "reference.md",
                 &format!(
-                    "# {name} — reference\n\nDetail SKILL.md points to and Claude reads only when needed:\n\
-                     checklists, schemas, examples, edge cases. Keep SKILL.md itself short.\n"
+                    "# {name} — reference\n\n\
+                     ## Contents\n\
+                     - (list this file's sections here: past 100 lines, Claude may read only the top\n  \
+                     of a file to decide whether to read the rest)\n\n\
+                     Detail SKILL.md points to and Claude reads only when needed:\n\
+                     checklists, schemas, examples, edge cases. Keep SKILL.md itself short.\n\n\
+                     Link this file from SKILL.md, and any further file from SKILL.md too, never from\n\
+                     here: a file reached only through another one may be read only in part.\n"
                 ),
             )?;
         }
@@ -3582,7 +3612,10 @@ impl Project {
                 "scripts/README.md",
                 "# Scripts\n\nDeterministic helpers SKILL.md tells Claude to run (e.g. `scripts/check.sh`),\n\
                  so the same logic isn't re-derived every time. Scope them in allowed-tools as\n\
-                 Bash(scripts/check.sh:*).\n",
+                 Bash(scripts/check.sh:*).\n\n\
+                 Never assume a tool is installed: next to each step that runs a script, SKILL.md\n\
+                 says what it needs and how to install it (e.g. \"needs jq: `brew install jq` or\n\
+                 `apt-get install jq`\").\n",
             )?;
         }
         Ok(made)

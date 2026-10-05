@@ -710,6 +710,44 @@ fn landscape_warns_about_a_vague_skill() {
 }
 
 #[test]
+fn landscape_and_verify_check_a_skills_supporting_files() {
+    let dir = tempdir().unwrap();
+    let m = Manifest::load().unwrap();
+    let mut p = Project::from_manifest(&m, "English");
+    p.target = Target::ClaudeCode;
+    p.project_name = "kit".into();
+    p.providers.clear();
+    p.agents = agent::claude_default_pipeline("English").unwrap();
+    p.skills.push(Skill {
+        name: "tf-review".into(),
+        description: "Review a Terraform plan for risky changes. Use when asked to check a plan."
+            .into(),
+        body: "1. Check the plan against reference.md.\n2. Run `scripts/check.sh`.\n".into(),
+        ..Default::default()
+    });
+    p.scaffold(dir.path(), false).unwrap();
+    let skill = dir.path().join(".claude/skills/tf-review");
+    std::fs::write(skill.join("reference.md"), "rule\n".repeat(120)).unwrap();
+    std::fs::create_dir_all(skill.join("scripts")).unwrap();
+    std::fs::write(skill.join("scripts/check.sh"), "#!/bin/sh\njq .\n").unwrap();
+
+    ocgen()
+        .arg("landscape")
+        .arg(dir.path())
+        .assert()
+        .success()
+        .stdout(contains("skill 'tf-review': reference.md is 120 lines"))
+        .stdout(contains("no contents list"))
+        .stdout(contains("how to install"));
+    ocgen()
+        .args(["verify", "--no-claude"])
+        .arg(dir.path())
+        .assert()
+        .success()
+        .stdout(contains("no contents list"));
+}
+
+#[test]
 fn add_mcp_requires_a_claude_project_and_help_lists_it() {
     let dir = tempdir().unwrap();
     scaffold_default(dir.path());

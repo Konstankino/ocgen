@@ -154,7 +154,7 @@ const LOCAL: &str = ".claude/settings.local.json";
 /// Run every check. Hook commands are executed with the loop guard switched off
 /// (`LOOP_GUARD_MAX_BLOCKS=0`), so verification leaves no state behind.
 pub fn verify(project: &Project, root: &Path, opts: &Options) -> Vec<Check> {
-    let mut out = vec![up_to_date(project, root), consistency(project)];
+    let mut out = vec![up_to_date(project, root), consistency(project, root)];
     if project.target != Target::ClaudeCode {
         return out;
     }
@@ -634,8 +634,9 @@ fn up_to_date(project: &Project, root: &Path) -> Check {
     }
 }
 
-fn consistency(project: &Project) -> Check {
-    let issues = project.issues();
+fn consistency(project: &Project, root: &Path) -> Check {
+    let mut issues = project.issues();
+    issues.extend(project.skill_file_issues(root));
     if issues.is_empty() {
         check("consistency", Status::Pass, "no problems found")
     } else {

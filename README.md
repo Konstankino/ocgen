@@ -566,7 +566,10 @@ The commands use it too. In **`/deliver`**, the plan numbers its success criteri
 check closes phase 5, before the adversary check. In **`/intent`**, the scope guard checks the
 plan before you see it: a criterion or risk with no task is a gap, a task that traces to nothing
 is shown as **Deferred by the scope check**, and the predicted blast radius goes into the intent
-file's Consequences. Teams without a scope guard render exactly as before.
+file's Consequences. Without a scope guard, `/intent` reads exactly as before, and `/deliver` runs
+its own **final check** in its place: when the plan's tasks are done, it checks the change against
+every success criterion and runs the tests (after merging a worktree implementer's branch), goes back
+to the task for each miss, at most 2 rounds, and reports what is still unmet as not done.
 
 **The adversary loop.** The default team ends with `adversary`, a skeptic that hunts accidents:
 the ways ordinary, good-faith use of the change does harm. It checks what the explorer found, the implementer built and the reviewer approved,
@@ -756,8 +759,12 @@ ocgen edit skill [name] -p ./my-team
 
 **Presets are listed by when to choose them:**
 - `command`: a procedure you run by name that has side effects. It's user-run only and never starts on its own.
-- `knowledge`: conventions or domain rules Claude applies automatically when relevant.
-- `forked-research`: heavy reading in an isolated `Explore` subagent; you get a summary back.
+  Its steps are strict (no skipping or improvising), and it ends by checking the result and going back
+  on a miss, at most twice.
+- `knowledge`: conventions or domain rules Claude applies automatically when relevant: principles
+  with their reasons, applied with judgment.
+- `forked-research`: heavy reading in an isolated `Explore` subagent; you get a summary back. It
+  checks each claim against the file it cites before summarizing.
 - `improve-prompt`: rewrites a prompt on request.
 - blank.
 
@@ -780,6 +787,28 @@ shows the same checks for existing skills.
 - **Fork heavy reading** (`context: fork`), so the research doesn't flood your conversation.
 - **No contradictions:** user-run only *and* hidden from the `/` menu means nobody can invoke it.
 
+Three more rules cover the files beside `SKILL.md`. They're yours, so ocgen reports them (in
+`landscape`, `verify`, and after `add skill` / `edit skill`) and never changes them:
+- **A long reference file starts with a contents list.** Claude often reads only about the first
+  100 lines of a file to decide whether to read the rest. A reference file over 100 lines without a
+  `## Contents` (or `Table of contents`, `Зміст`) heading in its first 30 lines is flagged.
+- **References stay one level deep.** Name every reference file in `SKILL.md` itself. A file reached
+  only through another reference file may be read only in part, and a file nothing names is never
+  read; both are flagged.
+- **Never assume a tool is installed.** When `scripts/` holds helpers, `SKILL.md` says what they need
+  and how to install it, next to the step that runs them ("needs jq: `brew install jq`"). Flagged
+  when it never does.
+
+Two more aren't checked, but the presets show them:
+- **Match the strictness to the risk.** Exact steps where a slip does damage (side effects,
+  deletions, migrations); plain principles with their reasons for judgment calls. One skill can mix
+  both, step by step.
+- **End multi-step work with a check that loops back:** compare the result with what was asked, go
+  back on a miss, and stop after a few rounds with what's still wrong, so a step is done because it
+  passed, not because it was attempted.
+
+ocgen's own workflow skills follow the same rules, and a test keeps them under 500 lines.
+
 Newer skill controls are prompted too, each optional:
 - **`paths`:** globs such as `**/*.tf`, so the skill only activates for matching files.
 - **`arguments`:** named arguments (`plan_file` → `$plan_file`).
@@ -793,7 +822,9 @@ exposed: `description`, `when_to_use`, `argument-hint`, `allowed-tools`,
 `disable-model-invocation`, `user-invocable`, `context: fork` + `agent`, and `model`.
 
 **After creating it:** test that it triggers by running the **skill-creator** skill on it in
-Claude Code. Most skills that "don't work" never trigger. Change it later with `ocgen edit skill`,
+Claude Code. Most skills that "don't work" never trigger. Test it on each model you'll run it with:
+smaller models need explicit numbered steps, while the strongest do worse when over-prescribed. If
+it only works well on one, pin it with `model`. Change it later with `ocgen edit skill`,
 not by hand: `ocgen doctor` rewrites `SKILL.md` from saved state. `reference.md` and `scripts/`
 are yours.
 
@@ -810,8 +841,9 @@ override it. The pipeline then: sharpens the goal; skims the relevant code and i
 one question at a time (never asking what the code already answers); drafts a plan + risk
 register for your approval; researches in parallel (re-planning if findings contradict the
 plan); executes with a stated `Confidence: NN%` per decision and no deploys/pushes without
-your approval; and summarizes. Small, clear goals collapse the interview and plan into a
-one-paragraph brief.
+your approval; checks the result against the plan's success criteria before reporting (the scope
+guard does it when the team has one, otherwise a **final check** runs the tests and loops back);
+and summarizes. Small, clear goals collapse the interview and plan into a one-paragraph brief.
 
 **`/inquire <topic or question>`** is a read-only loop for learning a codebase by asking
 questions — and for getting better at asking them:
@@ -961,7 +993,8 @@ GitHub issue (wizard: "Include the /intent command…"; on by default). You star
    (`file:line`) or Inferred (`Confidence: NN%`).
    The read-only git and `gh` commands it needs, and `WebFetch` for the project's **trusted
    documentation sites**, are pre-approved while `/intent` runs (the skill's `allowed-tools`);
-   other tools still ask. Docs come only from those sites — see
+   other tools still ask. If `gh` isn't installed (https://cli.github.com), isn't logged in or
+   can't reach GitHub, the analysis says so and continues without it. Docs come only from those sites — see
    [Trusted documentation sites](#trusted-documentation-sites-ocgen-edit-docs).
 3. **Plan and approve** — options with a recommendation, scope, risks with mitigations, acceptance
    criteria. Every statement cites its findings (F#) or is labelled an Assumption; it iterates on
@@ -1119,7 +1152,9 @@ subagent (or the research agent, if there's no reviewer) — reads both drafts a
 before you see them, checking both ways: blame and alarm (banned words, people as subjects, names
 from git history) **and** softening or omission (every Verified finding of Medium or higher present
 with its evidence, no severity below what the evidence supports, no hedge that contradicts a
-finding), plus every approver listed as pending. The severity definitions and the banned words live
+finding), plus every approver listed as pending. Claude fixes what it reports, then a fresh check
+reads the fixed drafts again, at most 2 rounds; anything it still reports is named when you see the
+drafts, never dropped. The severity definitions and the banned words live
 in a comment block at the top of both templates, so your team can tune its house style there.
 
 **The drafts always name the current approvers.** `/intent` gets the approver list when the

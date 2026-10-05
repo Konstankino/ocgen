@@ -5,6 +5,8 @@
 //! `#[serde(default)]` so OpenCode state files (which omit them) still load.
 
 use std::collections::{BTreeMap, HashMap};
+use std::fs;
+use std::path::Path;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -1238,6 +1240,115 @@ pub fn skill_issues(s: &Skill) -> Vec<String> {
         ));
     }
     w
+}
+
+/// Claude often reads only about this many lines of a long file to decide
+/// whether to read the rest, so a longer reference file starts with a contents list.
+pub const REFERENCE_CONTENTS_AFTER: usize = 100;
+/// How far from the top a contents list still counts.
+const CONTENTS_WITHIN: usize = 30;
+/// Words that show SKILL.md says what its scripts need (English, Ukrainian).
+const INSTALL_WORDS: [&str; 7] = [
+    "install",
+    "require",
+    "needs",
+    "dependenc",
+    "встанов",
+    "потреб",
+    "залежн",
+];
+
+/// The rules for a skill's own files on disk, in `dir` (`.claude/skills/<name>`):
+/// a long reference file starts with a contents list, every reference file is
+/// linked from SKILL.md itself (one level deep), and helpers in `scripts/` come
+/// with a note on what they need. `body` is the SKILL.md text that links them.
+/// The files are the user's, so these are reported, never fixed. Empty = no
+/// problems found (or no folder).
+pub fn skill_file_issues(dir: &Path, body: &str) -> Vec<String> {
+    let mut files = Vec::new();
+    collect_files(dir, dir, &mut files);
+    files.sort();
+    // Reference files: the Markdown beside SKILL.md, outside scripts/.
+    let refs: Vec<(&String, String)> = files
+        .iter()
+        .filter(|rel| {
+            rel.to_lowercase().ends_with(".md")
+                && rel.as_str() != "SKILL.md"
+                && !rel.starts_with("scripts/")
+        })
+        .filter_map(|rel| fs::read_to_string(dir.join(rel)).ok().map(|t| (rel, t)))
+        .collect();
+
+    let mut w = Vec::new();
+    for (rel, text) in &refs {
+        let n = text.lines().count();
+        if n > REFERENCE_CONTENTS_AFTER && !has_contents_list(text) {
+            w.push(format!(
+                "{rel} is {n} lines with no contents list at the top — Claude may read only the first ~{REFERENCE_CONTENTS_AFTER} lines; list its sections first"
+            ));
+        }
+    }
+    for (rel, _) in &refs {
+        if body.contains(rel.as_str()) {
+            continue;
+        }
+        let name = rel.rsplit('/').next().unwrap_or(rel);
+        let via = refs
+            .iter()
+            .find(|(other, text)| other != rel && text.contains(name));
+        w.push(match via {
+            Some((via, _)) => format!(
+                "{rel} is reached only through {via} — link it from SKILL.md (references stay one level deep)"
+            ),
+            None => format!("{rel} isn't linked from SKILL.md — Claude won't know to read it"),
+        });
+    }
+
+    let helpers = files.iter().any(|rel| {
+        rel.strip_prefix("scripts/").is_some_and(|f| {
+            let name = f.rsplit('/').next().unwrap_or(f);
+            !name.starts_with('.') && !name.eq_ignore_ascii_case("README.md")
+        })
+    });
+    let lower = body.to_lowercase();
+    if helpers && !INSTALL_WORDS.iter().any(|k| lower.contains(k)) {
+        w.push("scripts/ has helpers, but SKILL.md never says what they need or how to install it — add it next to the step that runs them".into());
+    }
+    w
+}
+
+/// A `Contents` / `Table of contents` / `Зміст` heading (or bold line) near the top.
+fn has_contents_list(text: &str) -> bool {
+    text.lines().take(CONTENTS_WITHIN).any(|line| {
+        let t = line.trim();
+        if !(t.starts_with('#') || t.starts_with("**")) {
+            return false;
+        }
+        let label = t
+            .trim_matches(|c: char| c == '#' || c == '*' || c == ':' || c.is_whitespace())
+            .to_lowercase();
+        matches!(label.as_str(), "contents" | "table of contents" | "зміст")
+    })
+}
+
+/// Every file under `dir`, as a path relative to `root` with `/` separators.
+fn collect_files(root: &Path, dir: &Path, out: &mut Vec<String>) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        // Not followed through a symlink, so a link loop can't recurse forever.
+        if entry.file_type().is_ok_and(|t| t.is_dir()) {
+            collect_files(root, &path, out);
+        } else if let Ok(rel) = path.strip_prefix(root) {
+            let parts: Vec<String> = rel
+                .components()
+                .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                .collect();
+            out.push(parts.join("/"));
+        }
+    }
 }
 
 /// Plugin/marketplace metadata for the distributable output.

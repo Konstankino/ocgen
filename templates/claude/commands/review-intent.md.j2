@@ -65,7 +65,8 @@ Run these reads in **one message** (they are pre-approved): `git diff --stat` an
 `git log --format='%h %s' <base>..<head>`; and the change's stated purpose — the pull request's title
 and body, the issues it closes (`gh issue view`), and any intent file in `{{ dir }}/` or issue draft in
 `.claude/intent/drafts/` it names. No purpose stated anywhere: use the commit subjects, and say so. If
-`gh` is not authenticated or can't reach GitHub, say so and continue without it.
+`gh` isn't installed (the GitHub CLI, https://cli.github.com), isn't logged in (`gh auth login`, which I
+run) or can't reach GitHub, say so and continue without it.
 
 The **context pack** is the target, the base and head commits, the stat, the diff, the log and the
 purpose. Also list the **changed symbols**: the functions, types, CLI flags, config keys, environment
@@ -198,7 +199,7 @@ their reasons, and ask whether I want a draft anyway.
   add `-2`, `-3`, … rather than overwrite it. Make sure `.claude/intent/drafts/.gitignore` exists and
   holds `*` (drafts stay out of git).
 {% include "intent/tone-check.md" %}
-  Fix everything it reports. Then write the draft with the Write tool, and show me its path, the title
+  Then write the draft with the Write tool, and show me its path, the title
   and the description in separate fenced blocks, both word counts, one line on what the check
   changed, and:
   {% include "intent/browser-review.md" %}
