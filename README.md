@@ -252,6 +252,7 @@ ocgen show agent [name] -p ./dir    # print one agent's full configuration
 ocgen landscape ./my-project        # overview of all agents + providers (alias: horizon)
 ocgen doctor ./my-project           # repair a project's config and rewrite its files (shows a diff, asks first)
 ocgen doctor --dry-run ./my-project # show exactly what doctor would change; write nothing
+ocgen doctor --force ./my-project   # also give agents you edited their current preset's text
 ocgen verify ./my-project           # check the project actually works (exit 1 on failure; CI-friendly)
 ocgen managed-settings              # print an organisation policy (managed-settings.json)
 ocgen approve ./my-project          # you unlock pushes/deploys for 30 min (refuses to run under Claude Code)
@@ -319,7 +320,16 @@ preset once had, nobody edited it, so `doctor` replaces it with the current pres
 instruction language, and reports `agent '<name>': text from an older '<role>' preset → the current
 one`. Its other fields (model, tools, turns, effort…) are kept. An agent whose text you changed,
 and a custom role, keep their text: compare with `ocgen show agent
-<name>` and edit it with `ocgen edit agent <name>`. Running it on a project made by an **older version of
+<name>` and edit it with `ocgen edit agent <name>`.
+
+**`doctor --force` overwrites edited agent text too.** Every preset agent gets its current
+preset's text, in the instruction language, even one you edited (`agent '<name>': edited text →
+the current '<role>' preset (--force)`). The current preset is the one new projects get, so an
+agent made from your own preset in `~/.config/ocgen/templates/archetypes/` gets that preset's
+current text. Its other settings are still kept. A custom role, or a preset ocgen no longer ships,
+has nothing to restore: `doctor` names it and keeps its text. Run `ocgen doctor --dry-run --force`
+first to see which agents it would overwrite. The overwritten agent files are backed up to
+`.ocgen-backup/` like any other, so an edit you lose is still there. Running it on a project made by an **older version of
 ocgen** also upgrades it — the state file and generated files are rewritten in the
 current format.
 

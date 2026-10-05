@@ -214,3 +214,127 @@ fn ocgen_doctor_rewrites_the_agent_file() {
         .contains("accidents, not attackers"));
     assert!(Path::new(&state).is_file());
 }
+
+// ------------------------------------------------------------------ --force --
+
+#[test]
+fn force_overwrites_edited_text_and_keeps_the_rest() {
+    for target in [Target::ClaudeCode, Target::OpenCode] {
+        let mut p = project(target, "English");
+        let current = red_team(&mut p).clone();
+        let a = red_team(&mut p);
+        a.description = "Ours".into();
+        a.body = "You hunt bugs.".into();
+        a.steps = Some(12);
+        a.color = "green".into();
+
+        // Without --force an edited agent is the user's.
+        assert!(!mentions(&p.clone().doctor(), "red-team"));
+
+        let fixes = p.refresh_presets(true);
+        let a = red_team(&mut p);
+        assert_eq!(
+            (&a.description, &a.body),
+            (&current.description, &current.body),
+            "{target:?}"
+        );
+        assert_eq!((a.steps, a.color.as_str()), (Some(12), "green"));
+        assert!(
+            fixes
+                .iter()
+                .any(|f| f.contains("'red-team'") && f.contains("--force")),
+            "{fixes:?}"
+        );
+    }
+}
+
+#[test]
+fn force_leaves_custom_roles_and_current_agents_alone() {
+    let mut p = project(Target::ClaudeCode, "English");
+    let mut own = Agent::blank("docs-writer", "docs", "");
+    own.body = "You write the docs.".into();
+    p.agents.push(own);
+    let before = p.agents.clone();
+    let fixes = p.refresh_presets(true);
+    for (a, b) in p.agents.iter().zip(&before) {
+        assert_eq!(
+            (&a.description, &a.body),
+            (&b.description, &b.body),
+            "{}",
+            a.name
+        );
+    }
+    assert!(fixes.is_empty(), "{fixes:?}");
+}
+
+#[test]
+fn ocgen_doctor_force_overwrites_an_edited_agent_with_a_backup() {
+    let dir = tempdir().unwrap();
+    let mut p = project(Target::ClaudeCode, "English");
+    p.agents.push({
+        let mut own = Agent::blank("docs-writer", "docs", "");
+        own.body = "You write the docs.".into();
+        own
+    });
+    p.scaffold(dir.path(), false).unwrap();
+    let state = dir.path().join(".claude/.ocgen-state.json");
+    let mut v: Value = serde_json::from_str(&fs::read_to_string(&state).unwrap()).unwrap();
+    for a in v["agents"].as_array_mut().unwrap() {
+        if a["name"] == "red-team" {
+            a["body"] = "You hunt bugs.".into();
+        }
+    }
+    fs::write(&state, serde_json::to_string_pretty(&v).unwrap()).unwrap();
+    let agent_md = dir.path().join(".claude/agents/red-team.md");
+    let doctor = |args: &[&str]| {
+        Command::cargo_bin("ocgen")
+            .unwrap()
+            .arg("doctor")
+            .args(args)
+            .arg(dir.path())
+            .assert()
+            .success()
+    };
+
+    // Plain doctor keeps the edit.
+    doctor(&["--yes"]);
+    assert!(fs::read_to_string(&agent_md)
+        .unwrap()
+        .contains("You hunt bugs."));
+
+    // A dry run names what --force would overwrite, and what it can't, and writes nothing.
+    let out = doctor(&["--dry-run", "--force"]);
+    let out = String::from_utf8_lossy(&out.get_output().stdout).to_string();
+    assert!(
+        out.contains("agent 'red-team'") && out.contains("--force"),
+        "{out}"
+    );
+    assert!(out.contains("docs-writer"), "{out}");
+    assert!(fs::read_to_string(&agent_md)
+        .unwrap()
+        .contains("You hunt bugs."));
+    assert!(fs::read_to_string(&state)
+        .unwrap()
+        .contains("You hunt bugs."));
+
+    doctor(&["--force", "--yes"]);
+    let md = fs::read_to_string(&agent_md).unwrap();
+    assert!(
+        md.contains("Threat model: accidents, not attackers.") && !md.contains("You hunt bugs.")
+    );
+    assert!(!fs::read_to_string(&state)
+        .unwrap()
+        .contains("You hunt bugs."));
+    // The custom role keeps its text.
+    let own = fs::read_to_string(dir.path().join(".claude/agents/docs-writer.md")).unwrap();
+    assert!(own.contains("You write the docs."));
+    // The overwritten file is in the backup.
+    let backups = dir.path().join(".ocgen-backup");
+    let saved = fs::read_dir(&backups)
+        .unwrap()
+        .flatten()
+        .map(|e| e.path().join(".claude/agents/red-team.md"))
+        .filter(|p| p.is_file())
+        .any(|p| fs::read_to_string(p).unwrap().contains("You hunt bugs."));
+    assert!(saved, "no backup of the edited agent");
+}

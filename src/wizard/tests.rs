@@ -454,7 +454,7 @@ fn doctor_adopts_hand_added_rules_and_keeps_files_chosen_one_by_one() {
         "Keep",         // the agent file
         "Overwrite",    // settings.json (regenerated with the adopted rules)
     ]);
-    super::run_doctor(path, false, false).unwrap();
+    super::run_doctor(path, false, false, false).unwrap();
     assert_eq!(script_remaining(), 0);
 
     // settings.json was regenerated only for the rules, which it now holds as mine.
@@ -472,7 +472,7 @@ fn doctor_apply_all_without_adopting_drops_the_rules_with_a_backup() {
     let tmp = tempfile::tempdir().unwrap();
     let (path, agent, old) = hand_edited_project(tmp.path());
     script(&["n", "Apply all"]);
-    super::run_doctor(path, false, false).unwrap();
+    super::run_doctor(path, false, false, false).unwrap();
     assert_eq!(script_remaining(), 0);
 
     assert!(!read(tmp.path(), SETTINGS).contains("Bash(head:*)"));
@@ -488,7 +488,7 @@ fn doctor_cancel_writes_nothing() {
     let (path, agent, old) = hand_edited_project(tmp.path());
     let state = read(tmp.path(), STATE);
     script(&["y", "Cancel"]);
-    super::run_doctor(path, false, false).unwrap();
+    super::run_doctor(path, false, false, false).unwrap();
     assert_eq!(script_remaining(), 0);
     assert_eq!(read(tmp.path(), SETTINGS), old);
     assert_eq!(read(tmp.path(), &agent), "my agent\n");

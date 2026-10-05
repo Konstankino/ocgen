@@ -73,9 +73,12 @@ fn main() -> Result<()> {
             what: ShowWhat::Agent { name, path },
         } => overview::show_agent(path, name)?,
         Command::Landscape { path } => overview::run(path.unwrap_or_else(|| ".".to_string()))?,
-        Command::Doctor { path, dry_run, yes } => {
-            wizard::run_doctor(path.unwrap_or_else(|| ".".to_string()), dry_run, yes)?
-        }
+        Command::Doctor {
+            path,
+            dry_run,
+            yes,
+            force,
+        } => wizard::run_doctor(path.unwrap_or_else(|| ".".to_string()), dry_run, yes, force)?,
         Command::Hook { name, check } => {
             if check {
                 println!("{}", ocgen::hooks::PROTOCOL);

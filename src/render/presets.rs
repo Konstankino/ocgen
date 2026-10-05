@@ -2,8 +2,9 @@
 //! keeps each agent's text in its state file, so regenerating it renders what an
 //! older preset gave the agent. `ocgen doctor` re-seeds the text of an agent whose
 //! every text is one its role's preset has shipped with (a fingerprint in
-//! `preset_history.txt`): nobody edited it. Any other text is the user's, and so
-//! is every other field.
+//! `preset_history.txt`): nobody edited it. Any other text is the user's, unless
+//! `ocgen doctor --force` asks for the current preset's anyway. Every other field
+//! is always the user's.
 
 use super::language::{same_text, seed};
 use super::{canonical_language, fingerprint, Project};
@@ -25,9 +26,9 @@ pub fn shipped_preset_text(role: &str, text: &str) -> bool {
 
 impl Project {
     /// Re-seed the text (description, body, prompt) of each preset agent that
-    /// still has an older preset's text, in the instruction language. Returns
-    /// what changed, for doctor's fixes.
-    pub(super) fn refresh_presets(&mut self) -> Vec<String> {
+    /// still has an older preset's text, in the instruction language. `force`
+    /// re-seeds edited text too. Returns what changed, for doctor's fixes.
+    pub fn refresh_presets(&mut self, force: bool) -> Vec<String> {
         let presets = templates::archetype_names();
         let lang = canonical_language(&self.language);
         let target = self.target;
@@ -48,16 +49,25 @@ impl Project {
                 .flatten()
                 .filter(|t| !t.trim().is_empty())
                 .collect();
-            if texts.is_empty() || !texts.iter().all(|t| shipped_preset_text(&agent.role, t)) {
+            let unedited =
+                !texts.is_empty() && texts.iter().all(|t| shipped_preset_text(&agent.role, t));
+            if !unedited && !force {
                 continue;
             }
             agent.description = fresh.description;
             agent.body = fresh.body;
             agent.prompt_body = fresh.prompt_body;
-            fixes.push(format!(
-                "agent '{}': text from an older '{}' preset → the current one",
-                agent.name, agent.role
-            ));
+            fixes.push(if unedited {
+                format!(
+                    "agent '{}': text from an older '{}' preset → the current one",
+                    agent.name, agent.role
+                )
+            } else {
+                format!(
+                    "agent '{}': edited text → the current '{}' preset (--force)",
+                    agent.name, agent.role
+                )
+            });
         }
         fixes
     }

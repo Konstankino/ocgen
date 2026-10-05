@@ -3713,7 +3713,7 @@ impl Project {
     /// Returns a human-readable list of what was changed.
     pub fn doctor(&mut self) -> Vec<String> {
         // Preset agents nobody edited get their current preset's text.
-        let mut fixes = self.refresh_presets();
+        let mut fixes = self.refresh_presets(false);
         if self.target == Target::ClaudeCode {
             fixes.extend(self.claude_doctor());
             return fixes;

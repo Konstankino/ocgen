@@ -2244,7 +2244,7 @@ pub fn run_edit_provider(path: String, key_arg: Option<String>) -> Result<()> {
 
 /// `ocgen doctor` — repair a project's config and rewrite its files. Also upgrades
 /// an old-format state file to the current schema.
-pub fn run_doctor(path: String, dry_run: bool, yes: bool) -> Result<()> {
+pub fn run_doctor(path: String, dry_run: bool, yes: bool, force: bool) -> Result<()> {
     let theme = ColorfulTheme::default();
     let (target, mut project) = Project::discover(Path::new(&path))?;
 
@@ -2259,7 +2259,13 @@ pub fn run_doctor(path: String, dry_run: bool, yes: bool) -> Result<()> {
         ui::warning(&e.to_string());
     }
 
-    let fixes = project.doctor();
+    // --force first: the edited agents it re-seeds are then current for doctor.
+    let mut fixes = if force {
+        project.refresh_presets(true)
+    } else {
+        Vec::new()
+    };
+    fixes.extend(project.doctor());
     if fixes.is_empty() {
         ui::section("Checks");
         ui::success("no problems found");
@@ -2267,6 +2273,15 @@ pub fn run_doctor(path: String, dry_run: bool, yes: bool) -> Result<()> {
         ui::section(&format!("Fixes ({})", fixes.len()));
         for f in &fixes {
             ui::success(f);
+        }
+    }
+    if force {
+        let presets = templates::archetype_names();
+        for a in project.agents.iter().filter(|a| !presets.contains(&a.role)) {
+            ui::warning(&format!(
+                "agent '{}': role '{}' has no preset, so --force keeps its text (change it with `ocgen edit agent {}`)",
+                a.name, a.role, a.name
+            ));
         }
     }
 

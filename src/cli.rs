@@ -82,6 +82,10 @@ pub enum Command {
         /// Apply everything without asking (hand-added permission rules are kept as yours).
         #[arg(long, short)]
         yes: bool,
+        /// Give every preset agent its current preset's text (description, instructions,
+        /// prompt), even text you edited. Its other settings, and custom roles, are kept.
+        #[arg(long)]
+        force: bool,
     },
     /// Show the full configuration of one agent.
     Show {
@@ -569,7 +573,8 @@ const DOCTOR_EXAMPLES: &str = "\
 Examples:
   ocgen doctor --dry-run          # what would change, with diffs; writes nothing
   ocgen doctor                    # review: keep hand-added permission rules, then apply all / per file
-  ocgen doctor -y ./my-project    # apply everything (hand-added permission rules are kept as yours)";
+  ocgen doctor -y ./my-project    # apply everything (hand-added permission rules are kept as yours)
+  ocgen doctor --force            # also give agents you edited their current preset's text";
 
 const EDIT_EXAMPLES: &str = "\
 Examples:

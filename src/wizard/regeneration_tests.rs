@@ -144,7 +144,7 @@ fn doctor_keeps_a_hand_added_mcp_server_when_asked() {
         "y",         // keep what was added by hand
         "Apply all", // .mcp.json in ocgen's formatting
     ]);
-    super::run_doctor(path, false, false).unwrap();
+    super::run_doctor(path, false, false, false).unwrap();
     assert_eq!(script_remaining(), 0);
     let p = Project::load_state(tmp.path()).unwrap();
     assert!(p.claude.mcp_servers.iter().any(|s| s.name == "github"));
@@ -157,7 +157,7 @@ fn doctor_drops_a_hand_added_mcp_server_with_a_backup_when_declined() {
     let path = with_hand_added_server(tmp.path());
     let before = read(tmp.path(), ".mcp.json");
     script(&["n", "Apply all"]);
-    super::run_doctor(path, false, false).unwrap();
+    super::run_doctor(path, false, false, false).unwrap();
     assert_eq!(script_remaining(), 0);
     assert!(!read(tmp.path(), ".mcp.json").contains("github"));
     assert_eq!(read(&backups(tmp.path())[0], ".mcp.json"), before);
@@ -183,7 +183,13 @@ fn doctor_keep_all_leaves_files_no_longer_generated() {
     fs::write(tmp.path().join(STATE), state.to_string()).unwrap();
 
     script(&["Keep all"]);
-    super::run_doctor(tmp.path().to_string_lossy().into_owned(), false, false).unwrap();
+    super::run_doctor(
+        tmp.path().to_string_lossy().into_owned(),
+        false,
+        false,
+        false,
+    )
+    .unwrap();
     assert_eq!(script_remaining(), 0);
     assert!(tmp.path().join(".claude/skills/team/SKILL.md").exists());
 }
@@ -196,7 +202,7 @@ fn doctor_refuses_a_state_from_a_newer_ocgen_before_asking_anything() {
     state["schema"] = json!(ocgen::render::STATE_SCHEMA + 1);
     fs::write(tmp.path().join(STATE), state.to_string()).unwrap();
     script(&[]);
-    let err = super::run_doctor(path, false, false)
+    let err = super::run_doctor(path, false, false, false)
         .unwrap_err()
         .to_string();
     assert!(err.contains("upgrade"), "{err}");
