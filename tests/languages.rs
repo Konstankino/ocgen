@@ -25,7 +25,8 @@ fn project(target: Target, prompts: &str, answers: &str, adversary: bool) -> Pro
     p.response_language = answers.into();
     let mut roles = vec!["coordinator", "explorer", "implementer", "reviewer"];
     if adversary {
-        roles.push("adversary");
+        // The default team's checks: the scope guard, then the adversary.
+        roles.extend(["scope-guard", "adversary"]);
     }
     p.agents = roles
         .iter()
@@ -190,11 +191,15 @@ fn the_answer_line_comes_before_the_adversary_loop() {
         let files = rendered(&project(target, "English", "Ukrainian", true));
         let coord = coordinator(&files);
         let line = coord.find("Answer the user in").unwrap();
+        let scope = coord.find("Scope check").unwrap();
         let adversary = coord.find("Adversary check").unwrap();
-        assert!(coord.find("Your subagents").unwrap() < line && line < adversary);
+        assert!(coord.find("Your subagents").unwrap() < line);
+        assert!(line < scope && scope < adversary, "{coord}");
         // A blank line between sections, none doubled.
         assert!(coord.contains(".\n\nAnswer the user in"), "{coord}");
+        assert!(coord.contains(".\n\nScope check"), "{coord}");
         assert!(!coord.contains("\n\n\n\nAdversary"), "{coord}");
+        assert!(!coord.contains("\n\n\n\nScope"), "{coord}");
     }
 }
 

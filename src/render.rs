@@ -117,6 +117,15 @@ pub const ADVERSARY_ROLE: &str = "adversary";
 /// Rework rounds the adversary loop allows before the rest is reported UNRESOLVED.
 pub const ADVERSARY_ROUNDS: u32 = 2;
 
+/// The role (archetype) whose subagent turns on the coordinator's scope loop:
+/// once the changes are done and before any review, check them against the plan
+/// in both directions — revert what it cuts, send what is missing back.
+pub const SCOPE_GUARD_ROLE: &str = "scope-guard";
+
+/// Completion rounds the scope loop allows before what is still missing is
+/// reported as not done. Cuts are reverted by the coordinator, never a round.
+pub const SCOPE_GUARD_ROUNDS: u32 = 1;
+
 /// The answer lines the coordinator presets end with. When the answers are in
 /// another language, the one ending a coordinator's text gives way to ocgen's.
 const RESPONSE_LINES: [&str; 2] = ["Respond in English.", "Відповідай українською."];
@@ -753,6 +762,19 @@ struct SubCtx {
     description: String,
 }
 
+/// The agents the check steps in /deliver and /intent name, by their own names
+/// (empty when the team has none), and the rounds each check allows.
+struct Checkers {
+    adversary: String,
+    scope_guard: String,
+    /// Who rework goes to (empty without one, or without any check).
+    implementer: String,
+    /// Whether that implementer works in its own git worktree.
+    implementer_isolated: bool,
+    rounds: u32,
+    scope_rounds: u32,
+}
+
 /// Probe order for locating a project's state file (target-agnostic discovery).
 fn state_file_in(dir: &Path) -> Option<PathBuf> {
     for sf in Target::state_files() {
@@ -917,20 +939,62 @@ impl Project {
             .or_else(|| subs().find(|a| a.name == role))
     }
 
-    /// Who the adversary steps in /deliver and /intent name: the adversary (empty
-    /// without one), the implementer it sends findings to (may be empty), whether
-    /// that implementer works in a worktree, and the rework rounds allowed.
-    fn adversary_names(&self) -> (String, String, bool, u32) {
-        let Some(adversary) = self.subagent_for(ADVERSARY_ROLE) else {
-            return (String::new(), String::new(), false, ADVERSARY_ROUNDS);
+    /// Who the check steps in /deliver and /intent name. Without an adversary
+    /// and a scope guard, every name is empty and the commands read as before.
+    fn checkers(&self) -> Checkers {
+        let adversary = self.subagent_for(ADVERSARY_ROLE);
+        let scope_guard = self.subagent_for(SCOPE_GUARD_ROLE);
+        let implementer = self
+            .subagent_for("implementer")
+            .filter(|_| adversary.is_some() || scope_guard.is_some());
+        Checkers {
+            adversary: adversary.map(|a| a.name.clone()).unwrap_or_default(),
+            scope_guard: scope_guard.map(|a| a.name.clone()).unwrap_or_default(),
+            implementer: implementer.map(|a| a.name.clone()).unwrap_or_default(),
+            implementer_isolated: implementer.is_some_and(|a| a.isolation.trim() == "worktree"),
+            rounds: ADVERSARY_ROUNDS,
+            scope_rounds: SCOPE_GUARD_ROUNDS,
+        }
+    }
+
+    /// The command a project's format hook runs after every edit: what the scope
+    /// guard must not cut. Claude only; OpenCode has no format hook.
+    fn formatter(&self) -> &str {
+        match self.target {
+            Target::ClaudeCode => self.claude.hooks_extra.format_cmd.trim(),
+            Target::OpenCode => "",
+        }
+    }
+
+    /// The coordinator's scope loop, when the team has a scope guard. Only then
+    /// is its template loaded, so other projects render exactly as before.
+    fn scope_guard_loop(&self, env: &Environment) -> Result<Option<String>> {
+        let Some(guard) = self.subagent_for(SCOPE_GUARD_ROLE) else {
+            return Ok(None);
         };
         let implementer = self.subagent_for("implementer");
-        (
-            adversary.name.clone(),
-            implementer.map(|a| a.name.clone()).unwrap_or_default(),
-            implementer.is_some_and(|a| a.isolation.trim() == "worktree"),
-            ADVERSARY_ROUNDS,
-        )
+        // A stale override missing a variable fails instead of printing nothing.
+        let mut env = env.clone();
+        env.set_undefined_behavior(minijinja::UndefinedBehavior::Strict);
+        let text = env
+            .render_str(
+                &templates::load("coordination/scope-guard.md.j2")?,
+                context! {
+                    scope_guard => guard.name,
+                    implementer => implementer.map(|a| a.name.as_str()).unwrap_or_default(),
+                    implementer_isolated => implementer
+                        .is_some_and(|a| a.isolation.trim() == "worktree"),
+                    adversary => self
+                        .subagent_for(ADVERSARY_ROLE)
+                        .map(|a| a.name.as_str())
+                        .unwrap_or_default(),
+                    formatter => self.formatter(),
+                    rounds => SCOPE_GUARD_ROUNDS,
+                    language => self.language,
+                },
+            )
+            .context("rendering the scope loop")?;
+        Ok(Some(text))
     }
 
     /// The coordinator's adversary loop, when the team has an adversary. Only
@@ -980,13 +1044,17 @@ impl Project {
     }
 
     /// A coordinator's text as written: its own, its answer line replaced when
-    /// the answers are in another language, then the adversary loop. Unchanged
-    /// for a project that has neither.
+    /// the answers are in another language, then the scope loop, then the
+    /// adversary loop (the order they run in). Unchanged for a project that has
+    /// none of them.
     fn coordinator_text(&self, text: &str, env: &Environment) -> Result<String> {
         let mut out = text.to_string();
         if let Some(answer) = self.response_section(env)? {
             let own = without_response_line(&out).unwrap_or(out);
             out = join_section(&own, &answer);
+        }
+        if let Some(l) = self.scope_guard_loop(env)? {
+            out = join_section(&out, &l);
         }
         if let Some(l) = self.adversary_loop(env)? {
             out = join_section(&out, &l);
@@ -1268,7 +1336,7 @@ impl Project {
                 .context("rendering fanout command")?,
             ));
         }
-        let (adversary, implementer, implementer_isolated, rounds) = self.adversary_names();
+        let checks = self.checkers();
         if self.claude.workflow.deliver {
             components.push((
                 "commands/deliver.md".to_string(),
@@ -1279,10 +1347,12 @@ impl Project {
                         inquire => self.claude.workflow.inquire,
                         intent => self.claude.workflow.intent,
                         approvers => self.claude.intent.approvers.join(", "),
-                        adversary => adversary,
-                        implementer => implementer,
-                        implementer_isolated => implementer_isolated,
-                        rounds => rounds,
+                        adversary => checks.adversary,
+                        scope_guard => checks.scope_guard,
+                        implementer => checks.implementer,
+                        implementer_isolated => checks.implementer_isolated,
+                        rounds => checks.rounds,
+                        scope_rounds => checks.scope_rounds,
                     },
                 )
                 .context("rendering deliver command")?,
@@ -1323,8 +1393,9 @@ impl Project {
                             .any(|a| a.name == "reviewer" && a.mode == "subagent"),
                         issue_template => crate::claude::INTENT_ISSUE_TEMPLATE,
                         intent_template => crate::claude::INTENT_FILE_TEMPLATE,
-                        adversary => adversary,
-                        rounds => rounds,
+                        adversary => checks.adversary,
+                        scope_guard => checks.scope_guard,
+                        rounds => checks.rounds,
                     },
                 )
                 .context("rendering intent command")?,

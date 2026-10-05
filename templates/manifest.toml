@@ -82,6 +82,15 @@ archetype = "explorer"
 name = "implementer"
 archetype = "implementer"
 
+# Checks the change against the plan in both directions — nothing planned
+# missing, nothing unplanned added — and states its blast radius. With it in the
+# team, the coordinator runs it once the changes are done and before any review,
+# reverts its cuts and sends its gaps back to the implementer once (see
+# coordination/scope-guard.md.j2).
+[[pipeline]]
+name = "scope-guard"
+archetype = "scope-guard"
+
 [[pipeline]]
 name = "reviewer"
 archetype = "reviewer"

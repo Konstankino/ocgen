@@ -100,8 +100,8 @@ project it then asks for:
    editable default at the base-URL prompt.
 3. **Utility model** — which provider + model the built-in compaction/title/summary
    agents use.
-4. **Agents** — start from the default 5-agent pipeline (coordinator, explorer,
-   implementer, reviewer, adversary), then add/rename as many as you like. For each agent you configure **every field OpenCode exposes**:
+4. **Agents** — start from the default 6-agent pipeline (coordinator, explorer,
+   implementer, scope-guard, reviewer, adversary), then add/rename as many as you like. For each agent you configure **every field OpenCode exposes**:
    name, a starting **role/preset** (or `blank (custom role)`), **mode**
    (primary/subagent/all), **provider** and **model**, **variant**, **temperature**,
    **top_p**, **max steps**, **color**, **disable**, **hidden**, **description**, the
@@ -426,6 +426,7 @@ The default team gives each role a model that fits its job:
 | coordinator (the session's `model` in `settings.json`) | `opus` | session's | Planning errors cascade |
 | explorer | `sonnet` | `medium` | Reads the most and decides the least; others check its findings |
 | implementer | `opus` | inherit | Writes the code |
+| scope-guard | `sonnet` | `high` | Traces plan items to hunks: careful reading, and another model than the implementer's |
 | reviewer | `fable` | `high` | Another model than the implementer's, so it doesn't share its blind spots |
 | adversary | `opus` | `high` | Covers what the reviewer's model misses |
 | verifier (preset, not in the default team) | `sonnet` | inherit | Runs checks and reports pass/fail |
@@ -476,6 +477,46 @@ coordinator's body is rendered as a template (it may loop over `{{ subagents }}`
 isn't a valid template, or names a value ocgen doesn't know (`${{ secrets.X }}`,
 `{{ .Values }}`), is written exactly as typed, with a warning.
 
+**The scope check.** The default team has a `scope-guard` after the implementer. It checks the
+finished change against the plan in both directions, and states its blast radius:
+- **Nothing planned missing:** every plan item and acceptance criterion gets a line: Done (with
+  the hunks that implement it), Partial (what is missing), Missing, or Differs (built another way
+  than planned; for you to accept, never reworked).
+- **Nothing unplanned added:** every hunk belongs to a plan item, is **Also needed** (reverting
+  it alone would break the build, a test or a criterion), is a **Cut** (a drive-by refactor,
+  rename, hand reformatting, speculative abstraction, unrequested feature, dependency bump or
+  debug leftover), or is **Deferred** with a reason. It never cuts an added check, error handling,
+  test or doc fix — smaller must not mean less safe — and never what the approved plan names.
+- **Blast radius:** files and lines, public surface, dependencies, stable files (none of the last
+  100 commits touched them), what could break, and how to roll back.
+
+It checks that planned behavior is *present*; whether it is *correct* stays with the reviewer and
+the adversary. It has `Read, Grep, Glob, Bash` with the file tools denied, and runs only
+`git diff`, `git log` and `git status`. Its report starts with `Verdict: CLEAN`, `TRIM` (cuts) or
+`INCOMPLETE` (anything Partial or Missing).
+
+Whenever the team has an enabled subagent whose role (or name) is `scope-guard`, ocgen adds its
+loop to the coordinator's instructions, ahead of the adversary loop:
+- Note the base (`git status --porcelain=v2 --branch`) before the first change; files already
+  modified then are yours and aren't judged. Tell whoever makes a change to change only what
+  the task needs.
+- When every change is done, and before any review, call the scope guard with the goal, the
+  plan and its criteria verbatim, and the decisions you confirmed.
+- **Cuts:** the coordinator reverts them itself, exactly, and writes nothing new — no subagent
+  round trip, no extra merge. Restoring a whole file (`git checkout <base> -- <path>`) asks your
+  permission. A revert that breaks a test is undone and reported as kept.
+- **Gaps:** the implementer gets the Partial and Missing items for one completion round, then
+  the scope guard checks once more. Anything still missing is reported as not done.
+- The final report gives the plan coverage, the blast radius, every cut, every Differs and the
+  Defer list.
+
+The commands use it too. In **`/deliver`**, the plan numbers its success criteria and gets a
+**Scope** line (what changes, what is out of scope, which refactors the goal needs), and the scope
+check closes phase 5, before the adversary check. In **`/intent`**, the scope guard checks the
+plan before you see it: a criterion or risk with no task is a gap, a task that traces to nothing
+is shown as **Deferred by the scope check**, and the predicted blast radius goes into the intent
+file's Consequences. Teams without a scope guard render exactly as before.
+
 **The adversary loop.** The default team ends with `adversary`, a skeptic and outside
 attacker. It checks what the explorer found, the implementer built and the reviewer approved,
 and accepts no claim ("tests pass", "Confidence: 97%") without evidence. It has
@@ -503,8 +544,9 @@ The two commands that produce work use it too, naming the adversary by its own n
   and in the issue draft, and the tone check makes sure both have it.
 
 Teams without an adversary render exactly as before. To add one to an existing project, run
-`ocgen add agent`. The preset picker suggests the default-team role the project lacks, so
-`adversary` comes preselected; in OpenCode, name the agent `adversary` and its preset is picked.
+`ocgen add agent`. The preset picker suggests the first default-team role the project lacks, so a
+team without either gets `scope-guard` preselected, then `adversary` the next time; in OpenCode,
+name the agent `scope-guard` or `adversary` and its preset is picked.
 
 **Workflow commands are skills.** Claude Code merged commands into skills, so ocgen renders
 its workflows as `.claude/skills/<name>/SKILL.md`. You still type `/deliver`, `/inquire` and so on.
@@ -594,10 +636,11 @@ and autocomplete it.
 
 **Subagent controls.** Beyond model, tools and color, each subagent can set:
 - `disallowedTools`: removes tools even if its tool list would allow them. The explorer,
-  reviewer, verifier and adversary ship with `Edit, Write, NotebookEdit` denied, so they have no
-  file-editing tools. The explorer and reviewer are **hard read-only**; the verifier and
-  adversary keep `Bash` to run tests, so their read-only status rests on their prompts.
-- `effort`: the reviewer and adversary use `high`, the explorer `medium`.
+  reviewer, verifier, adversary and scope-guard ship with `Edit, Write, NotebookEdit` denied, so
+  they have no file-editing tools. The explorer and reviewer are **hard read-only**; the verifier
+  and adversary keep `Bash` to run tests, and the scope-guard to read git, so their read-only
+  status rests on their prompts.
+- `effort`: the reviewer, adversary and scope-guard use `high`, the explorer `medium`.
 - `permissionMode`.
 - `memory`: `project` is committed under `.claude/agent-memory/`, `local` is git-ignored,
   `user` spans every project.
@@ -1427,7 +1470,7 @@ with a shared `.claude/hooks/loop-guard.sh`:
   retrying and go idle. The execution-approval gate denies the command **and halts the agent**
   (`continue: false`). The loop guard never lets an unapproved plan or a gated `git push` through.
 - **Turn ceilings.** Each subagent gets a `maxTurns` limit (explorer 40, implementer 60, reviewer
-  30, verifier 40, adversary 40). At the limit its output comes back marked partial and can be resumed once.
+  30, verifier 40, adversary 40, scope-guard 30). At the limit its output comes back marked partial and can be resumed once.
 - **Loop discipline.** The workflow rule tells agents to change approach after two failures,
   report the blocker after the third, re-plan at most twice, and never inflate confidence to get
   past a gate. The coordinator must report every escalation as unresolved.
@@ -1565,9 +1608,9 @@ change just one template without copying everything, use
 current content) and writes only that file to the override dir.
 
 An override `manifest.toml` replaces the built-in one as a whole, and its `[[pipeline]]` is the
-default team. If you made one before the adversary existed, new projects still get the old
-four agents until you add the `adversary` entry to it (archetypes need no copy: a missing one
-comes from the binary).
+default team. If you made one before the scope guard or the adversary existed, new projects
+still get the old team until you add the `scope-guard` and `adversary` entries to it, in the
+shipped order (archetypes need no copy: a missing one comes from the binary).
 
 **What can't be overridden.** Hook scripts, the statusline script (`claude/statusline.sh`) and
 the gate-protocol templates (`claude/commands/team.md.j2`, `team-plan.md.j2`, `fanout.md.j2` and
@@ -1581,6 +1624,7 @@ refuses them, and a copy left by an older ocgen is marked `[embedded; override i
 ```
 manifest.toml            # wizard questions (with help text) + default provider(s)
 archetypes/*.toml        # agent role presets (mode, permissions, colour, text)
+coordination/scope-guard.md.j2   # the coordinator's scope loop (when the team has a scope guard)
 coordination/adversary.md.j2     # the coordinator's adversary loop (when the team has one)
 coordination/response.md.j2      # the coordinator's answer line (when answers differ from instructions)
 opencode.json.j2         # the provider/model config template (loops over providers)

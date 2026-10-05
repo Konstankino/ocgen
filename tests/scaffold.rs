@@ -519,6 +519,7 @@ fn templates_embedded_access() {
         "reviewer",
         "verifier",
         "adversary",
+        "scope-guard",
     ] {
         assert!(names.contains(&n.to_string()), "missing archetype {n}");
     }
@@ -727,6 +728,7 @@ fn manifest_declares_the_default_pipeline() {
             ("coordinator", "coordinator"),
             ("explorer", "explorer"),
             ("implementer", "implementer"),
+            ("scope-guard", "scope-guard"),
             ("reviewer", "reviewer"),
             ("adversary", "adversary"),
         ]

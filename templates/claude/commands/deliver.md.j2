@@ -36,7 +36,10 @@ Cover scope, constraints, success criteria, and out-of-scope.
 
 ## 3. Plan and get approval
 Draft a numbered task list + intent + a **risk register** (every risk gets a mitigation task).
-Present it and **invite push-back**; iterate until I approve. Do not execute yet.
+{% if scope_guard %}Number the success criteria too, and add a **Scope** line: what will change, what is out of scope, and any
+refactor, rename or dependency change the goal needs. `{{ scope_guard }}` checks the change against the tasks, the
+criteria and the Scope line in phase 5.
+{% endif %}Present it and **invite push-back**; iterate until I approve. Do not execute yet.
 
 ## 4. Research in parallel (read-only)
 Investigate concurrently where independent: fetch the relevant online HTML/PDF docs — from the
@@ -45,13 +48,30 @@ the approved plan, go back to phase 3 and re-plan rather than pushing through �
 after that, stop and present the conflict to me instead of looping.
 
 ## 5. Execute under the gates
-Work the approved plan. For each decision or completed task, **state a `Confidence: NN%`** and
+{% if scope_guard %}Before the first task, note the base for the scope check below: run
+`git status --porcelain=v2 --branch --untracked-files=all` — its `# branch.oid` line is the commit you start
+from, and the files it lists are mine, already modified.
+{% endif %}Work the approved plan. For each decision or completed task, **state a `Confidence: NN%`** and
 surface gated decisions for me to confirm; keep working a risk until its mitigation round is done.
 Give each task at most 3 attempts: if the same approach fails twice, change it; on the third
 failure, stop and report the blocker with evidence.
 Do not perform high-impact external actions (deploys, `git push`/merge, cloud mutations) without my
 explicit approval.
-{% if adversary %}
+{% if scope_guard %}
+**Scope check.** When the plan's tasks are done{% if adversary %}, and before the adversary check{% endif %},
+have `{{ scope_guard }}` check the whole change against the plan in both directions — nothing planned missing, nothing
+unplanned added — the scope loop in `.claude/rules/ocgen-team.md`:
+{% if implementer_isolated %}- First merge `{{ implementer }}`'s worktree branch into the working branch, or it checks code without the change.
+{% endif %}- Give it the goal and the approved plan verbatim (after a re-plan, the newest one; if phases 1–3 collapsed, the brief;
+  if an approved intent replaced them, its plan and acceptance criteria), the decisions I confirmed, the base,
+  and the files that were already modified.
+- Cuts: revert each one yourself, exactly as it says, and write nothing new; then run the tests, and
+  undo any revert that breaks one.
+- `Verdict: INCOMPLETE`: send {% if implementer %}`{{ implementer }}`{% else %}the subagent that made the change{% endif %} only the Partial and Missing items, verbatim, then have
+  `{{ scope_guard }}` check the whole change once more. At most {{ scope_rounds }} completion round: an item still
+  missing after it is **not done** in phase 6, never done.
+- Differs (built another way than planned): don't rework it; show it to me in phase 6.
+{% endif %}{% if adversary %}
 **Adversary check.** When the plan's tasks are done, and before phase 6, have `{{ adversary }}` check the whole change —
 the adversary loop in `.claude/rules/ocgen-team.md`:
 {% if implementer_isolated %}- First merge `{{ implementer }}`'s worktree branch into the working branch, or it checks code without the change.
@@ -65,7 +85,10 @@ the adversary loop in `.claude/rules/ocgen-team.md`:
 Summarize what was done, the decisions and their confidence, open risks, and next steps. Report
 anything left unresolved — including every entry in `.claude/loop-guard/escalations.md` — as
 unresolved, not done. If a coordinator session is named, report status to it with `SendMessage`.
-
+{% if scope_guard %}From the scope check, report the plan coverage (anything still missing, as not done), the blast radius,
+every cut (reverted, or kept with its reason), every Differs for me to accept or reject, and the Defer list as
+follow-ups.
+{% endif %}
 For several independent workstreams at once, run one `claude --worktree <name> --name <name>` session
 per workstream (each running `/deliver`) and coordinate via `/list-agents` + `SendMessage` — see the
 "Multi-session delivery" rule.

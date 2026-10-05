@@ -836,7 +836,7 @@ const WORKER: &[(&str, &str)] = &[
     ("SUBAGENT_CONFIDENCE_THRESHOLD", "96"),
     (
         "SUBAGENT_READONLY_ROLES",
-        "explorer reviewer verifier adversary",
+        "explorer reviewer verifier adversary scope-guard",
     ),
     ("LOOP_GUARD_MAX_BLOCKS", "3"),
 ];
@@ -868,6 +868,14 @@ fn worker_tree_steps() -> Vec<Step> {
             "x1",
             "adversary",
             "Verdict: PASS\nFindings:\n- [Low] a.rs:1 — x — y — z — w — Inferred (Confidence: 60%)\nNot checked: none",
+            0,
+        ),
+        // Nor is the scope guard: it reads the diff, it never changes it.
+        start("s1", "scope-guard"),
+        stop(
+            "s1",
+            "scope-guard",
+            "Verdict: TRIM\nGoal: \"x\"\nPlan:\n- task 1 — Done: a.rs:1\nCut:\n- b.rs:2 — rename — drive-by rename — no plan item — revert: restore the lines to the base\nNot checked: none",
             0,
         ),
         // A writer that changed nothing since it started passes…

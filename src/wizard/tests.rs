@@ -761,6 +761,7 @@ fn the_default_preset_is_the_next_pipeline_role_the_team_lacks() {
         "explorer",
         "implementer",
         "reviewer",
+        "scope-guard",
         "verifier",
         "blank (custom role)",
     ]);
@@ -768,6 +769,7 @@ fn the_default_preset_is_the_next_pipeline_role_the_team_lacks() {
         "coordinator",
         "explorer",
         "implementer",
+        "scope-guard",
         "reviewer",
         "adversary",
     ]);
@@ -776,10 +778,32 @@ fn the_default_preset_is_the_next_pipeline_role_the_team_lacks() {
         presets[default_preset(&presets, &[], &pipeline)],
         "coordinator"
     );
-    // A team from before the adversary is offered the adversary.
+    // A team from before the scope guard is offered it, then the adversary.
     let legacy = s(&["coordinator", "explorer", "implementer", "reviewer"]);
     assert_eq!(
         presets[default_preset(&presets, &legacy, &pipeline)],
+        "scope-guard"
+    );
+    let five = s(&[
+        "coordinator",
+        "explorer",
+        "implementer",
+        "reviewer",
+        "adversary",
+    ]);
+    assert_eq!(
+        presets[default_preset(&presets, &five, &pipeline)],
+        "scope-guard"
+    );
+    let guarded = s(&[
+        "coordinator",
+        "explorer",
+        "implementer",
+        "scope-guard",
+        "reviewer",
+    ]);
+    assert_eq!(
+        presets[default_preset(&presets, &guarded, &pipeline)],
         "adversary"
     );
     // A renamed agent still counts by its role.
@@ -791,6 +815,8 @@ fn the_default_preset_is_the_next_pipeline_role_the_team_lacks() {
         "reviewer",
         "redteam",
         "adversary",
+        "tracer",
+        "scope-guard",
     ]);
     assert_eq!(
         presets[default_preset(&presets, &renamed, &pipeline)],
@@ -803,6 +829,7 @@ fn the_default_preset_is_the_next_pipeline_role_the_team_lacks() {
         "explorer",
         "implementer",
         "reviewer",
+        "scope-guard",
         "verifier",
     ]);
     assert_eq!(
@@ -816,10 +843,27 @@ fn the_default_preset_is_the_next_pipeline_role_the_team_lacks() {
 }
 
 #[test]
-fn add_agent_offers_the_adversary_to_a_claude_team_that_lacks_it() {
+fn add_agent_offers_the_next_default_role_to_a_claude_team_that_lacks_it() {
     let tmp = tempfile::tempdir().unwrap();
     let path = legacy_team(tmp.path(), Target::ClaudeCode);
-    // Enter on every prompt: preset, name, then the agent's fields.
+    // Enter on every prompt: preset, name, then the agent's fields. The scope
+    // guard comes before the adversary in the default team, so it is offered first.
+    script(&[""; 13]);
+    super::run_add_agent(Some(path.clone())).unwrap();
+    assert_eq!(
+        script_remaining(),
+        0,
+        "asked exactly the scripted questions"
+    );
+
+    let p = reload(tmp.path());
+    let guard = p.agents.iter().find(|a| a.name == "scope-guard").unwrap();
+    assert_eq!(guard.role, "scope-guard");
+    assert_eq!(guard.tools, "Read, Grep, Glob, Bash");
+    assert!(read(tmp.path(), ".claude/agents/scope-guard.md").contains("maxTurns: 30"));
+    assert!(read(tmp.path(), ".claude/rules/ocgen-team.md").contains("`Verdict: INCOMPLETE`"));
+
+    // Again: now the adversary.
     script(&[""; 13]);
     super::run_add_agent(Some(path)).unwrap();
     assert_eq!(
@@ -827,7 +871,6 @@ fn add_agent_offers_the_adversary_to_a_claude_team_that_lacks_it() {
         0,
         "asked exactly the scripted questions"
     );
-
     let p = reload(tmp.path());
     let adv = p.agents.iter().find(|a| a.name == "adversary").unwrap();
     assert_eq!(adv.role, "adversary");
@@ -838,7 +881,9 @@ fn add_agent_offers_the_adversary_to_a_claude_team_that_lacks_it() {
     let ro = s["env"]["SUBAGENT_READONLY_ROLES"]
         .as_str()
         .unwrap_or_default();
-    assert!(ro.split_whitespace().any(|r| r == "adversary"), "{ro:?}");
+    for role in ["scope-guard", "adversary"] {
+        assert!(ro.split_whitespace().any(|r| r == role), "{role}: {ro:?}");
+    }
 }
 
 #[test]

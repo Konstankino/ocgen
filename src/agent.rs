@@ -219,6 +219,7 @@ mod tests {
             ("implementer", "opus", ""),
             ("reviewer", "fable", "high"),
             ("adversary", "opus", "high"),
+            ("scope-guard", "sonnet", "high"),
             ("verifier", "sonnet", ""),
         ];
         for (role, model, effort) in want {
@@ -237,6 +238,8 @@ mod tests {
         // A reviewer on the implementer's model tends to miss the same things.
         assert_ne!(model("reviewer"), model("implementer"));
         assert_ne!(model("adversary"), model("reviewer"));
+        // The scope guard checks the implementer's work against the plan.
+        assert_ne!(model("scope-guard"), model("implementer"));
 
         // The OpenCode defaults stay as they are.
         for (role, local) in [
@@ -244,6 +247,7 @@ mod tests {
             ("implementer", "qwen3-coder-30b"),
             ("reviewer", "gemma-26b"),
             ("adversary", "devstral-24b"),
+            ("scope-guard", "gemma-26b"),
             ("verifier", "qwen3.5-9b"),
         ] {
             let a = Agent::from_archetype(role, role, "English", "mac").unwrap();

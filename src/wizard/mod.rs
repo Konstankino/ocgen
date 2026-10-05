@@ -35,7 +35,8 @@ pub use skill::{run_add_skill, run_edit_skill};
 const HELP_NAME: &str = "Identifier → file name and @mention. Lowercase, no spaces (e.g. editor).";
 const HELP_PRESET: &str = "A starting point that fills the fields below; 'blank' starts empty.";
 const HELP_ROLE: &str = "Free-text job label (e.g. reviewer); not written to the file. \
-     'adversary' makes the coordinator run this agent's check last.";
+     'scope-guard' makes the coordinator check the change against the plan before review; \
+     'adversary' makes it run this agent's check last.";
 const HELP_MODE: &str =
     "primary = invoked directly & delegates; subagent = only called by others; all = both.";
 const HELP_TOPP: &str =

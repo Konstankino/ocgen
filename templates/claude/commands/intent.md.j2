@@ -126,6 +126,16 @@ Critical and High findings that hold up become numbered findings (F#) like yours
 - **Overall `Confidence: NN%`**
 
 ## 3. Plan and get my approval
+{% if scope_guard -%}
+Before you present the plan{% if adversary %}, and before `{{ adversary }}` attacks it{% endif %}, give `{{ scope_guard }}` the problem, the findings and the plan,
+and ask it to check the plan in both directions, once:
+- **Gaps:** every acceptance criterion and every risk needs a task. Add the missing tasks, or show me what the plan
+  can't cover as a gap.
+- **Excess:** a task that traces to no finding (F#), risk or criterion goes under **Deferred by the scope check**,
+  with its reason, in the plan you show me, so I can push back. Never defer a risk's mitigation.
+- Its predicted **blast radius** — files, public surface, dependencies, stable files, rollback — comes with the plan.
+
+{% endif -%}
 {% if adversary -%}
 Before you present the plan, give `{{ adversary }}` the plan and the findings it rests on, and ask it to attack the
 proposed fix as an outside attacker and a skeptic. On `Verdict: REWORK`, revise the plan for its Critical and High
@@ -173,7 +183,8 @@ after the tone check (step 5).
    Context, Evidence, Decision, Options considered, Consequences, Risks, Sign-off) from the analysis
    and the approved plan, with `Status: Proposed`, `Approvers: {% if approvers %}{{ approvers }}{% else %}No approvers configured{% endif %}`, and every
    approver pending in Sign-off.{% if adversary %} List every UNRESOLVED adversary finding
-   under **Risks**, marked **UNRESOLVED**, with its evidence.{% endif %}
+   under **Risks**, marked **UNRESOLVED**, with its evidence.{% endif %}{% if scope_guard %} Put the predicted blast radius under **Consequences**,
+   each line citing its F# or labelled **Assumption**.{% endif %}
 3. Right before writing, re-check the local directory for the number; if it is taken, take the next.
    Show me the path.
 

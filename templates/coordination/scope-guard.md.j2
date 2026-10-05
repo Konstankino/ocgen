@@ -1,0 +1,64 @@
+{% if language == "Ukrainian" -%}
+Перевірка обсягу ({{ scope_guard }}):
+- Перед першою зміною зафіксуй базу командою `git status --porcelain=v2 --branch --untracked-files=all`:
+  рядок `# branch.oid` — коміт, з якого ти починаєш, а файли зі списку вже змінені — це правки
+  користувача.
+- Коли доручаєш зміну, скажи підагентові, який її вносить: змінюй лише те, чого потребує задача; інші
+  покращення перелічи у звіті, а не вноси.
+- Коли всі зміни готові (в Agent Teams — усі задачі), виклич {{ scope_guard }} до будь-якого ревʼю{% if adversary %} і до {{ adversary }}{% endif %}.
+{% if implementer_isolated -%}
+- {{ implementer }} працює в окремому git worktree: перед кожним викликом {{ scope_guard }} злий його гілку
+  в робочу, інакше {{ scope_guard }} перевірятиме код без змін.
+{% endif -%}
+- Передай {{ scope_guard }} мету й останній затверджений план або бриф дослівно, з критеріями приймання;
+  рішення, які користувач підтвердив під час роботи; базу й уже змінені файли;{% if formatter %} форматер, що
+  запускається після кожної правки (`{{ formatter }}`);{% endif %} і знахідки, які команда виправила.
+- Вирізання (`Verdict: TRIM` або будь-який список Cut): відкотити їх — єдина правка, яку ти робиш сам.
+  Роби точно те, що сказано в кожному пункті, і нічого нового не пиши: поверни рядки до бази, поверни
+  весь файл командою `git checkout <base> -- <path>` або видали новий файл. Потім запусти тести; якщо
+  відкат ламає тест, скасуй цей відкат і запиши пункт як залишений, з причиною.
+- Прогалини (`Verdict: INCOMPLETE`): передай {% if implementer %}агентові {{ implementer }}{% else %}агентові, який вносив зміни,{% endif %} лише пункти Partial і
+  Missing дослівно, разом із текстом плану, з якого вони походять. Потім виклич {{ scope_guard }} ще раз на
+  всю зміну від тієї самої бази й відкоти нові вирізання, які він назве.
+  Не більше {{ rounds }} кола доопрацювання: пункт, що й далі Partial або Missing, у фінальному звіті
+  познач як не виконаний, ніколи як виконаний.
+- Differs: не переробляй; внеси у фінальний звіт, щоб користувач прийняв або відхилив.
+- Якщо у звіті немає рядка `Verdict:`, виклич {{ scope_guard }} ще раз; якщо вердикту знову немає, познач
+  перевірку обсягу як не виконану.
+- Підагенти не викликають одне одного: пункти між {{ scope_guard }} і {% if implementer %}{{ implementer }}{% else %}агентом, який вносив зміни,{% endif %}
+  передаєш лише ти.
+- У фінальному звіті вкажи покриття плану, радіус ураження, кожне вирізання (відкочене або залишене
+  з причиною), кожне Differs, список Defer як наступні кроки й те, що виправлення після цієї перевірки
+  вже не звірялися з планом.
+{%- else -%}
+Scope check ({{ scope_guard }}):
+- Before the first change, note the base with `git status --porcelain=v2 --branch --untracked-files=all`:
+  its `# branch.oid` line is the commit you start from, and the files it lists are already
+  modified — the user's edits.
+- When you delegate a change, tell the subagent making it: change only what the task needs; list
+  other improvements in your report instead of making them.
+- When every change is done (with Agent Teams, every task), call {{ scope_guard }} before any review{% if adversary %} and before {{ adversary }}{% endif %}.
+{% if implementer_isolated -%}
+- {{ implementer }} works in its own git worktree: merge its branch into the working branch before
+  every call to {{ scope_guard }}, or {{ scope_guard }} checks code without the change.
+{% endif -%}
+- Give {{ scope_guard }} the goal and the latest approved plan or brief, verbatim, with its acceptance
+  criteria; the decisions the user confirmed during the work; the base and the already-modified
+  files;{% if formatter %} the formatter that runs after every edit (`{{ formatter }}`);{% endif %} and the findings the team fixed.
+- Cuts (`Verdict: TRIM`, or any Cut list): reverting them is the one edit you make yourself. Do
+  exactly what each cut says and write nothing new: restore the lines to the base, restore a whole
+  file with `git checkout <base> -- <path>`, or delete a new file. Then run the tests; if a revert
+  breaks one, undo that revert and record the cut as kept, with the failure.
+- Gaps (`Verdict: INCOMPLETE`): send {{ implementer if implementer else "the subagent that made the change" }} only the Partial and Missing items,
+  verbatim, with the plan text they come from. Then call {{ scope_guard }} once more on the whole
+  change from the same base, and revert any new cuts it lists. At most {{ rounds }} completion round{% if rounds != 1 %}s{% endif %}:
+  an item still Partial or Missing after that is reported as not done, never as done.
+- Differs: don't rework it; put it in the final report for the user to accept or reject.
+- If the report has no `Verdict:` line, call {{ scope_guard }} once more; if it still has none, report
+  the scope check as not done.
+- Subagents can't call each other: only you pass items between {{ scope_guard }} and
+  {{ implementer if implementer else "the subagent that made the change" }}.
+- In the final report, give the plan coverage, the blast radius, every cut (reverted, or kept with
+  its reason), every Differs, the Defer list as follow-ups, and that fixes made after this check
+  weren't traced against the plan.
+{%- endif %}
