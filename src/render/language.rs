@@ -76,7 +76,7 @@ impl Project {
 }
 
 /// What `agent`'s preset gives it in `lang`.
-fn seed(target: Target, agent: &Agent, lang: &str) -> Result<Agent> {
+pub(super) fn seed(target: Target, agent: &Agent, lang: &str) -> Result<Agent> {
     match target {
         Target::ClaudeCode => Agent::from_archetype_claude(&agent.name, &agent.role, lang),
         Target::OpenCode => Agent::from_archetype(&agent.name, &agent.role, lang, &agent.provider),
@@ -84,6 +84,6 @@ fn seed(target: Target, agent: &Agent, lang: &str) -> Result<Agent> {
 }
 
 /// Whether two agents carry the same language-dependent text.
-fn same_text(a: &Agent, b: &Agent) -> bool {
+pub(super) fn same_text(a: &Agent, b: &Agent) -> bool {
     a.description == b.description && a.body == b.body && a.prompt_body == b.prompt_body
 }

@@ -227,8 +227,8 @@ session runs the scope or adversary loop. In short:
   for rework, and noted once in a final `Insider (out of scope):` section of the report.
 
 The mindset overrides any threat model in a role's own text. A project made before it existed
-gets it with `ocgen doctor`, even though its adversary keeps the outside-attacker text it was
-created with. To change the wording, edit `mindset.md.j2` (see
+gets it with `ocgen doctor`, which also gives its adversary the current preset's text unless you
+edited that agent (see [`doctor`](#other-commands) below). To change the wording, edit `mindset.md.j2` (see
 [Customising the templates](#customising-the-templates)).
 
 ### Other commands
@@ -309,7 +309,17 @@ name to pick one from a list.
 point at an unknown provider or a model their provider doesn't offer, fills empty
 required fields (permissions, temperature, colour, role), fixes the utility
 provider/model, and disables a prompt file that has no body. It reports each change,
-then regenerates everything. Running it on a project made by an **older version of
+then regenerates everything.
+
+**Preset agents nobody edited get the current preset's text.** A project keeps each agent's
+description, instructions and prompt in its state file, so a regeneration alone renders what the
+preset said when the agent was made. ocgen knows every text its presets have shipped with (as
+fingerprints, in `src/render/preset_history.txt`). When all of an agent's text is one its role's
+preset once had, nobody edited it, so `doctor` replaces it with the current preset's, in the
+instruction language, and reports `agent '<name>': text from an older '<role>' preset → the current
+one`. Its other fields (model, tools, turns, effort…) are kept. An agent whose text you changed,
+and a custom role, keep their text: compare with `ocgen show agent
+<name>` and edit it with `ocgen edit agent <name>`. Running it on a project made by an **older version of
 ocgen** also upgrades it — the state file and generated files are rewritten in the
 current format.
 

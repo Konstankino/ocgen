@@ -1,0 +1,48 @@
+# Fingerprints (FNV-1a 64 over LF, as `render::fingerprint`) of every description, body and
+# prompt each preset in templates/archetypes/ has shipped with, one `<role> <fingerprint>` a line.
+# `ocgen doctor` re-seeds a preset agent whose text is all among its role's: nobody edited it.
+# Append only, never remove a line: a test names the lines a changed preset needs.
+adversary 276f94e76adaef35
+adversary 3fef2a930097de94
+adversary 5cdc27ed030059b5
+adversary 8eb3899b71be60a6
+adversary b5a7ea87fa3474af
+adversary cacffb96789a1428
+adversary d6f3dbf1eb125373
+adversary fa8c9420a6b0dc55
+coordinator 584092c492faac79
+coordinator 692be2801fdde514
+coordinator 69a12ed44e35c87d
+coordinator 7679400c3cca410c
+coordinator 9678da77b55d6781
+coordinator a6e5ea06a2869ac4
+coordinator ecbcc7304848dd27
+coordinator eea5d7916c2c6a86
+coordinator f2969524ca8a500c
+coordinator fdb620e0a8abc5fe
+explorer a510f1a37229d58e
+explorer c1885c1d6f4c2a9b
+explorer daa8225b15eae9d9
+explorer df071d636a3d0b93
+implementer b44d2f21294e6605
+implementer bdaf18ae9a1f02fa
+implementer d04adb5ef2679ee7
+implementer f2a033a45af72cdf
+reviewer 39b041cba71c6faf
+reviewer 9b1607d8b6516eb4
+reviewer a21919f45e66dadf
+reviewer ba1d4558b2990960
+reviewer c9442af826a4c493
+reviewer f5cfee9d86d5a0d6
+reviewer f61703e6b7079664
+reviewer f9d2768db42f26d7
+scope-guard 088f11a5edb6f98b
+scope-guard 19ee5da0a3b03481
+scope-guard 8687c2c148da355d
+scope-guard 878453775bc6a0ca
+scope-guard 9dbcb45eef4caa53
+scope-guard f05c907fe8fc8719
+verifier 8fbf19a79bac6044
+verifier 9b32cda37fcf65ec
+verifier ac892542b97330bb
+verifier f680148b8fb8d6f7

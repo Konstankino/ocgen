@@ -3712,10 +3712,12 @@ impl Project {
     /// providers/models, fill empty required fields, and fix the utility target.
     /// Returns a human-readable list of what was changed.
     pub fn doctor(&mut self) -> Vec<String> {
+        // Preset agents nobody edited get their current preset's text.
+        let mut fixes = self.refresh_presets();
         if self.target == Target::ClaudeCode {
-            return self.claude_doctor();
+            fixes.extend(self.claude_doctor());
+            return fixes;
         }
-        let mut fixes = Vec::new();
         let providers = self.providers.clone();
         let keys: Vec<String> = providers.iter().map(|p| p.key.clone()).collect();
         let fallback = if keys.contains(&self.utility_provider) {
@@ -4066,6 +4068,9 @@ pub use codeowners::{check_link as check_codeowners_link, found as found_codeown
 
 mod language;
 pub use language::{match_language, LanguageChange};
+
+mod presets;
+pub use presets::shipped_preset_text;
 
 #[cfg(test)]
 mod write_tests;
