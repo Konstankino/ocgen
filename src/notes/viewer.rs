@@ -167,7 +167,7 @@ pub fn reload(info: &Info, slug: &str, force: bool) -> Option<Action> {
 /// say whether to open one. `force` as for [`reload`].
 pub fn reload_list(info: &Info, selected: Option<&str>, force: bool) -> Option<Action> {
     let select = selected
-        .filter(|s| is_slug(s))
+        .filter(|s| super::draft::is_name(s))
         .map(|s| format!("&select={s}"))
         .unwrap_or_default();
     ask_reload(
@@ -738,11 +738,19 @@ impl Server {
         self.touch();
         let q = query(q);
         let list = self.kind == Kind::Drafts;
+        // A page's name: a ledger's slug, or a draft's (longer) name.
+        let named = |t: &str| {
+            if list {
+                super::draft::is_name(t)
+            } else {
+                is_slug(t)
+            }
+        };
         let topic = q
             .get("topic")
             .copied()
-            .filter(|t| is_slug(t) || (list && *t == super::draft::LIST));
-        let selected = q.get("select").copied().filter(|t| is_slug(t));
+            .filter(|t| named(t) || (list && *t == super::draft::LIST));
+        let selected = q.get("select").copied().filter(|t| named(t));
         match (req.method.as_str(), rest) {
             ("GET", "ping") => json_reply(
                 &mut s,
@@ -769,10 +777,10 @@ impl Server {
                 None => plain(&mut s, 400, "bad topic"),
             },
             ("POST", "render") if list => self.preview(s, &req),
-            // The list: `_drafts`, or `_drafts/<slug>` open on that draft.
+            // The list: `_drafts`, or `_drafts/<name>` open on that draft.
             ("GET", page) if list && page.split('/').next() == Some(super::draft::LIST) => {
-                let selected = page.split_once('/').map(|(_, slug)| slug);
-                if selected.is_some_and(|slug| !is_slug(slug)) {
+                let selected = page.split_once('/').map(|(_, name)| name);
+                if selected.is_some_and(|name| !named(name)) {
                     return plain(&mut s, 404, "not found");
                 }
                 let root = if selected.is_some() { "../" } else { "./" };
@@ -783,13 +791,13 @@ impl Server {
                 plain(&mut s, 405, "method not allowed")
             }
             ("GET", page) if page.ends_with(".html") => {
-                match page.strip_suffix(".html").filter(|p| is_slug(p)) {
+                match page.strip_suffix(".html").filter(|p| named(p)) {
                     Some(slug) => self.page(s, slug),
                     None => plain(&mut s, 404, "not found"),
                 }
             }
             (method, file) if self.kind == Kind::Drafts => {
-                match (method, file.strip_suffix(".md").filter(|p| is_slug(p))) {
+                match (method, file.strip_suffix(".md").filter(|p| named(p))) {
                     ("GET", Some(slug)) => self.load_draft(s, slug),
                     ("POST", Some(slug)) => {
                         self.save_draft(s, slug, &req, q.get("rev").copied().unwrap_or(""))

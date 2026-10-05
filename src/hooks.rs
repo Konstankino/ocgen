@@ -1153,12 +1153,22 @@ impl<'a> Hook<'a> {
     /// Any other prompt passes untouched.
     ///
     /// PostToolUse (Write|Edit|MultiEdit): a write to a draft makes it this
-    /// session's ([`crate::notes::draft::remember`]), silently. Never blocks.
+    /// session's ([`crate::notes::draft::remember`]). PreToolUse and PostToolUse
+    /// (Bash): a draft a command adds or changes does the same
+    /// ([`crate::notes::draft::after_bash`]), whatever the command. All silent.
+    /// Never blocks.
     fn intent_draft(&self) -> Outcome {
         use crate::notes::draft;
-        if self.field("hook_event_name") == "PostToolUse" {
-            self.remember_draft();
-            return Outcome::allow();
+        match self.field("hook_event_name").as_str() {
+            "PreToolUse" => {
+                self.before_bash();
+                return Outcome::allow();
+            }
+            "PostToolUse" => {
+                self.remember_draft();
+                return Outcome::allow();
+            }
+            _ => {}
         }
         if !draft::is_prompt(&self.field("prompt")) {
             return Outcome::allow();
@@ -1175,6 +1185,11 @@ impl<'a> Hook<'a> {
             [md] => self.open_draft(md),
             _ => self.open_draft_list(&dir, all.len()),
         };
+        // A file that can't name a draft is left out of everything: say so.
+        let note = match draft::skipped_note(&dir) {
+            Some(skipped) => format!("{note} Also tell them: {skipped}."),
+            None => note,
+        };
         let out = serde_json::json!({
             "hookSpecificOutput": { "hookEventName": "UserPromptSubmit", "additionalContext": note }
         });
@@ -1185,10 +1200,30 @@ impl<'a> Hook<'a> {
         }
     }
 
-    /// After a write: remember the draft written, if it is one of this project's.
+    /// Before a Bash call: keep the drafts' state, to see what the call changes.
     /// A probe changes nothing.
+    fn before_bash(&self) {
+        use crate::notes::draft;
+        if self.field("tool_name") == "Bash" && !self.probe() {
+            draft::before_bash(&self.project().join(draft::DIR), &self.field("tool_use_id"));
+        }
+    }
+
+    /// After a write: remember the draft written, if it is one of this project's
+    /// — by its path, or after a Bash call by what changed. A probe changes
+    /// nothing.
     fn remember_draft(&self) {
         use crate::notes::draft;
+        if self.field("tool_name") == "Bash" {
+            if !self.probe() {
+                draft::after_bash(
+                    &self.project().join(draft::DIR),
+                    &self.field("tool_use_id"),
+                    &self.field("session_id"),
+                );
+            }
+            return;
+        }
         let path = self
             .json
             .pointer("/tool_input/file_path")

@@ -1022,6 +1022,15 @@ fn intent_draft_parity() {
                 r#"{"hook_event_name":"PostToolUse","session_id":"s-1","tool_name":"Write","tool_input":{"file_path":"{dir}/src/main.rs"}}"#,
                 none,
             ),
+            // Around a Bash call: silent too.
+            step(
+                r#"{"hook_event_name":"PreToolUse","session_id":"s-1","tool_name":"Bash","tool_use_id":"toolu_1","tool_input":{"command":"cp a b"}}"#,
+                write_draft,
+            ),
+            step(
+                r#"{"hook_event_name":"PostToolUse","session_id":"s-1","tool_name":"Bash","tool_use_id":"toolu_1","tool_input":{"command":"cp a b"}}"#,
+                none,
+            ),
         ],
     );
 }
@@ -1237,6 +1246,29 @@ fn intent_draft_remembers_the_draft_a_session_writes_and_names_it() {
     );
     assert_eq!(rec("s-3"), None);
 
+    // A Bash call that writes a draft (`cp`, `mv`, `sed -i`) makes it the session's.
+    let bash = |event: &str, env: &HashMap<String, String>| {
+        let payload = serde_json::json!({
+            "hook_event_name": event, "session_id": "s-4", "tool_name": "Bash",
+            "tool_use_id": "toolu_9", "tool_input": { "command": "cp x y" }
+        });
+        let o = ocgen::hooks::run("intent-draft", &payload.to_string(), env);
+        assert_eq!(
+            (o.code, o.stdout.as_str(), o.stderr.as_str()),
+            (0, "", ""),
+            "{o:?}"
+        );
+    };
+    bash("PreToolUse", &probe);
+    fs::write(drafts.join("issue-from-bash.md"), ISSUE_DRAFT).unwrap();
+    bash("PostToolUse", &probe);
+    assert_eq!(rec("s-4"), None, "a probe writes nothing");
+    bash("PreToolUse", &env);
+    fs::write(drafts.join("issue-from-bash.md"), "## Intent\nRewritten.\n").unwrap();
+    bash("PostToolUse", &env);
+    assert_eq!(rec("s-4").as_deref(), Some("issue-from-bash"));
+    fs::remove_file(drafts.join("issue-from-bash.md")).unwrap();
+
     // `draft` names the session's own draft, whichever is newest.
     let ctx = said("s-1");
     assert!(
@@ -1249,6 +1281,37 @@ fn intent_draft_remembers_the_draft_a_session_writes_and_names_it() {
     let ctx = said("s-9");
     assert!(
         ctx.contains("2 issue drafts") && !ctx.contains(".md"),
+        "{ctx}"
+    );
+}
+
+#[test]
+fn intent_draft_names_the_files_it_cannot_open() {
+    let dir = project();
+    let d = ocgen::paths::for_shell(dir.path());
+    let mut env: HashMap<String, String> = NO_BROWSER
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+    env.insert("CLAUDE_PROJECT_DIR".into(), d);
+    let drafts = dir.path().join(".claude/intent/drafts");
+    fs::create_dir_all(&drafts).unwrap();
+    fs::write(drafts.join("My Draft.md"), ISSUE_DRAFT).unwrap();
+    let said = || {
+        let payload = r#"{"hook_event_name":"UserPromptSubmit","session_id":"s","prompt":"draft"}"#;
+        draft_context(&ocgen::hooks::run("intent-draft", payload, &env))
+    };
+    // Nothing it can open, but the file is named, with the way out.
+    let ctx = said();
+    assert!(
+        ctx.contains("no issue draft") && ctx.contains("My Draft.md") && ctx.contains("rename"),
+        "{ctx}"
+    );
+    // Beside a draft it opens, too.
+    write_draft(dir.path());
+    let ctx = said();
+    assert!(
+        ctx.contains("adr-0001-cache.md") && ctx.contains("My Draft.md"),
         "{ctx}"
     );
 }

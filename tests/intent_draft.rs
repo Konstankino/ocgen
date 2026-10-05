@@ -467,6 +467,122 @@ fn a_draft_is_summed_up_by_its_first_line_of_text() {
     assert!(s.chars().count() <= 121 && s.ends_with('…'), "{s}");
 }
 
+/// Names a Windows session really wrote: 66, 89 and 102 characters. ocgen
+/// once dropped the two over 80 without a word, and kept opening the third.
+const SHORT: &str = "082-a-flow-subject-id-is-checked-for-shape-and-against-dim-subject";
+const LONG: &str =
+    "084-the-ci-runner-lives-in-its-own-non-routable-subnets-and-holds-no-standing-data-access";
+const LONGER: &str = "084-the-ci-runner-lives-in-its-own-non-routable-subnets-and-holds-no-standing-data-access-comment-1031";
+
+#[test]
+fn long_names_are_drafts_and_the_rest_are_named_not_dropped() {
+    let dir = tempfile::tempdir().unwrap();
+    let drafts = dir.path().join(".claude/intent/drafts");
+    fs::create_dir_all(&drafts).unwrap();
+    let base = SystemTime::now() - Duration::from_secs(3600);
+    for (i, name) in [LONG, LONGER, "ADR_0090-Mixed", SHORT].iter().enumerate() {
+        let p = drafts.join(format!("{name}.md"));
+        fs::write(&p, DRAFT).unwrap();
+        touch(&p, base + Duration::from_secs(60 * i as u64));
+    }
+    let too_long = "a".repeat(201);
+    for odd in ["has space", "dots.in.name", "Ünicode", too_long.as_str()] {
+        fs::write(drafts.join(format!("{odd}.md")), DRAFT).unwrap();
+    }
+    fs::write(drafts.join("notes.txt"), "not Markdown").unwrap();
+    fs::write(drafts.join(".gitignore"), "*\n").unwrap();
+
+    // Every draft, newest first, whatever its length or case.
+    let stems: Vec<String> = draft::drafts(&drafts)
+        .iter()
+        .map(|p| p.file_stem().unwrap().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(stems, [SHORT, "ADR_0090-Mixed", LONGER, LONG]);
+    for (name, ok) in [
+        (LONG, true),
+        (LONGER, true),
+        ("ADR_0090-Mixed", true),
+        (&"a".repeat(200)[..], true),
+        (&too_long[..], false),
+        ("_x", false),
+        ("-x", false),
+        ("x y", false),
+        ("a.b", false),
+        ("", false),
+    ] {
+        assert_eq!(draft::is_name(name), ok, "{name:?}");
+    }
+
+    // By name: exact first (LONGER starts with LONG), then by its start, any case.
+    assert!(draft::find(&drafts, Some(LONG))
+        .unwrap()
+        .ends_with(format!("{LONG}.md")));
+    assert!(
+        draft::find(&drafts, Some("084"))
+            .unwrap()
+            .ends_with(format!("{LONGER}.md")),
+        "the newer of the two"
+    );
+    assert!(draft::find(&drafts, Some("adr_0090"))
+        .unwrap()
+        .ends_with("ADR_0090-Mixed.md"));
+
+    // What isn't a draft is named, with why — never dropped without a word.
+    let skipped = draft::skipped(&drafts);
+    let names: Vec<&str> = skipped.iter().map(|s| s.as_str()).collect();
+    assert_eq!(
+        names,
+        [
+            format!("{too_long}.md").as_str(),
+            "dots.in.name.md",
+            "has space.md",
+            "Ünicode.md"
+        ]
+    );
+    let err = draft::find(&drafts, Some("nope")).unwrap_err().to_string();
+    assert!(
+        err.contains(LONG) && err.contains("has space.md") && err.contains("rename"),
+        "{err}"
+    );
+
+    // A session's record and the list take them like any draft.
+    assert!(draft::remember(&drafts, "s-1", LONG));
+    assert_eq!(draft::session_draft(&drafts, "s-1").as_deref(), Some(LONG));
+    let page = draft::list_page(&drafts, None, Some(LONG), "../", "n").unwrap();
+    assert!(
+        page.contains(&format!(r#"href="../{LONG}.html""#)),
+        "{page}"
+    );
+    assert!(
+        regex::Regex::new(&format!(r#"data-slug="{LONG}"[^>]*aria-current="true""#))
+            .unwrap()
+            .is_match(&page),
+        "{page}"
+    );
+    assert!(
+        page.contains("has space.md") && page.contains("dots.in.name.md"),
+        "{page}"
+    );
+
+    // The browser opener takes their URLs (`cmd /C start` sees nothing special).
+    let url = |path: &str| format!("http://127.0.0.1:4000/0123abcd/{path}");
+    for path in [
+        format!("{LONG}.html"),
+        format!("{}/{LONG}", draft::LIST),
+        "ADR_0090-Mixed.html".to_string(),
+        format!("{}/ADR_0090-Mixed", draft::LIST),
+    ] {
+        assert!(ocgen::notes::browser::is_viewer_url(&url(&path)), "{path}");
+    }
+    for path in [
+        format!("{too_long}.html"),
+        "a&b.html".to_string(),
+        "_x.html".to_string(),
+    ] {
+        assert!(!ocgen::notes::browser::is_viewer_url(&url(&path)), "{path}");
+    }
+}
+
 #[test]
 fn the_list_shows_ten_drafts_a_page_with_the_selected_one_marked() {
     let dir = tempfile::tempdir().unwrap();
@@ -910,6 +1026,157 @@ fn draft_lists_the_drafts_with_the_one_this_session_wrote_selected() {
     // A draft changes on disk: the open list reloads.
     fs::write(drafts.join("adr-0001-cache.md"), "## Changed\n").unwrap();
     assert!(tab.wait_for("event: reload"), "the list hears of it");
+}
+
+#[test]
+fn a_draft_bash_writes_is_the_sessions_too() {
+    let dir = tempfile::tempdir().unwrap();
+    let drafts = dir.path().join(".claude/intent/drafts");
+    fs::create_dir_all(&drafts).unwrap();
+    let short = drafts.join(format!("{SHORT}.md"));
+    let long = drafts.join(format!("{LONG}.md"));
+    fs::write(&short, DRAFT).unwrap();
+    let base = SystemTime::now() - Duration::from_secs(3600);
+    touch(&short, base);
+
+    // The reported case: `cp 082 084` in a Bash call makes 084 the session's.
+    assert!(draft::before_bash(&drafts, "toolu_1"));
+    fs::copy(&short, &long).unwrap();
+    assert_eq!(
+        draft::after_bash(&drafts, "toolu_1", "s-1").as_deref(),
+        Some(LONG)
+    );
+    assert_eq!(draft::session_draft(&drafts, "s-1").as_deref(), Some(LONG));
+    // The listing taken before the call is gone once it's used.
+    assert!(
+        fs::read_dir(drafts.join(draft::SESSIONS).join(draft::BEFORE))
+            .unwrap()
+            .next()
+            .is_none()
+    );
+
+    // A call that changes no draft changes nothing; nor does one never seen before.
+    assert!(draft::before_bash(&drafts, "toolu_2"));
+    assert_eq!(draft::after_bash(&drafts, "toolu_2", "s-1"), None);
+    assert_eq!(draft::after_bash(&drafts, "toolu_unseen", "s-1"), None);
+    assert_eq!(draft::session_draft(&drafts, "s-1").as_deref(), Some(LONG));
+
+    // Changed in place with its time and size kept (`cp -p`, a restore): seen by its text.
+    assert!(draft::before_bash(&drafts, "toolu_3"));
+    let same_size = DRAFT.replace("Deploys keep", "Deploys kept");
+    assert_eq!(same_size.len(), DRAFT.len());
+    fs::write(&short, &same_size).unwrap();
+    touch(&short, base);
+    assert_eq!(
+        draft::after_bash(&drafts, "toolu_3", "s-2").as_deref(),
+        Some(SHORT)
+    );
+
+    // Renamed (`mv`): the new name.
+    assert!(draft::before_bash(&drafts, "toolu_4"));
+    fs::rename(&short, drafts.join("adr-0082-renamed.md")).unwrap();
+    assert_eq!(
+        draft::after_bash(&drafts, "toolu_4", "s-2").as_deref(),
+        Some("adr-0082-renamed")
+    );
+
+    // Several at once: the newest, then by name — the same answer every time.
+    assert!(draft::before_bash(&drafts, "toolu_5"));
+    let t = SystemTime::now();
+    for name in ["b-two", "a-one", "c-old"] {
+        let p = drafts.join(format!("{name}.md"));
+        fs::write(&p, DRAFT).unwrap();
+        touch(&p, if name == "c-old" { base } else { t });
+    }
+    assert_eq!(
+        draft::after_bash(&drafts, "toolu_5", "s-3").as_deref(),
+        Some("a-one")
+    );
+
+    // Bad call ids make no listing; a listing left by a call that never
+    // finished (a refused command) is dropped after a day.
+    for bad in ["", "../x", "a b"] {
+        assert!(!draft::before_bash(&drafts, bad), "{bad:?}");
+    }
+    let before = drafts.join(draft::SESSIONS).join(draft::BEFORE);
+    fs::write(before.join("toolu_orphan"), "").unwrap();
+    touch(
+        &before.join("toolu_orphan"),
+        SystemTime::now() - Duration::from_secs(2 * 24 * 3600),
+    );
+    assert!(draft::before_bash(&drafts, "toolu_6"));
+    assert!(!before.join("toolu_orphan").exists());
+    // Nor are listings drafts.
+    assert!(draft::drafts(&drafts)
+        .iter()
+        .all(|p| p.parent() == Some(drafts.as_path())));
+}
+
+#[test]
+fn a_long_named_draft_made_by_bash_is_remembered_listed_opened_and_saved() {
+    let p = Project::new();
+    let md = p.drafts().join(format!("{LONG}.md"));
+    // Made by `cp` in a Bash call, as the reported session did.
+    let bash = |event: &str| {
+        p.hook(serde_json::json!({
+            "hook_event_name": event, "session_id": "s-1", "tool_name": "Bash",
+            "tool_use_id": "toolu_cp", "tool_input": { "command": "cp a b" }
+        }))
+    };
+    assert_eq!(bash("PreToolUse"), "", "silent before");
+    fs::copy(p.md(), &md).unwrap();
+    assert_eq!(bash("PostToolUse"), "", "silent after");
+    assert_eq!(
+        draft::session_draft(&p.drafts(), "s-1").as_deref(),
+        Some(LONG)
+    );
+    // Another draft changes after it: the session's own is still the one.
+    fs::write(p.drafts().join("adr-0001-cache.md"), "## Later\n").unwrap();
+    touch(
+        &p.drafts().join("adr-0001-cache.md"),
+        SystemTime::now() + Duration::from_secs(60),
+    );
+
+    let said = p.word("s-1");
+    let info = p.info();
+    assert_eq!(p.opened(), [info.list_url(Some(LONG))]);
+    assert!(ocgen::notes::browser::is_viewer_url(&p.opened()[0]));
+    assert!(said.contains(&format!("{LONG}.md")), "{said}");
+
+    let t = &info.token;
+    let (code, _, page) = http(
+        &info,
+        "GET",
+        &format!("/{t}/{}/{LONG}", draft::LIST),
+        &[],
+        "",
+    );
+    assert_eq!(code, 200, "{page}");
+    assert!(page.contains(&format!(r#"data-slug="{LONG}""#)), "{page}");
+    let (code, _, page) = http(&info, "GET", &format!("/{t}/{LONG}.html"), &[], "");
+    assert_eq!(code, 200, "{page}");
+    assert!(page.contains("Deploys keep the cache warm."));
+
+    // Saved from the editor like any draft.
+    let (code, _, body) = http(&info, "GET", &format!("/{t}/{LONG}.md"), &[], "");
+    assert_eq!(code, 200, "{body}");
+    let rev = serde_json::from_str::<serde_json::Value>(&body).unwrap()["rev"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let (code, _, body) = http(
+        &info,
+        "POST",
+        &format!("/{t}/{LONG}.md?rev={rev}"),
+        &[("Origin", &origin(&info))],
+        "## Edited\n",
+    );
+    assert_eq!(code, 200, "{body}");
+    assert_eq!(fs::read_to_string(&md).unwrap(), "## Edited\n");
+
+    // And by the start of its name, from a terminal.
+    p.draft(&["084-the-ci-runner-lives"]);
+    assert_eq!(p.opened().last().unwrap(), &info.url(LONG));
 }
 
 #[test]

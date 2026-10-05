@@ -177,6 +177,12 @@ fn run_draft(name: Option<&str>, path: &str) -> Result<()> {
             draft::DIR
         )
     })?;
+    // Files that can't name a draft: an error names them itself ([`draft::find`]).
+    let skipped = || {
+        if let Some(note) = draft::skipped_note(&dir) {
+            println!("warning: {note}");
+        }
+    };
     let all = draft::drafts(&dir);
     if name.is_none() && all.len() > 1 {
         let env: std::collections::HashMap<String, String> = std::env::vars().collect();
@@ -194,9 +200,11 @@ fn run_draft(name: Option<&str>, path: &str) -> Result<()> {
                 println!("Opened {}", p.display())
             }
         }
+        skipped();
         return Ok(());
     }
     let md = draft::find(&dir, name)?;
+    skipped();
     let rel = format!(
         "{}/{}",
         draft::DIR,

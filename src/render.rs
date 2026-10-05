@@ -2347,10 +2347,16 @@ impl Project {
                 json!({ "hooks": [ command_hook(hook_cmd(prefix, dir, "intent-draft.sh")) ] }),
             );
             // With several drafts it opens their list, with the one this session
-            // wrote last selected: each write to a draft is remembered.
+            // wrote last selected: each write to a draft is remembered, and so is
+            // a draft a Bash command adds or changes (seen against its state
+            // just before the call).
+            push(
+                "PreToolUse",
+                json!({ "matcher": "Bash", "hooks": [ command_hook(hook_cmd(prefix, dir, "intent-draft.sh")) ] }),
+            );
             push(
                 "PostToolUse",
-                json!({ "matcher": "Write|Edit|MultiEdit", "hooks": [ command_hook(hook_cmd(prefix, dir, "intent-draft.sh")) ] }),
+                json!({ "matcher": "Write|Edit|MultiEdit|Bash", "hooks": [ command_hook(hook_cmd(prefix, dir, "intent-draft.sh")) ] }),
             );
             // The approvers are baked into the /intent skill, so a session started
             // before they changed drafts with the old list: check each write

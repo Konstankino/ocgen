@@ -122,6 +122,8 @@ pub struct DraftWords {
     pub list_footer: &'static str,
     pub list_offline: &'static str,
     pub none_yet: &'static str,
+    /// Before the `.md` files in the folder whose names can't name a draft.
+    pub skipped: &'static str,
 }
 
 pub static ENGLISH: Words = Words {
@@ -200,6 +202,7 @@ pub static ENGLISH: Words = Words {
         list_footer: "Open a draft to edit it. The list follows the folder: it refreshes when a draft changes.",
         list_offline: "Editor disconnected — this list won’t refresh. Run <code>ocgen draft</code> to reconnect.",
         none_yet: "No issue drafts yet.",
+        skipped: "Not listed, because ocgen can’t open these names — rename them to letters, digits, - and _ (at most 200 characters):",
     },
     lenses: [
         ("Structure", "Structure"),
@@ -301,6 +304,7 @@ pub static UKRAINIAN: Words = Words {
         list_footer: "Відкрийте чернетку, щоб редагувати її. Список стежить за текою й оновлюється, коли чернетка змінюється.",
         list_offline: "Редактор від’єднано — список не оновлюватиметься. Щоб під’єднатися знову, виконайте <code>ocgen draft</code>.",
         none_yet: "Чернеток ще немає.",
+        skipped: "Не в списку, бо ocgen не може відкрити файли з такими назвами — перейменуйте їх: лише букви, цифри, - і _ (до 200 символів):",
     },
     lenses: [
         ("Structure", "Структура"),

@@ -5195,12 +5195,21 @@ fn verify_reports_the_draft_review() {
     // The hook is there twice: on the word, and after each write (to remember
     // the draft this session works on).
     let s = settings_of(dir.path());
-    for event in ["UserPromptSubmit", "PostToolUse"] {
-        assert!(
-            s["hooks"][event].to_string().contains("intent-draft.sh"),
-            "{event}: {s:#}"
-        );
-    }
+    let matcher = |event: &str| {
+        s["hooks"][event]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|g| g.to_string().contains("intent-draft.sh"))
+            .map(|g| g["matcher"].as_str().unwrap_or("").to_string())
+    };
+    assert_eq!(matcher("UserPromptSubmit").as_deref(), Some(""));
+    // After a write, and around each Bash call (a draft made by `cp`, `mv`…).
+    assert_eq!(
+        matcher("PostToolUse").as_deref(),
+        Some("Write|Edit|MultiEdit|Bash")
+    );
+    assert_eq!(matcher("PreToolUse").as_deref(), Some("Bash"));
     // Whatever ocgen is on PATH, a working project never fails this check.
     let checks = verify_no_claude(dir.path());
     let status = status_of(&checks, "draft review");
@@ -5218,6 +5227,21 @@ fn verify_reports_the_draft_review() {
         .retain(|g| !g.to_string().contains("intent-draft"));
     let path = dir.path().join(".claude/settings.json");
     let kept = fs::read_to_string(&path).unwrap();
+    fs::write(&path, serde_json::to_string_pretty(&s).unwrap()).unwrap();
+    let checks = verify_no_claude(dir.path());
+    assert_eq!(
+        status_of(&checks, "draft review"),
+        Status::Warn,
+        "{checks:#?}"
+    );
+    fs::write(&path, kept.clone()).unwrap();
+
+    // Nor without the one before Bash calls.
+    let mut s = settings_of(dir.path());
+    s["hooks"]["PreToolUse"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|g| !g.to_string().contains("intent-draft"));
     fs::write(&path, serde_json::to_string_pretty(&s).unwrap()).unwrap();
     let checks = verify_no_claude(dir.path());
     assert_eq!(

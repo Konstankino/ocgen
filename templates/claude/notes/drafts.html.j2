@@ -35,6 +35,9 @@ body.drafts { background: var(--bg); color: var(--z-text);
 .drafts .tag { color: var(--muted); border: 1px solid var(--border); border-radius: 999px; padding: 0 8px; }
 .drafts .tag.warn { color: var(--c-orange); border-color: color-mix(in oklab, var(--c-orange) 45%, var(--border)); }
 .drafts .none { color: var(--muted); }
+.drafts .skipped { margin: 0 0 16px; padding: 8px 12px; border-left: 2px solid var(--c-orange); border-radius: 0 6px 6px 0;
+  background: color-mix(in oklab, var(--bg) 90%, var(--c-orange)); color: var(--text); font-size: 13.5px; }
+.drafts .skipped code { overflow-wrap: anywhere; }
 .drafts nav.pager { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 18px; font-size: 14px; }
 .drafts nav.pager a { color: var(--accent); text-decoration: none; padding: 4px 8px; border-radius: 6px; }
 .drafts nav.pager a:hover { background: var(--surface-2); }
@@ -61,6 +64,9 @@ body.drafts { background: var(--bg); color: var(--z-text);
       </span>
     </span>
   </header>
+{%- if skipped %}
+  <p class="skipped" role="note">{{ w.skipped }} <code>{{ skipped }}</code></p>
+{%- endif %}
 {%- if rows %}
   <ol id="rows">
 {%- for r in rows %}

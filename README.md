@@ -1008,9 +1008,19 @@ whether to load the file or keep yours. Saving never silently replaces a newer f
 terminal, `ocgen draft [name]` does the same: with several drafts and no name it opens the list with
 nothing selected, and `ocgen draft ADR-0007` opens a draft by its intent.
 
-A `UserPromptSubmit` hook (`intent-draft`) catches the word and starts the editor. The same hook runs
-after each write (`PostToolUse`) and remembers the draft the session wrote last, one small file per
-session in `.claude/intent/drafts/.sessions/` (git-ignored like the drafts, kept a month). Hooks run outside
+**What counts as a draft:** any `.md` file in `.claude/intent/drafts/` whose name (without `.md`) is
+letters, digits, `-` and `_`, starting with a letter or digit, up to 200 characters — /intent names a
+draft after its intent, title and all. ocgen can't open any other `.md` file there, so it names it
+instead of skipping it: in the `draft` note, in the list, and in `ocgen draft`'s output, with the
+rule to rename it by.
+
+A `UserPromptSubmit` hook (`intent-draft`) catches the word and starts the editor. The same hook
+remembers the draft the session wrote last, the same way whatever tool wrote it: after a Write, Edit
+or MultiEdit by its path, and around each Bash call by what changed. It keeps the drafts' state just
+before the call (size, time and text) and compares it afterwards, so a draft made by `cp`, `mv`,
+`sed -i` or a redirect counts, and when a call changes several, the newest (then the first by name)
+wins. One small file per session in `.claude/intent/drafts/.sessions/` (git-ignored like the drafts,
+kept a month). Hooks run outside
 Claude Code's Bash sandbox, where a local server can start; inside the sandbox it can't. Any other
 prompt passes through untouched. The editor is the same loopback viewer as `/inquire`'s pages,
 behind a random token and same-origin checks for saving. The draft's text can't run scripts or load

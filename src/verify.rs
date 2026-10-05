@@ -1817,17 +1817,23 @@ fn draft_review(p: &Probe) -> Check {
     if let Some(what) = p.hand_edited(&event, &group, &cmd) {
         return check(name, Status::Warn, not_run(&what));
     }
-    // Without the write hook, `draft` can't select the session's draft.
-    let Some((w_event, w_group, w_cmd)) = p.find("PostToolUse", "intent-draft") else {
-        return check(
-            name,
-            Status::Fail,
-            "no write hook to remember the session's draft — run `ocgen doctor`",
-        );
-    };
-    if let Some(what) = p.hand_edited(&w_event, &w_group, &w_cmd) {
-        return check(name, Status::Warn, not_run(&what));
+    // Without the write hooks (after a write, around a Bash call), `draft`
+    // can't select the session's draft.
+    let mut hooks = Vec::new();
+    for event in ["PreToolUse", "PostToolUse"] {
+        let Some((event, group, cmd)) = p.find(event, "intent-draft") else {
+            return check(
+                name,
+                Status::Fail,
+                format!("no {event} hook to remember the session's draft — run `ocgen doctor`"),
+            );
+        };
+        if let Some(what) = p.hand_edited(&event, &group, &cmd) {
+            return check(name, Status::Warn, not_run(&what));
+        }
+        hooks.push(cmd);
     }
+    let (before_cmd, w_cmd) = (hooks.remove(0), hooks.remove(0));
     let mut env = p.env.clone();
     env.insert("OCGEN_NOTES_OPEN".into(), "0".into());
     let run = |cmd: &str, ev: serde_json::Value| {
@@ -1855,14 +1861,28 @@ fn draft_review(p: &Probe) -> Check {
             "tool_input": { "file_path": format!("{}/ocgen-verify.md", crate::notes::draft::DIR) }
         }),
     );
-    let (Some(other), Some(word), Some(wrote)) = (
+    let bash = |cmd: &str, event: &str| {
+        run(
+            cmd,
+            serde_json::json!({
+                "session_id": "ocgen-verify", "hook_event_name": event, "tool_name": "Bash",
+                "tool_use_id": "ocgen-verify", "tool_input": { "command": "true" }
+            }),
+        )
+    };
+    let (Some(other), Some(word), Some(wrote), Some(before), Some(after)) = (
         prompt("ocgen verify"),
         prompt(crate::notes::draft::WORD),
         wrote,
+        bash(&before_cmd, "PreToolUse"),
+        bash(&w_cmd, "PostToolUse"),
     ) else {
         return check(name, Status::Fail, "the hook did not finish");
     };
-    if let Some((code, _, err)) = [&other, &word, &wrote].into_iter().find(|o| o.0 != 0) {
+    if let Some((code, _, err)) = [&other, &word, &wrote, &before, &after]
+        .into_iter()
+        .find(|o| o.0 != 0)
+    {
         return check(
             name,
             Status::Fail,
@@ -1879,11 +1899,14 @@ fn draft_review(p: &Probe) -> Check {
             "the hook answered a prompt other than `draft` — run `ocgen doctor`",
         );
     }
-    if !wrote.1.trim().is_empty() {
+    if [&wrote, &before, &after]
+        .iter()
+        .any(|o| !o.1.trim().is_empty())
+    {
         return check(
             name,
             Status::Fail,
-            "the hook answered a write to a draft — run `ocgen doctor`",
+            "the hook answered a write or a Bash call — run `ocgen doctor`",
         );
     }
     if word.1.contains("additionalContext") {

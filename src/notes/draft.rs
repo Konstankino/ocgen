@@ -9,9 +9,9 @@
 //!
 //! With several drafts, the same editor serves their list ([`LIST`]) to pick
 //! from, [`PER_PAGE`] a page, newest first. The hook also runs after each write
-//! and remembers, per session, the draft that session wrote last
-//! ([`remember`]): the word opens the list with that draft selected, whichever
-//! draft changed last.
+//! and around each Bash call, and remembers, per session, the draft that session
+//! wrote last ([`remember`], [`after_bash`]): the word opens the list with that
+//! draft selected, whichever draft changed last.
 //!
 //! The editor is a prebuilt bundle (built by `tools/milkdown`, never by Cargo)
 //! inlined into the page's one nonce-tagged script, so the page's policy still
@@ -59,6 +59,17 @@ pub const PER_PAGE: usize = 10;
 pub const SESSIONS: &str = ".sessions";
 /// How long a session's record is kept after its last write.
 const SESSION_TTL: Duration = Duration::from_secs(30 * 24 * 3600);
+/// Where, in [`SESSIONS`], the drafts' state is kept from just before a Bash
+/// call to just after it: one file per tool call.
+pub const BEFORE: &str = ".before";
+/// How long the state kept for a call that never finished is kept.
+const BEFORE_TTL: Duration = Duration::from_secs(24 * 3600);
+/// The longest draft name (without `.md`): it leaves room for the editor's
+/// temporary file beside it within the 255 bytes a file name may have.
+pub const MAX_NAME: usize = 200;
+/// What a draft's name may hold, for messages.
+const NAME_RULE: &str =
+    "letters, digits, `-` and `_`, starting with a letter or digit, at most 200 characters";
 /// The Milkdown release the editor bundle is built from (pinned in
 /// `tools/milkdown/package.json`).
 pub const MILKDOWN_VERSION: &str = "7.22.2";
@@ -66,6 +77,49 @@ pub const MILKDOWN_VERSION: &str = "7.22.2";
 /// `cd tools/milkdown && npm ci && npm run build` (licenses: `milkdown/LICENSES.txt`).
 /// It defines `window.OcgenDraft`.
 pub const EDITOR_JS: &str = include_str!("milkdown/editor.min.js");
+
+/// Whether `s` can name a draft (`<s>.md`): ASCII letters, digits, `-` and `_`,
+/// starting with a letter or digit, at most [`MAX_NAME`] characters. Wider than
+/// a ledger's slug: /intent names a draft after its intent, title and all, and
+/// one that doesn't fit would be left out of everything.
+pub fn is_name(s: &str) -> bool {
+    let mut b = s.bytes();
+    b.next().is_some_and(|c| c.is_ascii_alphanumeric())
+        && s.len() <= MAX_NAME
+        && b.all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_')
+}
+
+/// The `.md` files in `dir` whose names can't name a draft ([`is_name`]),
+/// sorted. ocgen can't serve them, so it names them instead of dropping them.
+pub fn skipped(dir: &Path) -> Vec<String> {
+    let mut names: Vec<String> = fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.strip_suffix(".md").is_some_and(|s| !is_name(s)))
+        .collect();
+    names.sort();
+    names
+}
+
+/// One sentence on the files in `dir` ocgen can't open as drafts, if any.
+pub fn skipped_note(dir: &Path) -> Option<String> {
+    let names = skipped(dir);
+    (!names.is_empty()).then(|| {
+        format!(
+            "ocgen can't open {} as {} — rename {} to {NAME_RULE}",
+            names.join(", "),
+            if names.len() == 1 {
+                "a draft"
+            } else {
+                "drafts"
+            },
+            if names.len() == 1 { "it" } else { "them" },
+        )
+    })
+}
 
 /// Whether a prompt is the one word that opens the draft (any case, nothing else).
 pub fn is_prompt(prompt: &str) -> bool {
@@ -83,7 +137,7 @@ pub fn draft_target(path: &str) -> Option<String> {
         return None;
     }
     let stem = file.strip_suffix(".md")?;
-    super::is_slug(stem).then(|| stem.to_string())
+    is_name(stem).then(|| stem.to_string())
 }
 
 /// Whether `dir` is a project's `.claude/intent/drafts` directory, by its
@@ -122,7 +176,7 @@ pub fn drafts(dir: &Path) -> Vec<PathBuf> {
             p.file_name()
                 .and_then(|n| n.to_str())
                 .and_then(|n| n.strip_suffix(".md"))
-                .is_some_and(super::is_slug)
+                .is_some_and(is_name)
         })
         .map(|p| {
             let t = fs::metadata(&p)
@@ -135,27 +189,31 @@ pub fn drafts(dir: &Path) -> Vec<PathBuf> {
     found.into_iter().map(|(_, p)| p).collect()
 }
 
-/// A draft by name — its file name, its stem, or the start of it in any case
+/// A draft by name — its file name, its stem, or the start of it, in any case
 /// (`ADR-0007`) — or, with no name, the most recently changed one.
 pub fn find(dir: &Path, name: Option<&str>) -> Result<PathBuf> {
     let all = drafts(dir);
+    let skipped = skipped_note(dir)
+        .map(|n| format!(". Also: {n}"))
+        .unwrap_or_default();
     let Some(name) = name.map(str::trim).filter(|n| !n.is_empty()) else {
         return all.into_iter().next().with_context(|| {
             format!(
-                "no issue drafts in {} yet — /intent and /review-intent write one when they draft a GitHub issue",
+                "no issue drafts in {} yet — /intent and /review-intent write one when they draft a GitHub issue{skipped}",
                 dir.display()
             )
         });
     };
     let want = name.trim_end_matches(".md").to_ascii_lowercase();
-    if let Some(p) = all.iter().find(|p| stem(p) == want) {
+    let lower = |p: &PathBuf| stem(p).to_ascii_lowercase();
+    if let Some(p) = all.iter().find(|p| lower(p) == want) {
         return Ok(p.clone());
     }
-    if let Some(p) = all.iter().find(|p| stem(p).starts_with(&want)) {
+    if let Some(p) = all.iter().find(|p| lower(p).starts_with(&want)) {
         return Ok(p.clone());
     }
     bail!(
-        "no issue draft matches '{name}' in {} (drafts: {})",
+        "no issue draft matches '{name}' in {} (drafts: {}){skipped}",
         dir.display(),
         all.iter().map(|p| stem(p)).collect::<Vec<_>>().join(", ")
     )
@@ -182,7 +240,7 @@ fn plain_id(s: &str) -> bool {
 /// records older than a month. False when nothing was recorded: an id or slug
 /// that can't name a file, or a write that failed.
 pub fn remember(dir: &Path, session: &str, slug: &str) -> bool {
-    if !plain_id(session) || !super::is_slug(slug) {
+    if !plain_id(session) || !is_name(slug) {
         return false;
     }
     let at = dir.join(SESSIONS);
@@ -190,18 +248,8 @@ pub fn remember(dir: &Path, session: &str, slug: &str) -> bool {
         return false;
     }
     ignore_self(dir);
+    prune(&at, SESSION_TTL);
     let now = SystemTime::now();
-    for e in fs::read_dir(&at).into_iter().flatten().flatten() {
-        let stale = e
-            .metadata()
-            .and_then(|m| m.modified())
-            .ok()
-            .and_then(|t| now.duration_since(t).ok())
-            .is_some_and(|age| age > SESSION_TTL);
-        if stale {
-            let _ = fs::remove_file(e.path());
-        }
-    }
     let file = at.join(session);
     if super::write_if_changed(&file, slug.as_bytes()).is_err() {
         return false;
@@ -214,6 +262,83 @@ pub fn remember(dir: &Path, session: &str, slug: &str) -> bool {
     true
 }
 
+/// Remove the files in `at` last changed longer than `ttl` ago.
+fn prune(at: &Path, ttl: Duration) {
+    let now = SystemTime::now();
+    for e in fs::read_dir(at).into_iter().flatten().flatten() {
+        let stale = e
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| now.duration_since(t).ok())
+            .is_some_and(|age| age > ttl);
+        if stale {
+            let _ = fs::remove_file(e.path());
+        }
+    }
+}
+
+/// Each of `drafts`' state — size, time and text — by name.
+fn states(drafts: &[PathBuf]) -> BTreeMap<String, String> {
+    drafts
+        .iter()
+        .map(|p| {
+            let m = fs::metadata(p).ok();
+            let len = m.as_ref().map_or(0, |m| m.len());
+            let t = m
+                .and_then(|m| m.modified().ok())
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map_or(0, |d| d.as_nanos());
+            let rev = fs::read(p).map(|b| super::rev(&b)).unwrap_or_default();
+            (stem(p), format!("{len}:{t}:{rev}"))
+        })
+        .collect()
+}
+
+/// Before Bash call `call` (its tool-use id): keep the drafts' state until
+/// [`after_bash`], and drop states kept for calls that never finished (a refused
+/// command) a day ago. False when nothing was kept: no drafts directory yet, a
+/// call id that can't name a file, or a write that failed.
+pub fn before_bash(dir: &Path, call: &str) -> bool {
+    if !plain_id(call) || !dir.is_dir() {
+        return false;
+    }
+    let at = dir.join(SESSIONS).join(BEFORE);
+    if fs::create_dir_all(&at).is_err() {
+        return false;
+    }
+    ignore_self(dir);
+    prune(&at, BEFORE_TTL);
+    let body: String = states(&drafts(dir))
+        .iter()
+        .map(|(name, state)| format!("{name}\t{state}\n"))
+        .collect();
+    super::write_if_changed(&at.join(call), body.as_bytes()).is_ok()
+}
+
+/// After Bash call `call`: the drafts it added or changed — by size, time or
+/// text, against the state [`before_bash`] kept — and of those the newest, then
+/// the first by name, becomes `session`'s ([`remember`]). Returns that draft.
+/// Whatever command made the change (`cp`, `mv`, `sed -i`, a redirect), the
+/// answer depends only on the files.
+pub fn after_bash(dir: &Path, call: &str, session: &str) -> Option<String> {
+    if !plain_id(call) {
+        return None;
+    }
+    let kept = dir.join(SESSIONS).join(BEFORE).join(call);
+    let before = fs::read_to_string(&kept).ok()?;
+    let _ = fs::remove_file(&kept);
+    let before: BTreeMap<&str, &str> = before.lines().filter_map(|l| l.split_once('\t')).collect();
+    // Newest first, then by name: the order the list shows.
+    let all = drafts(dir);
+    let now = states(&all);
+    let name = all
+        .iter()
+        .map(|p| stem(p))
+        .find(|n| before.get(n.as_str()).copied() != now.get(n).map(String::as_str))?;
+    remember(dir, session, &name).then_some(name)
+}
+
 /// The draft `session` wrote last, while it still exists.
 pub fn session_draft(dir: &Path, session: &str) -> Option<String> {
     if !plain_id(session) {
@@ -221,7 +346,7 @@ pub fn session_draft(dir: &Path, session: &str) -> Option<String> {
     }
     let slug = fs::read_to_string(dir.join(SESSIONS).join(session)).ok()?;
     let slug = slug.trim();
-    (super::is_slug(slug) && dir.join(format!("{slug}.md")).is_file()).then(|| slug.to_string())
+    (is_name(slug) && dir.join(format!("{slug}.md")).is_file()).then(|| slug.to_string())
 }
 
 /// Drafts are working copies — the issue on GitHub is the record — so their
@@ -593,6 +718,7 @@ pub fn list_page(
         list => LIST,
         rev => safe(&listing_rev(dir)),
         source => safe(DIR),
+        skipped => safe(&skipped(dir).join(", ")),
     };
     let mut out = env
         .get_template("drafts.html")?
@@ -648,6 +774,7 @@ fn words_value(w: &'static Words) -> Value {
         ("says_none_short", d.says_none_short),
         ("list_footer", d.list_footer),
         ("none_yet", d.none_yet),
+        ("skipped", d.skipped),
     ] {
         m.insert(k, Value::from(v));
     }
@@ -715,7 +842,7 @@ pub fn show_list(
     if !super::browser::decide(env, super::browser::this_os(), explicit) {
         return Ok(Shown::Off);
     }
-    let selected = selected.filter(|s| super::is_slug(s));
+    let selected = selected.filter(|s| is_name(s));
     ignore_self(dir);
     let info = editor(dir, env)?;
     let action = super::viewer::reload_list(&info, selected, explicit);
