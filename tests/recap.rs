@@ -231,6 +231,17 @@ fn recap_states_its_safety_rules() {
 }
 
 #[test]
+fn recap_reads_since_today_as_the_start_of_today() {
+    // git reads a bare `today` as now, which would leave an empty window:
+    // `--since today` must reach git as `midnight`, local time.
+    let (_dir, md) = scaffolded(&claude("rt"));
+    let md = md.split_whitespace().collect::<Vec<_>>().join(" ");
+    for needle in ["`--since today`", "`midnight`", "git reads `today` as now"] {
+        assert!(md.contains(needle), "missing {needle:?}");
+    }
+}
+
+#[test]
 fn recap_writes_only_under_its_own_notes_folder() {
     let (_dir, md) = scaffolded(&claude("rp"));
     // Anything directly in .claude/notes/ is an /inquire ledger (its hook renders

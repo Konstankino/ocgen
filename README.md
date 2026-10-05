@@ -1262,8 +1262,8 @@ default). You start it; Claude can't, because it moves refs.
 **Since when?** After each report, `/recap` records every remote branch's tip in
 `.claude/notes/recap/state.json`, so the next recap covers exactly what changed in between,
 even if you pulled by hand. The first recap looks at the last 24 hours. `--since "3 days ago"`
-looks further back without moving the baseline, and `--no-fetch` skips the fetch when you have
-fetched yourself. GitHub activity counts from `github_checked_at` in the same state file (when
+looks further back without moving the baseline (`--since today` starts at midnight, local time),
+and `--no-fetch` skips the fetch when you have fetched yourself. GitHub activity counts from `github_checked_at` in the same state file (when
 the hook last answered), and `--no-github` skips the GitHub step. Each report is also saved as
 `.claude/notes/recap/<date>.md`. The folder ignores itself (a `.gitignore` with `*`), so your
 own `.gitignore` isn't touched.

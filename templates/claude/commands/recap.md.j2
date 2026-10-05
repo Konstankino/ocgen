@@ -13,7 +13,9 @@ Syncing is **fast-forward only**: you never rewrite history, delete a branch, to
 work, or push.
 
 - `--since <when>` (e.g. `--since "3 days ago"`): analyze every branch's commits since then instead
-  of since the last recap. Such a run doesn't move the recap baseline.
+  of since the last recap. Such a run doesn't move the recap baseline. `--since today` means since
+  midnight, local time: git reads `today` as now, which leaves nothing to report, so wherever
+  `<when>` goes to git, pass `midnight` in its place.
 - `--no-fetch`: skip the fetch and use the remote-tracking branches as they are — for when I
   fetched myself.
 - `--no-github`: skip the GitHub step.
