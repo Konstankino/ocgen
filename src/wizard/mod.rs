@@ -871,10 +871,31 @@ pub fn run_edit_language(
         )
     };
 
+    let before = project.clone();
     let change = project.change_languages(prompts.as_deref(), answers.as_deref())?;
     let written = project.scaffold(&root, true)?;
     report_written(&written);
     ui::kv("language", &project.languages_label());
+    // Each local document's unsuffixed file stays in the first language.
+    let moved = ocgen::notes::versions::relabel(&root, &before, &project);
+    let rel = |p: &Path| {
+        p.strip_prefix(&root)
+            .unwrap_or(p)
+            .to_string_lossy()
+            .replace('\\', "/")
+    };
+    for (from, to) in &moved.renamed {
+        ui::kv("renamed", &format!("{} → {}", rel(from), rel(to)));
+    }
+    for p in &moved.skipped {
+        ui::kv(
+            "not renamed",
+            &format!(
+                "{} — its other language's file is in the way, or it couldn't be moved; rename them by hand",
+                rel(p)
+            ),
+        );
+    }
     if !change.reseeded.is_empty() {
         ui::kv("re-seeded", &change.reseeded.join(", "));
     }

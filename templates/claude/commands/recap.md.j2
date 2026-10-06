@@ -221,8 +221,18 @@ Every item that needs me is also listed under **Needs your attention**.
 Skip this step for a report-only run or after a failed fetch.
 1. If `.claude/notes/recap/.gitignore` doesn't exist, write it with the single line `*`: it keeps the
    folder (itself included) out of git, so the project's own `.gitignore` is never edited.
-2. Write the report to `.claude/notes/recap/<YYYY-MM-DD>.md`, today's date; if that file exists,
-   add `-2`, `-3`, ….
+{% if bilingual -%}
+2. Write the report twice, with the Write tool, both today's date (if that name is taken, add `-2`,
+   `-3`, … before the language): first in {{ prompt_language }} to
+   `.claude/notes/recap/<YYYY-MM-DD>.{{ second_suffix }}.md`, then in {{ answer_language }} to
+   `.claude/notes/recap/<YYYY-MM-DD>.md` — the same report, translated; branch names, paths, SHAs
+   and commands stay as they are. ocgen renders each as a page with a switch between the two and
+   opens the second — never write the `.html` yourself.
+{%- else -%}
+2. Write the report with the Write tool to `.claude/notes/recap/<YYYY-MM-DD>.md`, today's date; if
+   that file exists, add `-2`, `-3`, …. ocgen renders it as a page beside it and opens it — never
+   write the `.html` yourself.
+{%- endif %}
 3. Write `.claude/notes/recap/state.json` **last**, after the report — never for a `--since` run:
    `{"version": 1, "remote": "origin", "default": "<default>", "recorded_at": "<ISO 8601 time>", "github_checked_at": "<ISO 8601 time>", "tips": {"<branch>": "<full SHA>"}}`.
    Take each tip from the step 2 snapshot. Only branches you finished analyzing (or that didn't

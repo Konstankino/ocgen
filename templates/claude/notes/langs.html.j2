@@ -1,0 +1,17 @@
+{#- A document's language versions (notes::versions::switch), included by the
+    ledger page and the read-only Zen page: each version by its name in its own
+    language, the one shown marked, one not written yet or behind said so; and the
+    note on a version that is behind another. Nothing for one language. -#}
+{%- if versions %}
+    <nav class="langs" aria-label="{{ w.languages }}">
+      {%- for v in versions %}
+      {% if v.current %}<span class="lang current" aria-current="page" lang="{{ v.lang }}">{{ v.name }}</span>
+      {%- elif v.href %}<a class="lang" href="{{ v.href }}" hreflang="{{ v.lang }}" lang="{{ v.lang }}">{{ v.name }}</a>
+      {%- else %}<span class="lang" lang="{{ v.lang }}">{{ v.name }}</span>{% endif %}
+      {%- if v.state %}<span class="state">· {{ v.state }}</span>{% endif %}
+      {%- endfor %}
+    </nav>
+{%- endif %}
+{%- if notice %}
+    <p class="version-note" role="note">{{ notice }}</p>
+{%- endif %}

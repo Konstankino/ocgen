@@ -44,6 +44,8 @@ pub struct Words {
     /// The read-only pages: the lists of notes and of intent files, and an
     /// intent file's page. Their palette, pager and keys are the drafts'.
     pub docs: DocsWords,
+    /// A document's language versions, and the read-only Zen page's own words.
+    pub versions: VersionWords,
     /// Lens keys → shown names.
     lenses: [(&'static str, &'static str); 7],
     /// Footnote prefixes → shown prefixes.
@@ -78,6 +80,32 @@ pub struct DocsWords {
     pub all_intents: &'static str,
     pub intent_footer: &'static str,
     pub intent_offline: &'static str,
+}
+
+/// What a page says about the document's other language versions, and what
+/// the read-only Zen page (an intent file, a reading copy, a recap report) says
+/// by itself.
+pub struct VersionWords {
+    /// The language switch, for screen readers.
+    pub languages: &'static str,
+    /// After a version in the switch that isn't written yet, or is behind.
+    pub not_written: &'static str,
+    pub out_of_date: &'static str,
+    /// On a version that is behind another.
+    pub stale_notice: &'static str,
+    /// The page's two views (and their group): the rendered page and its
+    /// Markdown.
+    pub views: &'static str,
+    pub preview: &'static str,
+    pub source: &'static str,
+    /// A reading copy's page: its name, the intent file it translates, its
+    /// footer.
+    pub copy_title: &'static str,
+    pub original: &'static str,
+    pub copy_footer: &'static str,
+    /// A /recap report's page.
+    pub recap_title: &'static str,
+    pub recap_footer: &'static str,
 }
 
 /// What the issue draft's editor page says by itself.
@@ -253,6 +281,20 @@ pub static ENGLISH: Words = Words {
         intent_footer: "Read-only. Edit the file named above; this page follows it.",
         intent_offline: "Viewer disconnected — this page won’t refresh. Run <code>ocgen adr</code> to reconnect.",
     },
+    versions: VersionWords {
+        languages: "Languages",
+        not_written: "not written yet",
+        out_of_date: "out of date",
+        stale_notice: "This version may be out of date: another language version changed after it.",
+        views: "View",
+        preview: "Page",
+        source: "Markdown",
+        copy_title: "Reading copy",
+        original: "Original:",
+        copy_footer: "A reading copy, rendered by ocgen from the Markdown file named above. The English intent file it translates is the record.",
+        recap_title: "Daily recap",
+        recap_footer: "Rendered by ocgen from the Markdown file named above — the .md is the source of truth.",
+    },
     lenses: [
         ("Structure", "Structure"),
         ("Flow", "Flow"),
@@ -373,6 +415,20 @@ pub static UKRAINIAN: Words = Words {
         intent_footer: "Лише для читання. Редагуйте файл, указаний вище, — ця сторінка стежить за ним.",
         intent_offline: "Переглядач від’єднано — сторінка не оновлюватиметься. Щоб під’єднатися знову, виконайте <code>ocgen adr</code>.",
     },
+    versions: VersionWords {
+        languages: "Мови",
+        not_written: "ще не написано",
+        out_of_date: "застаріла",
+        stale_notice: "Ця версія може бути застарілою: іншу мовну версію змінено пізніше.",
+        views: "Вигляд",
+        preview: "Сторінка",
+        source: "Код Markdown",
+        copy_title: "Переклад для читання",
+        original: "Оригінал англійською:",
+        copy_footer: "Переклад для читання, який ocgen створив із Markdown-файлу, указаного вище. Чинний запис — англійський файл наміру, який він перекладає.",
+        recap_title: "Щоденний підсумок",
+        recap_footer: "ocgen створив цю сторінку з Markdown-файлу, указаного вище. Основний файл — .md.",
+    },
     lenses: [
         ("Structure", "Структура"),
         ("Flow", "Потік"),
@@ -396,6 +452,15 @@ pub static UKRAINIAN: Words = Words {
         format!("Запитань: {q} · перевірених: {v} · припущень: {i}{stale}")
     },
 };
+
+/// A language's name in itself, for a language switch: `Ukrainian` →
+/// `Українська`; a language without its own words by its English name.
+pub fn endonym(language: &str) -> String {
+    match crate::render::canonical_language(language).as_str() {
+        "Ukrainian" => "Українська".to_string(),
+        other => other.to_string(),
+    }
+}
 
 /// The words for an answer language (e.g. `Ukrainian`, any case); English otherwise.
 pub fn for_language(language: &str) -> &'static Words {
@@ -487,6 +552,11 @@ mod tests {
             "Запитань: 1 · перевірених: 1 · припущень: 0"
         );
         assert_eq!(for_language("Polish").lang, "en");
+        assert_eq!(endonym("ukrainian"), "Українська");
+        assert_eq!(endonym("English"), "English");
+        assert_eq!(endonym("polish"), "Polish");
+        assert_eq!(uk.versions.not_written, "ще не написано");
+        assert_eq!(ENGLISH.versions.source, "Markdown");
         assert_eq!(
             ENGLISH.counts(1, 1, 0, 2),
             "1 question · 1 verified · 0 inferred · 2 stale"

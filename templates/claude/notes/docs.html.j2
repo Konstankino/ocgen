@@ -69,7 +69,7 @@ body.docs { background: var(--bg); color: var(--z-text);
 {%- if rows %}
   <ol id="rows">
 {%- for r in rows %}
-    <li><a class="row{% if r.selected %} sel{% endif %}" href="{{ root }}{{ r.slug }}.html" data-slug="{{ r.slug }}"{% if r.selected %} aria-current="true"{% endif %}>
+    <li><a class="row{% if r.selected %} sel{% endif %}" href="{{ root }}{{ r.page }}.html" data-slug="{{ r.slug }}"{% if r.selected %} aria-current="true"{% endif %}>
       <span class="name">{{ r.name }}</span>
       <time class="when" datetime="{{ r.when_iso }}">{{ r.when_text }}</time>
 {%- if r.summary %}

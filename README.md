@@ -183,22 +183,36 @@ When the two languages differ:
 - A project made before this setting answers in its old instruction language. Changing only the
   instructions keeps that answer language, so the answers don't flip.
 
-**Pages follow the answer language; Markdown that others read stays English.**
-- **`/inquire`:** the ledger page shows its own words in the answer language: labels, counts, lens
-  names and evidence tags. Claude writes the ledger's text in that language too. The ledger's
-  structural keys (`Topic:`, `## Mental model`, `Q:`, `Verified`, `Source:`) stay English, because
-  ocgen parses them.
+**Local documents are kept in both languages, each with its own page; Markdown that others read
+stays English.** The documents ocgen's skills keep on your machine (git-ignored) exist in the answer
+language and, when the instruction language differs, in that language too.
+- **Naming:** the unsuffixed file is the answer language's (`request-flow.md`); the other is
+  `<name>.<language>.md` (`request-flow.english.md`). Each version gets its own page, in its own
+  language's words, with a language switch to the other.
+- **`/inquire`:** the ledger page shows its own words in the page's language: labels, counts, lens
+  names and evidence tags. Claude's background helper writes each update to both versions. The
+  ledger's structural keys (`Topic:`, `## Mental model`, `Q:`, `Verified`, `Source:`) stay English in
+  both, because ocgen parses them. The `note` list shows each topic once.
+- **`/recap`:** the report is saved in both languages, `.claude/notes/recap/<date>.md` and
+  `<date>.<language>.md`. Branch names, paths, SHAs and commands stay as they are.
 - **`/intent`:** the intent file and the GitHub issue draft are always English: they are the shared
-  record and GitHub's. When the answers aren't English, `/intent` also writes a translated **reading
-  copy** of the intent file to `.claude/intent/view/<name, lowercased>.md`, which is git-ignored. ocgen
-  renders it as a page with the same look as the ledger page, linking the English original, and opens
-  it once.
+  record and GitHub's. When either language isn't English, `/intent` also writes a translated
+  **reading copy** of the intent file to `.claude/intent/view/<name, lowercased>.md`, which is
+  git-ignored. The live viewer serves it beside the intent file, with a switch between the two, and
+  `adr` (or `ocgen adr`) opens the copy in the answer language when there is one. The issue draft
+  stays English only.
 - **`/review-intent`:** the same as `/intent`: the issue draft and the ADR are English, and the ADR
-  gets a reading copy when the answers aren't.
-- **`/recap`:** the report, in chat and in its saved copy, is written in the answer language.
-  Branch names, paths, SHAs and commands stay as they are.
-- **Other languages:** the pages have built-in words for English and Ukrainian. Any other answer
-  language shows English labels.
+  gets a reading copy.
+- **Kept in step:** after a write, the notes hook tells Claude which version is missing or behind.
+  A turn — or a subagent, such as the ledger helper — that ends with one still owed is sent back
+  once. A fix that concerns one language only can stay in that one; the other version's page then
+  says it may be out of date. The hook keeps its record in `.versions/` inside each git-ignored
+  folder.
+- **Changing languages:** `ocgen edit language` renames the versions so the unsuffixed file stays in
+  the answer language, and lists what it renamed. A version in a language the project no longer
+  keeps stays on disk, unlisted and never asked for.
+- **Other languages:** the pages have built-in words for English and Ukrainian. Any other language
+  shows English labels.
 
 An override `manifest.toml` from before this setting asks no answer-language question. Its
 projects answer in the instruction language until you add the `response_language` variable to
@@ -508,6 +522,7 @@ repo used for a plugin's marketplace and release workflow; `--team` enables
 .claude/intent/issue-template.md     # /intent's GitHub issue structure — yours, written once
 .claude/intent/drafts/<name>.md      # /intent's issue draft — type `draft` to edit, preview and copy it in your browser (git-ignored)
 .claude/intent/viewer/               # the intent files' viewer and session records — type `adr` to read them (git-ignored)
+.claude/intent/view/<name>.md        # an intent file's reading copy in your language, with its page (git-ignored)
 .claude/intent/intent-template.md    # /intent's intent-file (ADR) structure — yours, written once
 .claude/skills/fanout/SKILL.md       # /fanout — worktree-isolated parallel writers (you run it)
 .claude/skills/improve-prompt/SKILL.md
@@ -618,9 +633,11 @@ its workflows as `.claude/skills/<name>/SKILL.md`. You still type `/deliver`, `/
 
 **Extra hooks** (offered with the power-user defaults; apart from the config audit's guard, none
 of them ever block Claude):
-- **`/inquire` HTML view** (on with `/inquire`): after each write to a ledger in
-  `.claude/notes/`, ocgen renders its HTML page and refreshes the browser tab that shows it
-  (see [The visual ledger](#the-visual-ledger)).
+- **Notes pages** (on with `/inquire`, `/recap`, or reading copies): after each write to a ledger in
+  `.claude/notes/`, a `/recap` report or a reading copy, ocgen renders its HTML page and refreshes the
+  browser tab that shows it (see [The visual ledger](#the-visual-ledger)). When the project's two
+  languages differ, it also tells Claude which language version is missing, and holds the end of a
+  turn once while one is (see [Languages](#languages)).
 - **Re-inject context after compaction** (on by default): when a conversation is compacted,
   Claude is re-pointed at `.claude/rules/` and any `/inquire` notes in `.claude/notes/`.
 - **Drop a no-op `cd`** (on by default): `cd <the folder Claude is in> && …` becomes `…`
@@ -938,7 +955,7 @@ converted on their next update.
 | Command / variable | What it does |
 |---|---|
 | `ocgen notes open [topic] [-p dir]` | Render a ledger and show it: refresh its tab, or open one. Picks by file name, then by `Topic:` line; with no topic, the latest ledger. `/inquire` runs this when it resumes. |
-| `ocgen notes render <file.md>…` | Render pages without showing them. Only `/inquire` ledgers (`.claude/notes/<topic-slug>.md`) and `/intent` reading copies (`.claude/intent/view/<name>.md`), by any path, are rendered; any other file is refused, and every argument is checked before anything is written. |
+| `ocgen notes render <file.md>…` | Render pages without showing them. Only `/inquire` ledgers (`.claude/notes/<topic-slug>.md`), `/recap` reports (`.claude/notes/recap/<date>.md`) and `/intent` reading copies (`.claude/intent/view/<name>.md`) — and their other language versions (`<name>.<language>.md`) — by any path, are rendered; any other file is refused, and every argument is checked before anything is written. |
 | `OCGEN_NOTES_OPEN=0` | Never open a browser (pages are still rendered). `=1` always does. |
 | `OCGEN_NOTES_BROWSER` | Open pages with this command instead of the system default (`open`, `xdg-open`, `start`). Like those, it runs detached: ocgen doesn't wait for it or check how it exits, so a plain `firefox` is fine. |
 
@@ -1131,7 +1148,9 @@ session wrote last selected. With none, nothing opens and Claude is told why. Th
 drafts' black and white palettes and is made safe like the draft's preview: raw HTML keeps only
 the tags GitHub allows, links only `http(s)` and `mailto` targets (a relative link shows as text),
 images become links, and the page's one script is ocgen's own. It follows the file: a change on
-disk refreshes it. To edit, edit the `.md` file. From a terminal, `ocgen adr [name]` does the same,
+disk refreshes it. **Markdown** shows the file as written, **Page** as GitHub draws it. When the file
+has a reading copy in your answer language, that copy opens instead, with a switch to the English
+file. To edit, edit the `.md` file. From a terminal, `ocgen adr [name]` does the same,
 by name, by its start, or by number (`ocgen adr 7`, `0007`, `ADR-7`).
 
 The same `intent-draft` hook catches this word and remembers the intent file the session wrote last
@@ -1377,8 +1396,11 @@ even if you pulled by hand. The first recap looks at the last 24 hours. `--since
 looks further back without moving the baseline (`--since today` starts at midnight, local time),
 and `--no-fetch` skips the fetch when you have fetched yourself. GitHub activity counts from `github_checked_at` in the same state file (when
 the hook last answered), and `--no-github` skips the GitHub step. Each report is also saved as
-`.claude/notes/recap/<date>.md`. The folder ignores itself (a `.gitignore` with `*`), so your
-own `.gitignore` isn't touched.
+`.claude/notes/recap/<date>.md` (and, in a project whose two languages differ, as
+`<date>.<language>.md` in the other), and ocgen opens it as a read-only page: rendered or as
+Markdown, black or white, with a switch to the other language. The page works as a plain file, with
+no viewer running. The folder ignores itself (a `.gitignore` with `*`), so your own `.gitignore`
+isn't touched.
 
 **Permissions.** The skill pre-approves read-only git commands, the exact fetch and the exact
 current-branch fast-forward. The local fast-forward batch and each new tracking branch still
@@ -1509,17 +1531,17 @@ and inside the ocgen binary (`ocgen hook <name>`). The generated hook command us
 binary when a compatible ocgen is installed, and the script otherwise:
 
 ```sh
-if [ "$(ocgen hook --check 2>/dev/null)" = "ocgen-hooks 13" ]; then ocgen hook team-approval-gate; else sh ".../team-approval-gate.sh"; fi
+if [ "$(ocgen hook --check 2>/dev/null)" = "ocgen-hooks 14" ]; then ocgen hook team-approval-gate; else sh ".../team-approval-gate.sh"; fi
 ```
 
 - **The binary gives you** real JSON parsing instead of `grep`, and hooks that work on
   **native Windows**.
 - **The scripts keep the project working** for teammates and CI machines without ocgen.
-  The exceptions are `inquire-notes`, which renders `/inquire`'s HTML view and opens it on
-  `note`, `intent-draft`, which opens `/intent`'s issue draft (and, on `adr`, its intent files)
+  The exceptions are `inquire-notes`, which renders the notes pages, opens them on `note` and
+  asks for each document's other language version, `intent-draft`, which opens `/intent`'s issue draft (and, on `adr`, its intent files)
   in the browser, `intent-approvers`, which checks drafts against the current approvers, and
   `recap-github`, which answers `/recap`'s GitHub request: their scripts do nothing, so without
-  ocgen the ledgers stay Markdown only, `draft`, `note` and `adr` reach Claude as typed, only `ocgen verify` and `ocgen edit intent` report a draft that misses an
+  ocgen the ledgers stay Markdown only, nothing asks for a document's other language, `draft`, `note` and `adr` reach Claude as typed, only `ocgen verify` and `ocgen edit intent` report a draft that misses an
   approver, and `/recap` reports GitHub as not checked.
   They need only a POSIX `sh` (Git Bash on Windows): `jq` is used when present and is never
   required (without it, JSON escapes are decoded, and a command holding a `\b`, `\f` or `\u`
@@ -1787,7 +1809,7 @@ for a plugin; `--team` is off by default. (The `--base-url` flag is OpenCode-onl
 | `ocgen approve [dir] [--minutes N] [--status] [--revoke]` | You approve high-impact actions for 1–1440 minutes (default 30). Refuses to run under Claude Code or without a terminal. |
 | `ocgen verify [dir] --run-check` | Also run the project's committed check command, as you and unsandboxed (only on a repository you trust). |
 | `ocgen notes open [topic]` | Show an `/inquire` ledger's HTML page: refresh the tab that shows it, or open one ([details](#the-visual-ledger)). |
-| `ocgen notes render <file.md>…` | Render `/inquire` ledgers (`.claude/notes/<topic-slug>.md`) and `/intent` reading copies (`.claude/intent/view/<name>.md`) to their HTML pages without opening them; any other file is refused. |
+| `ocgen notes render <file.md>…` | Render `/inquire` ledgers (`.claude/notes/<topic-slug>.md`), `/recap` reports (`.claude/notes/recap/<date>.md`) and `/intent` reading copies (`.claude/intent/view/<name>.md`), in any of the project's languages, to their HTML pages without opening them; any other file is refused. |
 | `ocgen draft [name] [-p dir]` | Open an `/intent` or `/review-intent` issue draft (`.claude/intent/drafts/<name>.md`) in a local browser editor: edit it as formatted text (Markdown syntax hidden) or as Markdown source, save it back as plain Markdown (untouched blocks keep their exact text), preview it as GitHub shows it, and copy it. A calm black page by default (white on request), the text around the cursor dimmed, and a Focus button for full screen. With no name, the only draft, or with several, their list to pick from (10 a page, newest first); `ADR-0007` picks by intent. Typing `draft` in Claude Code does the same, with the draft that session wrote last selected in the list ([details](#from-findings-to-a-github-issue-intent)). |
 | `ocgen adr [name] [-p dir]` | Read an `/intent` file (`docs/adr/ADR-0007-<slug>.md` by default; the project's prefix and directory) in a local browser page, read-only and sanitized like the draft's preview, in the drafts' black or white palette. With no name, the only file, or with several, their list to pick from (10 a page, highest number first); a name, its start, or a number (`7`, `0007`, `ADR-7`) picks one. Typing the prefix in lowercase (`adr`) in Claude Code does the same, with the file that session wrote last selected ([details](#from-findings-to-a-github-issue-intent)). |
 | `ocgen managed-settings` | Print a recommended organisation policy (`managed-settings.json`): no bypass mode, secrets unreadable, high-impact commands always ask, strict sandbox. |
@@ -1858,7 +1880,8 @@ claude/intent/*.md              # default /intent issue and intent-file template
 claude/intent/*.md.j2           # /intent's shared text (writing standard, tone check, numbering, reading copy,
                                 # browser review), included by /intent and /review-intent
 claude/notes/ledger.html.j2     # the /inquire ledger's HTML page
-claude/notes/intent.html.j2     # the /intent reading copy's HTML page
+claude/notes/adr.html.j2        # the read-only page of an intent file, a reading copy and a /recap report
+claude/notes/langs.html.j2      # the language switch both pages include
 claude/notes/draft.html.j2      # the /intent issue draft's editor (`draft`, `ocgen draft`): its layout, palettes and script;
                                 # the Milkdown editor itself is built into the binary (tools/milkdown, not a template)
 claude/notes/page.css           # the style the pages share

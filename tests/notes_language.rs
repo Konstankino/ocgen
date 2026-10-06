@@ -198,11 +198,23 @@ fn the_inquire_skill_asks_for_ledger_text_in_the_answer_language() {
         "{skill}"
     );
     assert!(skill.contains("keep its headings, keys and labels exactly as in the layout below"));
+    // The same ledger in the instruction language, beside it: one topic.
+    for must in [
+        "`.claude/notes/<topic-slug>.md` in Ukrainian and `.claude/notes/<topic-slug>.english.md`",
+        "one topic, not two",
+        "Then the helper writes the same update to `.claude/notes/<topic-slug>.english.md`",
+    ] {
+        assert!(skill.contains(must), "missing {must:?} in:\n{skill}");
+    }
 
     let dir = tempdir().unwrap();
     project(dir.path(), "", true, false);
     let skill = read(dir.path(), ".claude/skills/inquire/SKILL.md");
     assert!(!skill.contains("Write the ledger's text in"), "{skill}");
+    assert!(
+        !skill.contains(".english.md") && !skill.contains("both of our languages"),
+        "{skill}"
+    );
 }
 
 // -------------------------------------------------------------- /intent --
@@ -264,11 +276,11 @@ fn an_intent_reading_copy_renders_as_a_page_in_the_answer_language() {
     );
     let page = fs::read_to_string(&html).unwrap();
     for must in [
-        r#"<html lang="uk">"#,
+        r#"<html lang="uk" data-palette="black">"#,
         "/intent",
         "ADR-0007: Інвалідація кешу",
-        "<h3>Контекст</h3>",
-        "<h3>Рішення</h3>",
+        "<h2>Контекст</h2>",
+        "<h2>Рішення</h2>",
         "<table>",
         "src/cache.rs:42",
         // The record it translates, which stays English.
@@ -344,9 +356,12 @@ fn the_notes_hook_is_wired_for_intent_reading_copies() {
     project(dir.path(), "Ukrainian", false, true);
     assert!(has_hook(dir.path()));
     assert!(dir.path().join(".claude/hooks/inquire-notes.sh").is_file());
-    // English answers write no copy: nothing to render.
+    // English answers and prompts write no copy: nothing to render (without
+    // /recap, whose reports get a page in every project).
+    let mut p = project(tempdir().unwrap().path(), "", false, true);
+    p.claude.workflow.recap = false;
     let dir = tempdir().unwrap();
-    project(dir.path(), "", false, true);
+    p.scaffold(dir.path(), false).unwrap();
     assert!(!has_hook(dir.path()));
 }
 

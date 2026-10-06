@@ -2080,7 +2080,7 @@ fn settings_wire_the_worker_baseline_and_read_only_roles() {
             "{ev} runs the worker gate: {cmd}"
         );
     }
-    assert_eq!(ocgen::hooks::PROTOCOL, "ocgen-hooks 13");
+    assert_eq!(ocgen::hooks::PROTOCOL, "ocgen-hooks 14");
 }
 
 #[test]

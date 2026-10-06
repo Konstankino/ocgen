@@ -26,7 +26,7 @@ pub const BEFORE: &str = ".before";
 const BEFORE_TTL: Duration = Duration::from_secs(24 * 3600);
 
 /// A session id fit to name a file: letters, digits, `-` and `_`.
-fn plain_id(s: &str) -> bool {
+pub(super) fn plain_id(s: &str) -> bool {
     !s.is_empty()
         && s.len() <= 128
         && s.bytes()

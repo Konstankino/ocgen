@@ -188,4 +188,12 @@ footer { color: var(--faint); font-size: 13px; margin-top: 36px; text-align: cen
   .compare { flex-direction: column; }
   .compare .arrow { transform: rotate(90deg); }
 }
-@media print { .tabbed .tab { display: block; } .tabs, .offline { display: none; } }
+/* a document's language versions */
+.langs { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 6px; margin: -10px 0 18px; font-size: 14px; }
+.langs .lang { color: var(--muted); text-decoration: none; border-radius: 6px; padding: 1px 7px; }
+.langs a.lang:hover { color: var(--text); background: var(--surface-2); }
+.langs .lang.current { color: var(--text); font-weight: 600; background: var(--surface-2); }
+.langs .state { color: var(--faint); font-size: 13px; margin-left: -4px; }
+.version-note { background: var(--note-bg); border-left: 3px solid var(--note-border); padding: 6px 10px; border-radius: 4px;
+  margin: 0 0 18px; font-size: 14.5px; }
+@media print { .tabbed .tab { display: block; } .tabs, .offline, .langs { display: none; } }

@@ -218,6 +218,7 @@ pub fn verify(project: &Project, root: &Path, opts: &Options) -> Vec<Check> {
             out.push(noop_cd(&probe));
             out.push(notes_view(&probe));
             out.push(notes_word(&probe));
+            out.push(doc_versions(&probe, project));
             out.push(draft_review(&probe));
             out.push(recap_github(&probe));
         }
@@ -585,7 +586,7 @@ fn shell_check(sh: &Path) -> Result<Check, Check> {
                 name,
                 Status::Fail,
                 format!(
-                    "can't start {} ({why}) — {fix}. The hook script, hook command, approval gate, WebFetch guard, no-op cd, notes view, pre-push, statusline and check command checks were skipped",
+                    "can't start {} ({why}) — {fix}. The hook script, hook command, approval gate, WebFetch guard, no-op cd, notes view, language versions, pre-push, statusline and check command checks were skipped",
                     sh.display()
                 ),
             ))
@@ -1715,7 +1716,11 @@ fn noop_cd(p: &Probe) -> Check {
 fn notes_view(p: &Probe) -> Check {
     let name = "/inquire notes view";
     let Some((event, group, cmd)) = p.find("PostToolUse", "inquire-notes") else {
-        return check(name, Status::Skip, "/inquire not enabled");
+        return check(
+            name,
+            Status::Skip,
+            "/inquire, /recap and reading copies not enabled",
+        );
     };
     if let Some(what) = p.hand_edited(&event, &group, &cmd) {
         return check(name, Status::Warn, not_run(&what));
@@ -1775,20 +1780,125 @@ fn notes_view(p: &Probe) -> Check {
     }
 }
 
+/// The language check: a local document written in one of the project's two
+/// languages is asked for in the other, and the end of a turn that leaves it
+/// behind is held once. Probed on a scratch ledger beside a copy of the
+/// project's state, with the browser off; a probe's Stop never holds anything.
+fn doc_versions(p: &Probe, project: &crate::render::Project) -> Check {
+    let name = "language versions";
+    let Some((event, group, cmd)) = p.find("Stop", "inquire-notes") else {
+        return check(name, Status::Skip, "one language: nothing to keep in step");
+    };
+    if let Some(what) = p.hand_edited(&event, &group, &cmd) {
+        return check(name, Status::Warn, not_run(&what));
+    }
+    let mut quiet = p.env.clone();
+    quiet.insert("OCGEN_NOTES_OPEN".into(), "0".into());
+    // The write below lands in a scratch copy, outside the project: the hook
+    // may keep its record there, so this one run isn't a probe.
+    let mut env = quiet.clone();
+    env.remove("OCGEN_HOOK_PROBE");
+    let stop = serde_json::json!({
+        "hook_event_name": "Stop", "session_id": "ocgen-verify", "stop_hook_active": false
+    })
+    .to_string();
+    match run_sh(p.sh, &cmd, &stop, &quiet, p.root, Duration::from_secs(20)) {
+        None => return check(name, Status::Fail, "the hook did not finish"),
+        Some((code, out, err)) if code != 0 || !out.trim().is_empty() => {
+            return check(
+                name,
+                Status::Fail,
+                format!(
+                    "the Stop hook exited {code} ({}) or answered a probe — it must hold a turn only for a version owed; run `ocgen doctor`",
+                    err.lines().next().unwrap_or(out.lines().next().unwrap_or("")).trim()
+                ),
+            )
+        }
+        Some(_) => {}
+    }
+    let languages = project.doc_languages();
+    let Some(second) = languages.get(1) else {
+        // One language: only /intent's reading copies are kept in step.
+        return if ocgen_hook_ok() {
+            check(
+                name,
+                Status::Pass,
+                "each reading copy is checked when a turn ends",
+            )
+        } else {
+            check(
+                name,
+                Status::Warn,
+                format!(
+                    "needs ocgen ({}) on PATH — without it nothing asks for reading copies",
+                    crate::hooks::PROTOCOL
+                ),
+            )
+        };
+    };
+    let scratch = scratch_path("versions");
+    let state = project.target.state_file();
+    let md = scratch.join(".claude/notes/verify.md");
+    let made = std::fs::create_dir_all(md.parent().unwrap())
+        .and_then(|_| std::fs::create_dir_all(scratch.join(state).parent().unwrap()))
+        .and_then(|_| std::fs::copy(p.root.join(state), scratch.join(state)).map(|_| ()))
+        .and_then(|_| std::fs::write(&md, "Topic: ocgen verify ledger\n## Q&A log\n"));
+    if made.is_err() {
+        let _ = std::fs::remove_dir_all(&scratch);
+        return check(
+            name,
+            Status::Warn,
+            "could not create a scratch ledger to probe with",
+        );
+    }
+    let wrote = serde_json::json!({
+        "hook_event_name": "PostToolUse", "session_id": "ocgen-verify", "tool_name": "Write",
+        "tool_input": { "file_path": crate::paths::for_shell(&md) }
+    })
+    .to_string();
+    let ran = run_sh(p.sh, &cmd, &wrote, &env, p.root, Duration::from_secs(20));
+    let _ = std::fs::remove_dir_all(&scratch);
+    let want = format!("verify.{}.md", crate::notes::versions::suffix(second));
+    match ran {
+        None => check(name, Status::Fail, "the hook did not finish"),
+        Some((code, _, err)) if code != 0 => check(
+            name,
+            Status::Fail,
+            format!(
+                "the hook exited {code} ({}) — it must never fail a write; run `ocgen doctor`",
+                err.lines().next().unwrap_or("").trim()
+            ),
+        ),
+        Some((_, out, _)) if out.contains(&want) => check(
+            name,
+            Status::Pass,
+            format!("a document written in one language is asked for in {second} too, and a turn's end checks it"),
+        ),
+        Some(_) if !ocgen_hook_ok() => check(
+            name,
+            Status::Warn,
+            format!(
+                "needs ocgen ({}) on PATH — without it nothing asks for the other language's version",
+                crate::hooks::PROTOCOL
+            ),
+        ),
+        Some(_) => check(
+            name,
+            Status::Fail,
+            "the hook ran but didn't ask for the other language's version — run `ocgen doctor`",
+        ),
+    }
+}
+
 /// The /inquire notes word: `note` gets a note for Claude about opening the
 /// ledgers, and any other prompt passes untouched. Probed with the browser
 /// switched off, in the project itself (it writes nothing then).
 fn notes_word(p: &Probe) -> Check {
     let name = "/inquire notes word";
+    // Generated only with /inquire (or reading copies): a /recap-only project
+    // renders its reports without the word.
     let Some((event, group, cmd)) = p.find("UserPromptSubmit", "inquire-notes") else {
-        return match p.find("PostToolUse", "inquire-notes") {
-            Some(_) => check(
-                name,
-                Status::Warn,
-                "no UserPromptSubmit hook, so `note` reaches Claude as typed — run `ocgen doctor`",
-            ),
-            None => check(name, Status::Skip, "/inquire not enabled"),
-        };
+        return check(name, Status::Skip, "/inquire not enabled");
     };
     if let Some(what) = p.hand_edited(&event, &group, &cmd) {
         return check(name, Status::Warn, not_run(&what));

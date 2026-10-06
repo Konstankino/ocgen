@@ -457,6 +457,30 @@ fn with_a_current_ocgen_every_probe_of_a_fresh_project_passes() {
     }
 }
 
+/// With a current ocgen on PATH, a project in two languages asks for each
+/// local document's other version — probed beside the project, not in it.
+#[test]
+fn with_a_current_ocgen_the_language_check_passes() {
+    let dir = tempdir().unwrap();
+    git_init(dir.path());
+    let mut p = gated("bi");
+    p.response_language = "Ukrainian".into();
+    p.scaffold(dir.path(), false).unwrap();
+    let home = tempdir().unwrap();
+    let out = ocgen()
+        .args(["verify", "--no-claude"])
+        .arg(dir.path())
+        .env("PATH", path_with_this_ocgen())
+        .env("HOME", home.path())
+        .env_remove("CLAUDE_CONFIG_DIR")
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let l = line(&stdout, "language versions");
+    assert!(l.contains('✔') && l.contains("English"), "{stdout}");
+    assert!(!dir.path().join(".claude/notes/.versions").exists());
+}
+
 // --------------------------------------------- E2: output and timeouts -----
 
 /// A check command that prints more than a pipe holds (64 KiB) used to block

@@ -23,7 +23,7 @@ use serde_json::Value;
 /// embedded in the ocgen that generated the project (hook scripts can't be
 /// overridden from the template dir), so they implement the same protocol —
 /// unless someone edits the project's copies by hand.
-pub const PROTOCOL: &str = "ocgen-hooks 13";
+pub const PROTOCOL: &str = "ocgen-hooks 14";
 
 /// Every hook `ocgen hook <name>` accepts (matching the script names minus `.sh`).
 pub const NAMES: [&str; 14] = [
@@ -71,6 +71,46 @@ impl Outcome {
 
 /// `file` relative to `root`, with forward slashes — as given, else both
 /// resolved (a linked or short-named path, a Windows verbatim one).
+/// How Claude writes a document's other language version.
+const VERSION_RULES: &str =
+    "Write each one with the Write or Edit tool (never Bash, and never the \
+     .html: ocgen renders the page), translated with the same structure: code, paths, \
+     identifiers, `file:line` references and @mentions stay as they are, and a ledger's headings, \
+     keys, lens names, evidence labels and block names stay in English exactly as they are.";
+
+/// What the notes hook tells Claude when a write of `doc` left the versions in
+/// `fell` behind.
+fn versions_note(doc: &crate::notes::versions::Doc, fell: &[String], root: &Path) -> String {
+    let f = &doc.family;
+    let rel = |language: &str| {
+        f.path(language)
+            .map(|p| relative_to(&p, root).unwrap_or_else(|| p.display().to_string()))
+            .unwrap_or_default()
+    };
+    let written = rel(&doc.language);
+    let owed: Vec<String> = fell
+        .iter()
+        .map(|l| {
+            let path = rel(l);
+            let exists = f.path(l).is_some_and(|p| p.is_file());
+            let what = if exists {
+                "update it to match"
+            } else {
+                "it isn't written yet"
+            };
+            format!("- {path} ({l}): {what}")
+        })
+        .collect();
+    format!(
+        "ocgen: {written} ({}) changed, and this project keeps each local document in both of its \
+         languages. Now write:\n{}\n\n{} If this change concerned one language only (a fix to \
+         one version's wording), leave the other as it is.",
+        doc.language,
+        owed.join("\n"),
+        VERSION_RULES
+    )
+}
+
 fn relative_to(file: &Path, root: &Path) -> Option<String> {
     let rel = match file.strip_prefix(root) {
         Ok(r) => r.to_path_buf(),
@@ -1106,6 +1146,10 @@ impl<'a> Hook<'a> {
     /// passes untouched.
     fn inquire_notes(&self) -> Outcome {
         use crate::notes;
+        let event = self.field("hook_event_name");
+        if event == "Stop" || event == "SubagentStop" {
+            return self.versions_stop(&event);
+        }
         if self.is_prompt_event() {
             return self.notes_word();
         }
@@ -1119,47 +1163,180 @@ impl<'a> Hook<'a> {
             stdout: String::new(),
             stderr: format!("inquire-notes: {msg}\n"),
         };
-        // An /intent reading copy: rendered and opened as a file.
-        if notes::intent_view_target(path).is_some() {
-            let md = match Path::new(path) {
-                p if p.is_absolute() => p.to_path_buf(),
-                p => self.project().join(p),
-            };
-            if let Err(e) = notes::render_file(&md) {
-                return note(format!("could not render the HTML view: {e:#}"));
-            }
-            return match notes::show_intent_view(&md, self.env, false) {
-                Ok(_) => Outcome::allow(),
-                Err(e) => note(format!("could not show the HTML view: {e:#}")),
-            };
+        if path.is_empty() {
+            return Outcome::allow();
         }
-        let slug = match notes::ledger_target(path) {
-            notes::Target::NotLedger => return Outcome::allow(),
-            notes::Target::BadSlug => {
-                return note(format!(
-                    "{path} has no HTML view — name ledgers with a lowercase-hyphen slug (e.g. request-flow.md)"
-                ))
-            }
-            notes::Target::Ledger { slug } => slug,
-        };
         let md = match Path::new(path) {
             p if p.is_absolute() => p.to_path_buf(),
             p => self.project().join(p),
         };
-        // This project's ledger: the session's now. A probe changes nothing.
+        // A ledger, a recap report or a reading copy, in any language — or an
+        // intent file, whose reading copies follow it.
         let root = self.project();
-        if !self.probe()
+        let local = notes::versions::classify(&md);
+        let written_here = local.is_some();
+        let doc = local.or_else(|| {
+            relative_to(&md, &root).and_then(|rel| notes::versions::intent_doc(&root, &rel))
+        });
+        let Some(doc) = doc else {
+            return match notes::ledger_target(path) {
+                notes::Target::BadSlug => note(format!(
+                    "{path} has no HTML view — name ledgers with a lowercase-hyphen slug (e.g. request-flow.md)"
+                )),
+                _ => Outcome::allow(),
+            };
+        };
+        let owner = notes::versions::owner(&self.field("session_id"), &self.field("agent_id"));
+        let fell = if self.probe() {
+            Vec::new()
+        } else {
+            notes::versions::touch(&doc, owner.as_deref())
+        };
+        let f = &doc.family;
+        let first = f.local.first().is_some_and(|l| *l == doc.language);
+        // This project's ledger: the session's now. A probe changes nothing.
+        if f.kind == notes::versions::Kind::Ledger
+            && !self.probe()
             && md.is_file()
-            && relative_to(&md, &root).as_deref() == Some(&format!("{}/{slug}.md", notes::DIR))
+            && relative_to(&f.dir, &root).as_deref() == Some(notes::DIR)
         {
-            notes::remember(&root.join(notes::DIR), &self.field("session_id"), &slug);
+            notes::remember(&f.dir, &self.field("session_id"), &f.base);
         }
-        if let Err(e) = notes::render_file(&md) {
-            return note(format!("could not render the HTML view: {e:#}"));
+        let tell = |problem: Option<String>| {
+            let mut out = match problem {
+                Some(msg) => note(msg),
+                None => Outcome::allow(),
+            };
+            if !fell.is_empty() {
+                let context = versions_note(&doc, &fell, &root);
+                let json = serde_json::json!({
+                    "hookSpecificOutput": { "hookEventName": "PostToolUse", "additionalContext": context }
+                });
+                out.stdout = format!("{json}\n");
+            }
+            out
+        };
+        // Every version's page: the one written, and the others' switches.
+        if written_here {
+            if let Err(e) = notes::render_file(&md) {
+                return tell(Some(format!("could not render the HTML view: {e:#}")));
+            }
         }
-        match notes::show(&md, self.env, false) {
-            Ok(_) => Outcome::allow(),
-            Err(e) => note(format!("could not show the HTML view: {e:#}")),
+        notes::render_family(&doc);
+        if doc.orphan || !written_here {
+            return tell(None);
+        }
+        let written = md
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let shown = match f.kind {
+            // The answer language's page opens (or refreshes); the others'
+            // tabs only refresh, so a write never opens two.
+            notes::versions::Kind::Ledger => {
+                let others: Vec<String> = notes::versions::status(f)
+                    .iter()
+                    .filter(|v| v.exists)
+                    .filter_map(|v| f.stem(&v.language))
+                    .filter(|s| !first || *s != written)
+                    .collect();
+                notes::refresh_pages(&f.dir, &others, self.env);
+                if first {
+                    notes::show(&md, self.env, false)
+                } else {
+                    Ok(notes::Shown::Off)
+                }
+            }
+            // A reading copy opens beside its intent file in the live viewer,
+            // which links the two.
+            notes::versions::Kind::Copy if first => {
+                match f.source.as_deref().and_then(Path::file_stem) {
+                    Some(stem) => {
+                        let page = format!(
+                            "{}.{}",
+                            stem.to_string_lossy(),
+                            notes::versions::suffix(&doc.language)
+                        );
+                        notes::intents::show_copy(&root, &md, &page, self.env)
+                    }
+                    None => notes::show_file_page(&md, self.env, false),
+                }
+            }
+            _ if first => notes::show_file_page(&md, self.env, false),
+            _ => Ok(notes::Shown::Off),
+        };
+        match shown {
+            Ok(_) => tell(None),
+            Err(e) => tell(Some(format!("could not show the HTML view: {e:#}"))),
+        }
+    }
+
+    /// Stop / SubagentStop: a turn — or a subagent — that leaves a document's
+    /// other language version behind is sent back once to write it, once per
+    /// debt (kept in the version record, not in `stop_hook_active`, which every
+    /// Stop hook shares). When it stops again anyway, a session's versions are
+    /// left behind (their pages say so); a subagent's pass to its session,
+    /// whose own end is held once.
+    fn versions_stop(&self, event: &str) -> Outcome {
+        use crate::notes::versions;
+        if self.probe() {
+            return Outcome::allow();
+        }
+        let root = self.project();
+        let session = self.field("session_id");
+        let agent = if event == "SubagentStop" {
+            self.field("agent_id")
+        } else {
+            String::new()
+        };
+        // A subagent with no id can't be told from its session: never hold it
+        // for what the session owes.
+        if event == "SubagentStop" && agent.is_empty() {
+            return Outcome::allow();
+        }
+        let Some(owner) = versions::owner(&session, &agent) else {
+            return Outcome::allow();
+        };
+        let owed = versions::owed(&root, &owner);
+        if owed.is_empty() {
+            versions::end_turn(&root, &owner);
+            return Outcome::allow();
+        }
+        if !versions::hold(&root, &owner) {
+            let to = (event == "SubagentStop").then_some(session.as_str());
+            versions::pass(&root, &owner, to);
+            versions::end_turn(&root, &owner);
+            return Outcome::allow();
+        }
+        let list: Vec<String> = owed
+            .iter()
+            .map(|o| {
+                let path = o
+                    .path
+                    .as_deref()
+                    .and_then(|p| relative_to(p, &root))
+                    .unwrap_or_default();
+                let why = if o.missing {
+                    "not written yet"
+                } else {
+                    "behind another version"
+                };
+                format!("- {path} ({}): {why}", o.doc.language)
+            })
+            .collect();
+        let reason = format!(
+            "ocgen: this project keeps each local document in both of its languages, and these \
+             versions are still owed:\n{}\n\n{}\n\nIf your background ledger helper is still \
+             writing one, wait for it. If the change concerned one language only, say so in one \
+             line and finish.",
+            list.join("\n"),
+            VERSION_RULES
+        );
+        let out = serde_json::json!({ "decision": "block", "reason": reason });
+        Outcome {
+            code: 0,
+            stdout: format!("{out}\n"),
+            stderr: String::new(),
         }
     }
 
@@ -1450,6 +1627,14 @@ impl<'a> Hook<'a> {
             md.file_name().unwrap_or_default().to_string_lossy()
         );
         let terminal = "`ocgen adr` in a terminal opens it in their browser";
+        // In the answer language, when it has a reading copy in one.
+        let stem = md.file_stem().unwrap_or_default().to_string_lossy();
+        let copy = match intents::preferred_page(root, &stem) {
+            page if page != stem => {
+                format!(" (its reading copy, {page}, with a switch to the English file)")
+            }
+            _ => String::new(),
+        };
         match intents::show(root, md, self.env, true) {
             Ok(Shown::Off) => format!(
                 "The user typed `{word}`, but opening a browser is switched off here \
@@ -1460,7 +1645,7 @@ impl<'a> Hook<'a> {
                  browser, and ocgen refreshed it. Say so in one line and wait."
             ),
             Ok(_) => format!(
-                "The user typed `{word}`: ocgen opened the intent file {rel} in their browser, \
+                "The user typed `{word}`: ocgen opened the intent file {rel}{copy} in their browser, \
                  read-only. Say so in one line and wait (if they meant something else by `{word}`, \
                  answer that instead)."
             ),

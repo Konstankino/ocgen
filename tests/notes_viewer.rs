@@ -16,6 +16,8 @@ use tempfile::TempDir;
 
 const LEDGER: &str = "Topic: Request flow\nUpdated: 2026-10-01   Commit: abc1234\n\
 ## Q&A log\n### Q1 · Flow · Verified\nQ: How?\nA: Like this.\nCites: src/main.rs:1\n";
+const UK_LEDGER: &str =
+    "Topic: Потік запиту\n## Q&A log\n### Q1 · Flow · Verified\nQ: Як?\nA: Так.\n";
 
 struct Project {
     dir: TempDir,
@@ -43,6 +45,24 @@ impl Project {
         Project { dir, log, browser }
     }
 
+    /// A project whose prompts are English and answers Ukrainian, with its
+    /// ledger in Ukrainian.
+    fn bilingual() -> Self {
+        let p = Project::new();
+        let mut state = ocgen::render::Project::from_manifest(
+            &ocgen::manifest::Manifest::load().unwrap(),
+            "English",
+        );
+        state.target = ocgen::target::Target::ClaudeCode;
+        state.project_name = "bi".into();
+        state.providers.clear();
+        state.response_language = "Ukrainian".into();
+        state.agents = vec![];
+        state.scaffold(p.dir.path(), false).unwrap();
+        fs::write(p.md(), UK_LEDGER).unwrap();
+        p
+    }
+
     fn notes(&self) -> PathBuf {
         self.dir.path().join(".claude/notes")
     }
@@ -53,9 +73,16 @@ impl Project {
 
     /// Run the hook as Claude Code would after a write to the ledger.
     fn hook(&self, env: &[(&str, &str)]) -> Output {
+        let out = self.hook_on(&self.md(), env);
+        assert!(out.stdout.is_empty(), "{out:?}");
+        out
+    }
+
+    /// Run the hook as Claude Code would after a write to `md`.
+    fn hook_on(&self, md: &std::path::Path, env: &[(&str, &str)]) -> Output {
         let payload = serde_json::json!({
             "tool_name": "Write",
-            "tool_input": { "file_path": ocgen::paths::for_shell(&self.md()) }
+            "tool_input": { "file_path": ocgen::paths::for_shell(md) }
         });
         let mut c = Command::new(env!("CARGO_BIN_EXE_ocgen"));
         c.args(["hook", "inquire-notes"])
@@ -84,7 +111,6 @@ impl Project {
             .unwrap();
         let out = child.wait_with_output().unwrap();
         assert_eq!(out.status.code(), Some(0), "{out:?}");
-        assert!(out.stdout.is_empty(), "{out:?}");
         out
     }
 
@@ -209,6 +235,47 @@ fn first_update_opens_one_tab_then_reloads_it() {
     assert!(fs::read_to_string(p.notes().join("flow.html"))
         .unwrap()
         .contains("Inferred 60%"));
+}
+
+/// A ledger's other language version is served beside it; writing it only
+/// refreshes the tabs already open, so a ledger never opens two.
+#[test]
+fn a_language_version_is_served_and_refreshed_without_opening() {
+    let p = Project::bilingual();
+    let first = String::from_utf8(p.hook_on(&p.md(), &[]).stdout).unwrap();
+    assert!(first.contains("flow.english.md (English)"), "{first}");
+    // Already owed: said once.
+    assert!(p.hook_on(&p.md(), &[]).stdout.is_empty());
+    assert_eq!(p.opened().len(), 1);
+    let info = p.info();
+    let mut tab = Tab::connect(&info, &page_rev(&info));
+
+    let english = p.notes().join("flow.english.md");
+    fs::write(&english, LEDGER).unwrap();
+    p.hook_on(&english, &[]);
+    assert!(
+        tab.wait_for("event: reload"),
+        "the Ukrainian page's switch changed"
+    );
+    assert_eq!(p.opened().len(), 1, "no tab for the English version");
+
+    let t = &info.token;
+    let (code, page) = get(&info, &format!("/{t}/flow.english.html"));
+    assert_eq!(code, 200);
+    assert!(
+        page.contains(r#"<html lang="en">"#) && page.contains(r#"href="flow.html""#),
+        "{page}"
+    );
+    let (_, page) = get(&info, &format!("/{t}/flow.html"));
+    assert!(page.contains(r#"href="flow.english.html""#), "{page}");
+    for path in [
+        "flow.English.html",
+        "flow..html",
+        "flow.a.b.html",
+        "flow.english.md",
+    ] {
+        assert_eq!(get(&info, &format!("/{t}/{path}")).0, 404, "{path}");
+    }
 }
 
 #[test]

@@ -5890,7 +5890,7 @@ fn inquire_registers_the_notes_hook() {
     assert_eq!(notes["matcher"], "Write|Edit|MultiEdit");
     let cmd = notes["hooks"][0]["command"].as_str().unwrap();
     assert!(
-        cmd.contains("ocgen hook inquire-notes") && cmd.contains("ocgen-hooks 13"),
+        cmd.contains("ocgen hook inquire-notes") && cmd.contains("ocgen-hooks 14"),
         "{cmd}"
     );
     assert_eq!(notes["hooks"][0]["shell"], "bash");
@@ -5911,15 +5911,78 @@ fn inquire_registers_the_notes_hook() {
         .join("plugin/nv/hooks/inquire-notes.sh")
         .is_file());
 
-    // Off with /inquire.
+    // Off with /inquire and /recap (and no reading copies: English answers).
     let dir = tempdir().unwrap();
     let mut p = claude_default("nv2");
     p.claude.workflow.inquire = false;
+    p.claude.workflow.recap = false;
     p.scaffold(dir.path(), false).unwrap();
     assert!(!settings_of(dir.path())
         .to_string()
         .contains("inquire-notes"));
     assert!(!dir.path().join(".claude/hooks/inquire-notes.sh").exists());
+}
+
+/// Every local document is kept in both project languages: when they differ,
+/// the end of a turn (and of a subagent's) checks that none is left behind. One
+/// language checks nothing, except /intent's reading copies of its English
+/// files. /recap's reports get a page in every project, but only /inquire (or
+/// reading copies) brings the `note` word.
+#[test]
+fn the_hook_table_registers_the_version_check() {
+    let notes_groups = |s: &serde_json::Value, event: &str| {
+        hook_groups(s, event)
+            .iter()
+            .filter(|g| g.to_string().contains("inquire-notes"))
+            .count()
+    };
+    let scaffold = |prompts: &str, answers: &str, inquire: bool, intent: bool, recap: bool| {
+        let dir = tempdir().unwrap();
+        let mut p = claude_default("vc");
+        p.language = prompts.into();
+        p.response_language = answers.into();
+        p.claude.workflow.inquire = inquire;
+        p.claude.workflow.intent = intent;
+        p.claude.workflow.recap = recap;
+        p.scaffold(dir.path(), false).unwrap();
+        let s = settings_of(dir.path());
+        (dir, s)
+    };
+
+    for (prompts, answers, inquire, intent, recap, checked) in [
+        ("English", "Ukrainian", true, true, true, true),
+        ("English", "Ukrainian", true, false, false, true),
+        ("English", "Ukrainian", false, false, true, true),
+        ("Ukrainian", "English", false, true, false, true),
+        ("Ukrainian", "Ukrainian", false, true, false, true),
+        ("Ukrainian", "Ukrainian", true, false, true, false),
+        ("English", "English", true, true, true, false),
+    ] {
+        let (_dir, s) = scaffold(prompts, answers, inquire, intent, recap);
+        let want = usize::from(checked);
+        let case = format!("{prompts}/{answers} inquire={inquire} intent={intent} recap={recap}");
+        assert_eq!(notes_groups(&s, "Stop"), want, "Stop — {case}");
+        assert_eq!(
+            notes_groups(&s, "SubagentStop"),
+            want,
+            "SubagentStop — {case}"
+        );
+        if checked {
+            let stop = &hook_groups(&s, "Stop")[0];
+            assert!(stop.get("matcher").is_none(), "{stop}");
+            let cmd = stop["hooks"][0]["command"].as_str().unwrap();
+            assert!(cmd.contains("ocgen hook inquire-notes"), "{cmd}");
+        }
+    }
+
+    // /recap alone: its reports get pages, but `note` reaches Claude as typed.
+    let (dir, s) = scaffold("English", "English", false, false, true);
+    assert_eq!(notes_groups(&s, "PostToolUse"), 1);
+    assert_eq!(notes_groups(&s, "UserPromptSubmit"), 0);
+    assert!(dir.path().join(".claude/hooks/inquire-notes.sh").is_file());
+    // /inquire brings the word.
+    let (_dir, s) = scaffold("English", "English", true, false, false);
+    assert_eq!(notes_groups(&s, "UserPromptSubmit"), 1);
 }
 
 #[test]
@@ -5955,11 +6018,14 @@ fn verify_reports_the_notes_view() {
         "{checks:#?}"
     );
 
-    // Skipped without /inquire.
+    // Skipped without /inquire and /recap (English answers: no reading copies).
     let dir = tempdir().unwrap();
     let mut p = claude_default("vn2");
     p.claude.workflow.inquire = false;
+    p.claude.workflow.recap = false;
     p.scaffold(dir.path(), false).unwrap();
     let checks = verify_no_claude(dir.path());
     assert_eq!(status_of(&checks, "notes view"), Status::Skip);
+    // One language and no reading copies: nothing to keep in step.
+    assert_eq!(status_of(&checks, "language versions"), Status::Skip);
 }

@@ -187,6 +187,31 @@ fn ukrainian_prompts_with_english_answers() {
     }
 }
 
+/// Ukrainian prompts with English answers: the intent file stays English, so
+/// /intent still keeps a Ukrainian reading copy of it, and each ledger and
+/// report a Ukrainian version.
+#[test]
+fn ukrainian_prompts_with_english_answers_keep_a_reading_copy() {
+    let files = rendered(&project(Target::ClaudeCode, "Ukrainian", "English", false));
+    let intent = &files[".claude/skills/intent/SKILL.md"];
+    assert!(
+        intent.contains(".claude/intent/view/") && intent.contains("translated into Ukrainian"),
+        "{intent}"
+    );
+    let inquire = &files[".claude/skills/inquire/SKILL.md"];
+    assert!(
+        inquire.contains("`.claude/notes/<topic-slug>.ukrainian.md`"),
+        "{inquire}"
+    );
+    let recap = &files[".claude/skills/recap/SKILL.md"];
+    assert!(
+        recap.contains("`.claude/notes/recap/<YYYY-MM-DD>.ukrainian.md`"),
+        "{recap}"
+    );
+    let settings = &files[".claude/settings.json"];
+    assert!(settings.contains("\"Stop\""), "{settings}");
+}
+
 #[test]
 fn the_answer_line_comes_before_the_adversary_loop() {
     for target in BOTH {

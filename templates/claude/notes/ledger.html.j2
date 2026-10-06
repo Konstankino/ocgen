@@ -24,6 +24,7 @@
       {% if status %}<span class="pill">{{ status }}</span>{% endif %}
       <span class="pill">{{ counts }}</span>
     </div>
+    {% include "langs.html" %}
     <nav class="tabs" role="tablist" data-default="{{ default_tab }}">
       <button type="button" role="tab" data-target="overview">{{ w.overview }}</button>
       {% for p in phases %}<button type="button" role="tab" data-target="{{ p.id }}">{{ p.title }}</button>

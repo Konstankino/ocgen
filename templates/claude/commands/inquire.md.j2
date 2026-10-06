@@ -14,7 +14,9 @@ Each topic has a ledger at `.claude/notes/<topic-slug>.md` — the slug is lower
 and hyphens (`request-flow`); make sure `.claude/notes/` is git-ignored (add the line if it is
 missing). Each ledger has a visual companion, `.claude/notes/<topic-slug>.html`: ocgen renders it
 from the Markdown after every write and shows it in my browser, refreshing the tab that already
-shows it — never write or edit the `.html` yourself. If this session runs inside a worktree (its path is under
+shows it — never write or edit the `.html` yourself.{% if bilingual %} Each ledger is kept in both of our languages:
+`.claude/notes/<topic-slug>.md` in {{ answer_language }} and `.claude/notes/<topic-slug>.{{ second_suffix }}.md`, the same
+ledger in {{ prompt_language }} — one topic, not two: list and match topics by the first.{% endif %} If this session runs inside a worktree (its path is under
 `.claude/worktrees/`), warn me first: notes written here are lost when the worktree is removed, so
 studying — which is read-only — belongs in the main checkout.
 
@@ -86,6 +88,12 @@ previous update is still running, wait for it before starting the next, so they 
 Only if subagents are unavailable, edit it directly and keep the change small. Don't mention the
 update in your reply. The helper writes with the **Write or Edit tool**, never through Bash: the
 write is what triggers ocgen to re-render the HTML page, so a Bash write leaves the page stale.
+{%- if bilingual %}
+Then the helper writes the same update to `.claude/notes/<topic-slug>.{{ second_suffix }}.md`, translated into
+{{ prompt_language }} with the same layout — headings, keys, lens names, evidence labels, block names, code, paths
+and `file:line` stay as they are — also with the Write or Edit tool. ocgen links the two pages, and
+reminds the helper when one falls behind; a fix to one version's wording alone leaves the other.
+{%- endif %}
 
 {% if not english_answers -%}
 Write the ledger's text in {{ answer_language }}, but keep its headings, keys and labels exactly as in the layout below —

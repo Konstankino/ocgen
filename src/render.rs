@@ -900,15 +900,49 @@ impl Project {
         }
     }
 
-    /// Whether the answers are in a language other than English: then /intent
-    /// adds a translated reading copy of each (English) intent file.
-    pub fn writes_reading_copies(&self) -> bool {
-        self.claude.workflow.intent && !self.response_language().eq_ignore_ascii_case("English")
+    /// The languages each local document (an /inquire ledger, a /recap report)
+    /// is kept in: the answer language, then the instruction language when it
+    /// differs. Canonical names.
+    pub fn doc_languages(&self) -> Vec<String> {
+        let answers = canonical_language(self.response_language());
+        let prompts = canonical_language(&self.language);
+        if answers == prompts {
+            vec![answers]
+        } else {
+            vec![answers, prompts]
+        }
     }
 
-    /// Whether the notes hook runs: it renders /inquire ledgers and /intent
-    /// reading copies as pages.
+    /// The languages /intent keeps a reading copy of each intent file in: the
+    /// document languages but English, the intent file's own.
+    pub fn copy_languages(&self) -> Vec<String> {
+        self.doc_languages()
+            .into_iter()
+            .filter(|l| l != "English")
+            .collect()
+    }
+
+    /// Whether either language isn't English: then /intent adds a translated
+    /// reading copy of each (English) intent file.
+    pub fn writes_reading_copies(&self) -> bool {
+        self.claude.workflow.intent && !self.copy_languages().is_empty()
+    }
+
+    /// Whether a local document has another language version to keep in step:
+    /// checked when a turn (or a subagent's) ends.
+    pub fn checks_versions(&self) -> bool {
+        (self.answers_differ() && (self.claude.workflow.inquire || self.claude.workflow.recap))
+            || self.writes_reading_copies()
+    }
+
+    /// Whether the notes hook runs: it renders /inquire ledgers, /recap reports
+    /// and /intent reading copies as pages.
     pub fn renders_notes(&self) -> bool {
+        self.claude.workflow.inquire || self.claude.workflow.recap || self.writes_reading_copies()
+    }
+
+    /// Whether the word `note` or `notes` opens the ledgers.
+    pub fn opens_notes_word(&self) -> bool {
         self.claude.workflow.inquire || self.writes_reading_copies()
     }
 
@@ -1402,9 +1436,25 @@ impl Project {
                 Some((rel, Some(rule))) => (rel, rule),
                 _ => Default::default(),
             };
+            // One reading copy per language but English: the first unsuffixed,
+            // any other as `<name>.<language>.md`.
+            let copies: Vec<Value> = self
+                .copy_languages()
+                .iter()
+                .enumerate()
+                .map(|(i, l)| {
+                    let suffix = if i == 0 {
+                        String::new()
+                    } else {
+                        crate::notes::versions::suffix(l)
+                    };
+                    json!({ "language": l, "suffix": suffix })
+                })
+                .collect();
             let intent_ctx = context! {
                 answer_language => canonical_language(self.response_language()),
                 reading_copies => self.writes_reading_copies(),
+                copies => minijinja::Value::from_serialize(&copies),
                 prefix => i.prefix,
                 digits => i.digits,
                 dir => i.dir.trim_end_matches('/'),
@@ -1470,6 +1520,10 @@ impl Project {
                         language => lang,
                         answer_language => crate::render::canonical_language(self.response_language()),
                         english_answers => self.response_language().eq_ignore_ascii_case("English"),
+                        // Each ledger is kept in the instruction language too.
+                        bilingual => self.answers_differ(),
+                        prompt_language => canonical_language(&self.language),
+                        second_suffix => crate::notes::versions::suffix(&self.language),
                     },
                 )
                 .context("rendering inquire command")?,
@@ -1487,6 +1541,10 @@ impl Project {
                         approval_gate => self.claude.team.enabled && self.claude.team.approval_gate,
                         answer_language => canonical_language(self.response_language()),
                         english_answers => self.response_language().eq_ignore_ascii_case("English"),
+                        // Each report is kept in the instruction language too.
+                        bilingual => self.answers_differ(),
+                        prompt_language => canonical_language(&self.language),
+                        second_suffix => crate::notes::versions::suffix(&self.language),
                         // Where /intent files keep their `Issue:` links.
                         intent_dir => if self.claude.workflow.intent {
                             self.claude.intent.dir.trim_end_matches('/')
@@ -2365,18 +2423,31 @@ impl Project {
             );
         }
         if self.renders_notes() {
-            // Re-render a ledger's or a reading copy's HTML view after each write
-            // and show it (and remember the ledger as the session's).
+            // Re-render a ledger's, a recap report's or a reading copy's HTML view
+            // after each write and show it (and remember the ledger as the
+            // session's); tell Claude which language version is now missing.
             push(
                 "PostToolUse",
                 json!({ "matcher": "Write|Edit|MultiEdit", "hooks": [ command_hook(hook_cmd(prefix, dir, "inquire-notes.sh")) ] }),
             );
+        }
+        if self.opens_notes_word() {
             // `note` or `notes`, sent alone, opens the ledger, or their list with
             // the session's selected: from a hook, outside the Bash sandbox.
             push(
                 "UserPromptSubmit",
                 json!({ "hooks": [ command_hook(hook_cmd(prefix, dir, "inquire-notes.sh")) ] }),
             );
+        }
+        if self.checks_versions() {
+            // A turn — or a subagent, such as /inquire's ledger helper — that
+            // leaves a document's other language version behind is sent back once.
+            for event in ["Stop", "SubagentStop"] {
+                push(
+                    event,
+                    json!({ "hooks": [ command_hook(hook_cmd(prefix, dir, "inquire-notes.sh")) ] }),
+                );
+            }
         }
         if self.claude.workflow.intent {
             // `draft`, sent alone, opens /intent's issue draft in a browser editor,

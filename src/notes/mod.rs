@@ -23,6 +23,7 @@ pub mod intents;
 pub mod ledger;
 pub mod listing;
 pub mod session;
+pub mod versions;
 pub mod viewer;
 pub mod words;
 
@@ -177,47 +178,115 @@ pub fn ledger_slug(md: &Path) -> Result<String> {
 
 /// Render ledger `md` to its sibling `.html` (written atomically, and only when
 /// it changed) and make sure the notes directory stays out of git. If the
-/// ledger changes while rendering, it is rendered again. Anything but a ledger
-/// is refused (see [`ledger_slug`]): the sibling page would overwrite a real
-/// `.html`, and the `*` .gitignore would hide its directory from git.
+/// ledger changes while rendering, it is rendered again. A /recap report or an
+/// /intent reading copy gets a read-only Zen page beside it the same way, and
+/// any language version of these (`<name>.<language>.md`, see [`versions`]) its
+/// own page, linked to the others. Anything else is refused (see
+/// [`ledger_slug`]): the sibling page would overwrite a real `.html`, and the
+/// `*` .gitignore would hide its directory from git.
 pub fn render_file(md: &Path) -> Result<PathBuf> {
-    if let Some(slug) = intent_view_target(&absolute(md).to_string_lossy()) {
-        return render_intent_view(md, &slug);
+    match versions::classify(md) {
+        Some(doc) => render_doc(md, &doc),
+        None => {
+            let slug = ledger_slug(md)?;
+            render_ledger(md, &slug)
+        }
     }
-    let slug = ledger_slug(md)?;
-    render_ledger(md, &slug)
 }
 
-/// Render /intent reading copy `md` (slug `slug`) to its sibling `.html`, in
-/// the project's answer language, linking the English intent file it
-/// translates; the view directory keeps itself out of git.
-fn render_intent_view(md: &Path, slug: &str) -> Result<PathBuf> {
-    let dir = match md.parent() {
+/// Whether [`render_file`] renders `md`: the reason it doesn't, if not.
+pub fn check_renderable(md: &Path) -> Result<()> {
+    match versions::classify(md) {
+        Some(_) => Ok(()),
+        None => ledger_slug(md).map(|_| ()),
+    }
+}
+
+/// Render version `doc` (the file `md`) to its page.
+fn render_doc(md: &Path, doc: &versions::Doc) -> Result<PathBuf> {
+    let name = md
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .context("a document's file name")?;
+    match doc.family.kind {
+        versions::Kind::Ledger => render_ledger(md, name),
+        versions::Kind::Recap => render_static(md, doc, intents::ZenKind::Recap),
+        versions::Kind::Copy => render_static(md, doc, intents::ZenKind::Copy),
+    }
+}
+
+/// Render every version of `doc`'s document there is — each page's switch
+/// shows the others — and return their pages.
+pub fn render_family(doc: &versions::Doc) -> Vec<PathBuf> {
+    versions::status(&doc.family)
+        .into_iter()
+        .filter(|v| v.exists)
+        .filter_map(|v| v.path)
+        .filter(|p| p.parent() == Some(doc.family.dir.as_path()))
+        .filter_map(|p| render_file(&p).ok())
+        .collect()
+}
+
+/// The page of version `v` beside the others in `dir`: `None` for one that
+/// isn't there (a reading copy's intent file).
+fn sibling_page(v: &versions::Version, dir: &Path) -> Option<String> {
+    let path = v.path.as_deref().filter(|p| p.parent() == Some(dir))?;
+    Some(format!("{}.html", path.file_stem()?.to_str()?))
+}
+
+fn parent_or_dot(md: &Path) -> &Path {
+    match md.parent() {
         Some(d) if !d.as_os_str().is_empty() => d,
         _ => Path::new("."),
+    }
+}
+
+/// Render recap report or reading copy `md` (version `doc`) to its sibling
+/// `.html`: a read-only Zen page that works as a file — no live view — with its
+/// switch to the other versions. Its directory keeps itself out of git.
+fn render_static(md: &Path, doc: &versions::Doc, kind: intents::ZenKind) -> Result<PathBuf> {
+    let dir = parent_or_dot(md);
+    let name = md
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .context("a document's file name")?;
+    let out = dir.join(format!("{name}.html"));
+    let f = &doc.family;
+    let w = words::for_language(&doc.language);
+    let switch = versions::Switch::of(f, &doc.language, &|v| sibling_page(v, &f.dir), w);
+    let root = project_of(md).map(|(root, _)| root);
+    let original =
+        f.source.as_ref().map(
+            |s| match root.as_deref().and_then(|r| s.strip_prefix(r).ok()) {
+                Some(rel) => rel.to_string_lossy().replace('\\', "/"),
+                None => s.to_string_lossy().into_owned(),
+            },
+        );
+    let source = format!(
+        "{}/{name}.md",
+        match kind {
+            intents::ZenKind::Recap => versions::Kind::Recap.dir(),
+            _ => versions::Kind::Copy.dir(),
+        }
+    );
+    let zen = intents::Zen {
+        kind,
+        topic: name,
+        list: None,
+        live: false,
+        switch: &switch,
+        original: original.as_deref(),
     };
-    let out = dir.join(format!("{slug}.html"));
-    let project = project_of(md);
-    let language = project
-        .as_ref()
-        .map_or("English", |(_, p)| p.response_language())
-        .to_string();
-    let original = project
-        .as_ref()
-        .and_then(|(root, p)| original_intent(root, &p.claude.intent.dir, slug));
-    let source = format!(".claude/intent/view/{slug}.md");
     for _ in 0..3 {
         let src = fs::read_to_string(md).with_context(|| format!("reading {}", md.display()))?;
-        let page = html::render_intent(&src, &source, original.as_deref(), &language)?;
+        let page =
+            intents::page_with(&src, &source, &rev(src.as_bytes()), "", &doc.language, &zen)?;
         write_if_changed(&out, page.as_bytes())?;
         if fs::read_to_string(md).ok().as_deref() == Some(src.as_str()) {
             break;
         }
     }
-    let ignore = dir.join(".gitignore");
-    if !ignore.exists() {
-        let _ = fs::write(ignore, "*\n");
-    }
+    session::ignore_self(dir);
     Ok(out)
 }
 
@@ -235,20 +304,37 @@ fn original_intent(root: &Path, dir: &str, slug: &str) -> Option<String> {
         .map(|n| format!("{dir}/{n}"))
 }
 
-/// [`render_file`] for ledger `md` of slug `slug`, already known to be one: the
-/// viewer serves the notes directory it checked at start by its canonical path,
-/// which need not end in `.claude/notes` (a linked `.claude`).
-fn render_ledger(md: &Path, slug: &str) -> Result<PathBuf> {
-    let dir = match md.parent() {
-        Some(d) if !d.as_os_str().is_empty() => d,
-        _ => Path::new("."),
+/// [`render_file`] for ledger version `md` named `name` (`<slug>` or
+/// `<slug>.<language>`), already known to be one: the viewer serves the notes
+/// directory it checked at start by its canonical path, which need not end in
+/// `.claude/notes` (a linked `.claude`).
+fn render_ledger(md: &Path, name: &str) -> Result<PathBuf> {
+    let dir = parent_or_dot(md);
+    let out = dir.join(format!("{name}.html"));
+    let project = project_of(md);
+    let doc = versions::doc_in(
+        versions::Kind::Ledger,
+        dir,
+        &format!("{name}.md"),
+        project.as_ref().map(|(r, p)| (r.as_path(), p)),
+    );
+    let (language, switch) = match &doc {
+        Some(d) => {
+            let w = words::for_language(&d.language);
+            let switch = versions::Switch::of(&d.family, &d.language, &|v| sibling_page(v, dir), w);
+            (d.language.clone(), switch)
+        }
+        // `flow.backup` names no language: not a version, not a ledger.
+        None if name.contains('.') => bail!(
+            "{} has no HTML view — name ledgers with a lowercase-hyphen slug (e.g. request-flow.md)",
+            md.display()
+        ),
+        None => (answer_language(md), versions::Switch::default()),
     };
-    let out = dir.join(format!("{slug}.html"));
-    let language = answer_language(md);
     for _ in 0..3 {
         let src = fs::read_to_string(md).with_context(|| format!("reading {}", md.display()))?;
-        let source = format!(".claude/notes/{slug}.md");
-        let page = html::render_page_in(&ledger::parse(&src), Some(&source), &language)?;
+        let source = format!(".claude/notes/{name}.md");
+        let page = html::render_version(&ledger::parse(&src), Some(&source), &language, &switch)?;
         write_if_changed(&out, page.as_bytes())?;
         if fs::read_to_string(md).ok().as_deref() == Some(src.as_str()) {
             break;
@@ -321,7 +407,7 @@ pub fn show(md: &Path, env: &HashMap<String, String>, explicit: bool) -> Result<
     let Some(slug) = md
         .file_stem()
         .and_then(|s| s.to_str())
-        .filter(|s| is_slug(s))
+        .filter(|s| versions::split(s, is_slug).is_some())
     else {
         bail!(
             "{} is not a ledger name (lowercase-hyphen slug)",
@@ -359,6 +445,35 @@ fn open_once(
     browser::open(&page.to_string_lossy(), env).context("opening the browser")?;
     let _ = fs::write(marker, "");
     Ok(Shown::OpenedFile(page))
+}
+
+/// Refresh the open tabs of pages `names` of the live viewer for notes
+/// directory `dir`, if one runs — never opening one.
+pub fn refresh_pages(dir: &Path, names: &[String], env: &HashMap<String, String>) {
+    if names.is_empty() || !browser::decide(env, browser::this_os(), false) {
+        return;
+    }
+    if let Some(info) = viewer::read_info(dir) {
+        for n in names {
+            viewer::refresh(&info, n);
+        }
+    }
+}
+
+/// Show the static page of /recap report or reading copy `md` (any language
+/// version): the file itself, opened once — a file page can't refresh itself.
+pub fn show_file_page(md: &Path, env: &HashMap<String, String>, explicit: bool) -> Result<Shown> {
+    if !browser::decide(env, browser::this_os(), explicit) {
+        return Ok(Shown::Off);
+    }
+    let Some(name) = md
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .filter(|s| versions::split(s, is_slug).is_some())
+    else {
+        bail!("{} has no page", md.display());
+    };
+    open_once(md.parent().unwrap_or(Path::new(".")), name, env, explicit)
 }
 
 /// Show the page of /intent reading copy `md`: the file itself, opened once
@@ -431,6 +546,7 @@ pub fn list_page(
         listing::Row {
             summary: l.topic.replace('`', ""),
             tags,
+            page: None,
         }
     };
     listing::page(
@@ -486,14 +602,42 @@ pub fn slugify(s: &str) -> String {
     out.trim_end_matches('-').to_string()
 }
 
-/// The ledgers in `dir`, most recently changed first.
+/// The ledgers in `dir`, most recently changed first: each topic once, by its
+/// unsuffixed file — or, when it has none (its languages changed), by its
+/// first other language version.
 pub fn ledgers(dir: &Path) -> Vec<PathBuf> {
-    let mut found: Vec<(std::time::SystemTime, PathBuf)> = fs::read_dir(dir)
+    let mut topics: std::collections::BTreeMap<String, PathBuf> = std::collections::BTreeMap::new();
+    let mut files: Vec<PathBuf> = fs::read_dir(dir)
         .into_iter()
         .flatten()
         .flatten()
         .map(|e| e.path())
-        .filter(|p| matches!(ledger_target(&p.to_string_lossy()), Target::Ledger { .. }))
+        .collect();
+    files.sort();
+    let project = project_of(dir);
+    let language = |s: &str| versions::names_language(s, project.as_ref().map(|(_, p)| p));
+    for p in files {
+        let Some(stem) = p
+            .extension()
+            .filter(|e| *e == "md")
+            .and(p.file_stem())
+            .and_then(|s| s.to_str())
+            .map(str::to_string)
+        else {
+            continue;
+        };
+        match versions::split(&stem, is_slug) {
+            Some((base, None)) => {
+                topics.insert(base.to_string(), p);
+            }
+            Some((base, Some(s))) if language(s) => {
+                topics.entry(base.to_string()).or_insert(p);
+            }
+            _ => {}
+        }
+    }
+    let mut found: Vec<(std::time::SystemTime, PathBuf)> = topics
+        .into_values()
         .map(|p| {
             let t = fs::metadata(&p)
                 .and_then(|m| m.modified())

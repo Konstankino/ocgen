@@ -260,6 +260,90 @@ fn the_intent_page_is_read_only_and_runs_nothing_from_the_file() {
     // The page's one script carries the nonce.
     assert_eq!(page.matches("<script").count(), 1);
     assert!(page.contains(r#"<script nonce="n0nce">"#));
+    // Its Markdown as written, a click away — as text, never as markup.
+    assert!(
+        page.contains(r#"<button type="button" id="view-source""#),
+        "{page}"
+    );
+    let source = &page[page
+        .find(r#"<pre class="source" id="markdown" hidden><code>"#)
+        .unwrap()..];
+    assert!(
+        source.contains("&lt;script&gt;alert(1)&lt;/script&gt;")
+            && source.contains("## Context\nThe cache goes cold\non every deploy."),
+        "{source}"
+    );
+}
+
+/// With answers in another language than English, `adr` opens an intent
+/// file's reading copy in that language, served beside the intent file: each
+/// page links the other, and the list leads to the copy.
+#[test]
+fn adr_opens_the_answer_language_copy_with_a_switch() {
+    let p = Project::answering("ADR", "Ukrainian");
+    fs::write(
+        p.adr().join("ADR-0001-cache.md"),
+        intent("ADR-0001", "Cache"),
+    )
+    .unwrap();
+    // No copy yet: the intent file opens.
+    p.say("intent-draft", "s-1", "adr");
+    let info = p.intents_info();
+    assert_eq!(p.opened(), [info.url("ADR-0001-cache")]);
+
+    let view = p.dir.path().join(".claude/intent/view");
+    fs::create_dir_all(&view).unwrap();
+    fs::write(
+        view.join("adr-0001-cache.md"),
+        "# ADR-0001: Кеш\n\nStatus: Proposed\n\n## Контекст\nКеш холоне.\n",
+    )
+    .unwrap();
+    let out = p.ocgen_adr(&[]);
+    assert!(out.status.success(), "{out:?}");
+    let copy = info.url("ADR-0001-cache.ukrainian");
+    assert_eq!(p.opened().last(), Some(&copy), "{:?}", p.opened());
+
+    let t = &info.token;
+    let (code, _, page) = http(
+        &info,
+        "GET",
+        &format!("/{t}/ADR-0001-cache.ukrainian.html"),
+        &[],
+    );
+    assert_eq!(code, 200, "{page}");
+    for must in [
+        r#"<html lang="uk" data-palette="black">"#,
+        "/intent · Переклад для читання",
+        "<h2>Контекст</h2>",
+        r#"<a class="lang" href="ADR-0001-cache.html" hreflang="en" lang="en">English</a>"#,
+        r#"<a class="all" href="_intents/ADR-0001-cache">"#,
+        "<b>Оригінал англійською:</b> <code>docs/adr/ADR-0001-cache.md</code>",
+        "EventSource",
+    ] {
+        assert!(page.contains(must), "missing {must:?} in:\n{page}");
+    }
+    let (_, _, page) = http(&info, "GET", &format!("/{t}/ADR-0001-cache.html"), &[]);
+    assert!(
+        page.contains(r#"href="ADR-0001-cache.ukrainian.html" hreflang="uk""#),
+        "{page}"
+    );
+    let (_, _, list) = http(&info, "GET", &format!("/{t}/_intents"), &[]);
+    assert!(
+        list.contains(r#"href="./ADR-0001-cache.ukrainian.html""#),
+        "{list}"
+    );
+    // A language the project doesn't keep, or a name that can't be one, isn't served.
+    for path in [
+        "ADR-0001-cache.polish.html",
+        "ADR-0001-cache.Ukrainian.html",
+        "ADR-0001-cache..html",
+    ] {
+        assert_eq!(
+            http(&info, "GET", &format!("/{t}/{path}"), &[]).0,
+            404,
+            "{path}"
+        );
+    }
 }
 
 /// `n` intent files, ADR-0001 to ADR-00nn, in `adr`.
@@ -351,8 +435,14 @@ struct Project {
 impl Project {
     /// A generated project with /intent and /inquire on, and intent prefix `prefix`.
     fn new(prefix: &str) -> Self {
+        Self::answering(prefix, "")
+    }
+
+    /// [`Project::new`], answering in `answers`.
+    fn answering(prefix: &str, answers: &str) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let mut p = State::from_manifest(&Manifest::load().unwrap(), "English");
+        p.response_language = answers.into();
         p.target = Target::ClaudeCode;
         p.project_name = "words".into();
         p.providers.clear();
@@ -1055,5 +1145,5 @@ fn the_notes_word_is_registered_with_the_ledgers() {
     assert!(on("UserPromptSubmit", "inquire-notes"));
     assert!(on("UserPromptSubmit", "intent-draft"));
     // No new hook: projects generated before get `adr` with the new binary.
-    assert_eq!(ocgen::hooks::PROTOCOL, "ocgen-hooks 13");
+    assert_eq!(ocgen::hooks::PROTOCOL, "ocgen-hooks 14");
 }

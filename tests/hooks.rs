@@ -943,9 +943,57 @@ fn inquire_notes_parity() {
                 r#"{"hook_event_name":"UserPromptSubmit","session_id":"s-1","prompt":""}"#,
                 none,
             ),
+            // A turn's end, with nothing owed (one language): let go, silently.
+            step(
+                r#"{"hook_event_name":"Stop","session_id":"s-1","stop_hook_active":false}"#,
+                write_ledger,
+            ),
+            step(
+                r#"{"hook_event_name":"SubagentStop","session_id":"s-1","agent_id":"a1","stop_hook_active":false}"#,
+                none,
+            ),
             step("not json", none),
         ],
     );
+}
+
+/// A document's other language version is asked for through the binary only:
+/// the script stays a harmless no-op, after a write and at a turn's end.
+#[test]
+fn the_version_check_reaches_claude_through_the_binary_only() {
+    let mut env: HashMap<String, String> = NO_BROWSER
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+    let dir = tempfile::tempdir().unwrap();
+    let mut p = Project::from_manifest(&Manifest::load().unwrap(), "English");
+    p.target = Target::ClaudeCode;
+    p.project_name = "bi".into();
+    p.providers.clear();
+    p.response_language = "Ukrainian".into();
+    p.agents = agent::claude_default_pipeline("English").unwrap();
+    p.scaffold(dir.path(), false).unwrap();
+    env.insert(
+        "CLAUDE_PROJECT_DIR".into(),
+        ocgen::paths::for_shell(dir.path()),
+    );
+    write_ledger(dir.path());
+    let wrote = serde_json::json!({
+        "hook_event_name": "PostToolUse", "session_id": "s-1", "tool_name": "Write",
+        "tool_input": { "file_path": ocgen::paths::for_shell(&dir.path().join(".claude/notes/flow.md")) }
+    })
+    .to_string();
+    let stop = r#"{"hook_event_name":"Stop","session_id":"s-1","stop_hook_active":false}"#;
+    for (payload, says) in [
+        (wrote.as_str(), "additionalContext"),
+        (stop, "\"decision\":\"block\""),
+    ] {
+        let (code, out, _) = sh(dir.path(), "inquire-notes", &env, payload);
+        assert_eq!((code, out.as_str()), (0, ""), "{payload}");
+        let o = ocgen::hooks::run("inquire-notes", payload, &env);
+        assert_eq!(o.code, 0, "{o:?}");
+        assert!(o.stdout.contains(says), "{payload}: {o:?}");
+    }
 }
 
 const INTENT_FILE: &str = "# ADR-0001: Cache\n\nStatus: Proposed\n\n## Context\nCold.\n";
@@ -1034,7 +1082,7 @@ fn inquire_notes_renders_the_view_and_the_script_is_a_no_op() {
     assert_eq!(o.code, 0);
     assert!(o.stderr.starts_with("inquire-notes:"), "{o:?}");
     assert!(ocgen::hooks::NAMES.contains(&"inquire-notes"));
-    assert_eq!(ocgen::hooks::PROTOCOL, "ocgen-hooks 13");
+    assert_eq!(ocgen::hooks::PROTOCOL, "ocgen-hooks 14");
 }
 
 // ---------------------------------------------------------- intent-draft --

@@ -12,12 +12,13 @@ use minijinja::{AutoEscape, Environment, Value};
 use regex::Regex;
 
 use super::ledger::{Entry, Evidence, Ledger};
+use super::versions::Switch;
 use super::words::{self, Words};
 use crate::templates;
 
 pub const TEMPLATE: &str = "claude/notes/ledger.html.j2";
-/// The /intent reading copy's page.
-pub const INTENT_TEMPLATE: &str = "claude/notes/intent.html.j2";
+/// The language switch both the ledger page and the read-only Zen page include.
+pub const LANGS: &str = "claude/notes/langs.html.j2";
 /// The style both pages share.
 pub const STYLE: &str = "claude/notes/page.css";
 
@@ -389,105 +390,6 @@ fn entry_value(e: &Entry, w: &'static Words) -> Value {
     Value::from(m)
 }
 
-/// The page for an /intent reading copy (`md`, already translated): its `# `
-/// title, its leading `Key: value` lines as pills, anything else before the
-/// first `## ` heading, then one card per `## ` section. `source` is the copy's
-/// path and `original` the English intent file it translates.
-pub fn render_intent(
-    md: &str,
-    source: &str,
-    original: Option<&str>,
-    language: &str,
-) -> Result<String> {
-    let w = words::for_language(language);
-    let mut env = Environment::new();
-    env.set_auto_escape_callback(|_| AutoEscape::Html);
-    env.add_template_owned("page.css", templates::load(STYLE)?)
-        .context("parsing the notes page style")?;
-    env.add_template_owned("intent.html", templates::load(INTENT_TEMPLATE)?)
-        .context("parsing the intent HTML template")?;
-
-    let field = Regex::new(r"^([^:`|#>*\-][^:`|]{0,30}):\s+(\S.*)$").unwrap();
-    let mut title = String::new();
-    let mut fields: Vec<Value> = Vec::new();
-    let mut preface: Vec<String> = Vec::new();
-    let mut sections: Vec<(String, Vec<String>)> = Vec::new();
-    let (mut in_fence, mut in_comment) = (false, false);
-    for line in md.lines() {
-        let t = line.trim();
-        // A template's guidance comment is not part of the copy.
-        if !in_fence && (in_comment || t.starts_with("<!--")) {
-            in_comment = !t.contains("-->");
-            continue;
-        }
-        if t.starts_with("```") {
-            in_fence = !in_fence;
-        }
-        if !in_fence {
-            if title.is_empty() && sections.is_empty() {
-                if let Some(h) = t.strip_prefix("# ") {
-                    title = h.trim().to_string();
-                    continue;
-                }
-            }
-            if let Some(h) = t.strip_prefix("## ") {
-                sections.push((h.trim().to_string(), Vec::new()));
-                continue;
-            }
-        }
-        match sections.last_mut() {
-            Some((_, body)) => body.push(line.to_string()),
-            None => match field
-                .captures(t)
-                .filter(|_| preface.iter().all(|l| l.trim().is_empty()))
-            {
-                Some(c) => {
-                    let mut m: BTreeMap<&str, Value> = BTreeMap::new();
-                    m.insert("key", Value::from(c[1].trim().to_string()));
-                    m.insert("value", safe(inline(&c[2])));
-                    fields.push(Value::from(m));
-                }
-                None => preface.push(line.to_string()),
-            },
-        }
-    }
-    if title.is_empty() {
-        title = source
-            .rsplit('/')
-            .next()
-            .unwrap_or(source)
-            .trim_end_matches(".md")
-            .to_string();
-    }
-    let sections: Vec<Value> = sections
-        .iter()
-        .map(|(t, body)| {
-            let mut m: BTreeMap<&str, Value> = BTreeMap::new();
-            m.insert("title", safe(inline(t)));
-            m.insert("html", safe(blocks_in(body, w)));
-            Value::from(m)
-        })
-        .collect();
-    let ctx = minijinja::context! {
-        w => words_value(w),
-        title => title.replace('`', ""),
-        title_html => safe(inline(&title)),
-        fields => fields,
-        preface => safe(blocks_in(&preface, w)),
-        sections => sections,
-        original => safe(escape(original.unwrap_or(""))),
-        source => safe(escape(source)),
-    };
-    let mut page = env
-        .get_template("intent.html")?
-        .render(ctx)
-        .context("rendering the intent HTML")?;
-    if !page.ends_with('\n') {
-        page.push('\n');
-    }
-    Ok(page)
-}
-
 /// The page for `ledger`.
 pub fn render(ledger: &Ledger) -> Result<String> {
     render_page(ledger, None)
@@ -525,8 +427,7 @@ fn words_value(w: &'static Words) -> Value {
         ("hint", w.hint),
         ("no_answers", w.no_answers),
         ("footer", w.footer),
-        ("intent_original", w.intent_original),
-        ("intent_footer", w.intent_footer),
+        ("languages", w.versions.languages),
     ] {
         m.insert(k, Value::from(v));
     }
@@ -538,12 +439,25 @@ fn words_value(w: &'static Words) -> Value {
 /// [`render_page`] in an answer language (e.g. `Ukrainian`): the page's own
 /// words, the counts and the ledger's fixed keys are shown in it.
 pub fn render_page_in(ledger: &Ledger, source: Option<&str>, language: &str) -> Result<String> {
+    render_version(ledger, source, language, &Switch::default())
+}
+
+/// [`render_page_in`] for one language version of a ledger, with its switch to
+/// the others.
+pub fn render_version(
+    ledger: &Ledger,
+    source: Option<&str>,
+    language: &str,
+    switch: &Switch,
+) -> Result<String> {
     let w = words::for_language(language);
     let src = templates::load(TEMPLATE)?;
     let mut env = Environment::new();
     env.set_auto_escape_callback(|_| AutoEscape::Html);
     env.add_template_owned("page.css", templates::load(STYLE)?)
         .context("parsing the notes page style")?;
+    env.add_template_owned("langs.html", templates::load(LANGS)?)
+        .context("parsing the language switch template")?;
     env.add_template_owned("ledger.html", src)
         .context("parsing the ledger HTML template")?;
     let tmpl = env.get_template("ledger.html")?;
@@ -641,6 +555,8 @@ pub fn render_page_in(ledger: &Ledger, source: Option<&str>, language: &str) -> 
         count_stale => stale,
         count_open => l.open_questions.len(),
         counts => w.counts(l.entries.len(), verified, inferred, stale),
+        versions => switch.versions.clone(),
+        notice => switch.notice.clone(),
         w => words_value(w),
     };
     let mut page = tmpl.render(ctx).context("rendering the ledger HTML")?;

@@ -40,7 +40,7 @@ use super::is_slug;
 
 /// Bump when the server's HTTP contract changes; a hook never talks to a server
 /// of another protocol (it asks it to quit and starts its own).
-pub const VIEWER_PROTOCOL: u32 = 3;
+pub const VIEWER_PROTOCOL: u32 = 4;
 /// The server's address card, in the notes directory.
 pub const INFO_FILE: &str = ".viewer.json";
 const APP: &str = "ocgen-notes";
@@ -172,6 +172,16 @@ pub fn ping(info: &Info, root: &str) -> Ping {
 /// one was opened (an explicit `ocgen notes open`).
 pub fn reload(info: &Info, slug: &str, force: bool) -> Option<Action> {
     ask_reload(info, &format!("topic={slug}"), force)
+}
+
+/// Reload the open tabs of page `topic`, if any: never opens one, so a page
+/// that changed beside another — a document's other language version — only
+/// refreshes. Returns how many tabs were told.
+pub fn refresh(info: &Info, topic: &str) -> usize {
+    match ask_reload(info, &format!("topic={topic}&soft=1"), false) {
+        Some(Action::Reloaded(n)) => n,
+        _ => 0,
+    }
 }
 
 /// Move the list's open tabs to draft `selected` (or the list's first page), or
@@ -366,6 +376,21 @@ struct State {
     left: HashMap<String, Instant>,
     last_activity: Instant,
     next_id: u64,
+}
+
+/// A page of the intent files' server: an intent file or a reading copy.
+struct IntentPage {
+    /// The intent file's name.
+    stem: String,
+    /// The language shown.
+    language: String,
+    /// The file, and its path as the page names it.
+    path: PathBuf,
+    source: String,
+    /// A copy's intent file, as the page names it.
+    original: Option<String>,
+    /// The intent file's reading copies.
+    family: Option<super::versions::Family>,
 }
 
 struct Server {
@@ -762,13 +787,13 @@ impl Server {
         self.touch();
         let q = query(q);
         let list = self.list();
-        // A page's name: a ledger's slug, or a draft's or intent file's (longer) name.
-        let named = |t: &str| {
-            if self.kind == Kind::Notes {
-                is_slug(t)
-            } else {
-                super::draft::is_name(t)
-            }
+        // A page's name: a ledger's slug, or a draft's or intent file's (longer)
+        // name — a ledger or an intent file in another language with its
+        // language after a dot (`flow.english`, `ADR-0007-x.ukrainian`).
+        let named = |t: &str| match self.kind {
+            Kind::Notes => super::versions::split(t, is_slug).is_some(),
+            Kind::Intents => super::versions::split(t, super::draft::is_name).is_some(),
+            Kind::Drafts => super::draft::is_name(t),
         };
         let topic = q.get("topic").copied().filter(|t| named(t) || *t == list);
         let selected = q.get("select").copied().filter(|t| named(t));
@@ -778,6 +803,10 @@ impl Server {
                 &json!({ "app": APP, "protocol": VIEWER_PROTOCOL, "root": self.root }),
             ),
             ("POST", "reload") => match topic {
+                Some(t) if q.get("soft") == Some(&"1") => {
+                    let n = self.refresh(t);
+                    json_reply(&mut s, &json!({ "action": "reloaded", "tabs": n }));
+                }
                 Some(t) => {
                     let action = self.decide(t, q.get("force") == Some(&"1"), selected);
                     let v = match action {
@@ -1005,35 +1034,110 @@ impl Server {
         Some((root, s))
     }
 
-    /// The intent file `slug` names: a regular file in the project's intent
-    /// directory, named like an intent file.
-    fn intent_file(&self, slug: &str) -> Option<PathBuf> {
-        let (root, s) = self.intents()?;
-        let rel = format!("{}/{slug}.md", s.dir.trim_matches('/'));
-        super::intents::target(&s, &rel)?;
-        let p = root.join(&rel);
-        fs::symlink_metadata(&p)
-            .is_ok_and(|m| m.file_type().is_file())
-            .then_some(p)
+    /// Page `name` of the intent files' server: an intent file (`<stem>`) or
+    /// one of its reading copies (`<stem>.<language>`), with the copies'
+    /// family when its name can name them.
+    fn intent_version(&self, name: &str) -> Option<IntentPage> {
+        use super::versions;
+        let (stem, lang) = versions::split(name, super::draft::is_name)?;
+        // The state is read once: the watch asks for this every 200 ms a tab is open.
+        let root = super::intents::project_of_viewer(&self.dir)?;
+        let project = crate::render::Project::load_state(&root).ok();
+        let set = project
+            .as_ref()
+            .map(|p| p.claude.intent.clone())
+            .unwrap_or_default();
+        let rel = format!("{}/{stem}.md", set.dir.trim_matches('/'));
+        super::intents::target(&set, &rel)?;
+        let adr = root.join(&rel);
+        if !fs::symlink_metadata(&adr).is_ok_and(|m| m.file_type().is_file()) {
+            return None;
+        }
+        let family = project
+            .as_ref()
+            .and_then(|p| super::intents::copy_family(&root, p, stem));
+        let source = |p: &Path| {
+            p.strip_prefix(&root)
+                .map(|r| r.to_string_lossy().replace('\\', "/"))
+                .unwrap_or_default()
+        };
+        let original = rel;
+        let Some(lang) = lang else {
+            return Some(IntentPage {
+                stem: stem.to_string(),
+                language: "English".into(),
+                source: original,
+                original: None,
+                path: adr,
+                family,
+            });
+        };
+        let f = family.as_ref()?;
+        let language = f
+            .local
+            .iter()
+            .find(|l| versions::suffix(l) == lang)?
+            .clone();
+        let path = f
+            .path(&language)
+            .filter(|p| fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_file()))?;
+        Some(IntentPage {
+            stem: stem.to_string(),
+            source: source(&path),
+            original: Some(original),
+            language,
+            path,
+            family,
+        })
     }
 
-    /// The read-only page for intent file `slug`, rendered fresh from the file.
-    fn intent_page(&self, mut s: TcpStream, slug: &str) {
-        let (Some(path), Some((_, set))) = (self.intent_file(slug), self.intents()) else {
+    /// The read-only page for intent file or reading copy `name`, rendered
+    /// fresh from the file, with its switch to the other languages.
+    fn intent_page(&self, mut s: TcpStream, name: &str) {
+        use super::intents::{Zen, ZenKind};
+        use super::versions::{suffix, Switch};
+        let Some(p) = self.intent_version(name) else {
             return plain(&mut s, 404, "not found");
         };
-        let Ok(text) = fs::read_to_string(&path) else {
+        let Ok(text) = fs::read_to_string(&p.path) else {
             return plain(&mut s, 404, "not found");
         };
         let nonce = random_token();
-        let source = format!("{}/{slug}.md", set.dir.trim_matches('/'));
-        let language = super::answer_language(&path);
-        match super::intents::page(
+        let copy = p.original.is_some();
+        // An intent file's page speaks the answer language around its text.
+        let language = if copy {
+            p.language.clone()
+        } else {
+            super::answer_language(&p.path)
+        };
+        let w = super::words::for_language(&language);
+        let stem = p.stem.as_str();
+        let href = |v: &super::versions::Version| {
+            Some(match v.language.as_str() {
+                "English" => format!("{stem}.html"),
+                l => format!("{stem}.{}.html", suffix(l)),
+            })
+        };
+        let switch = p
+            .family
+            .as_ref()
+            .map(|f| Switch::of(f, &p.language, &href, w))
+            .unwrap_or_default();
+        let z = Zen {
+            kind: if copy { ZenKind::Copy } else { ZenKind::Intent },
+            topic: name,
+            list: Some((super::intents::LIST, stem)),
+            live: true,
+            switch: &switch,
+            original: p.original.as_deref(),
+        };
+        match super::intents::page_with(
             &text,
-            &source,
-            &super::rev(text.as_bytes()),
+            &p.source,
+            &self.topic_rev(name),
             &nonce,
             &language,
+            &z,
         ) {
             Ok(page) => respond(
                 &mut s,
@@ -1089,10 +1193,18 @@ impl Server {
                     super::listing::rev(&super::intents::files(&dir, &s))
                 })
                 .unwrap_or_default(),
+            // A copy appearing, or falling behind, changes the page too.
             Kind::Intents => self
-                .intent_file(topic)
-                .and_then(|p| fs::read(p).ok())
-                .map(|b| super::rev(&b))
+                .intent_version(topic)
+                .map(|p| {
+                    let rev = fs::read(&p.path)
+                        .map(|b| super::rev(&b))
+                        .unwrap_or_default();
+                    match p.family.filter(|f| f.bilingual()) {
+                        Some(f) => format!("{rev}-{}", super::versions::fingerprint(&f)),
+                        None => rev,
+                    }
+                })
                 .unwrap_or_default(),
         }
     }
@@ -1162,6 +1274,18 @@ impl Server {
         }
         st.left.insert(topic.to_string(), Instant::now());
         st.last_activity = Instant::now();
+    }
+
+    /// Reload `topic`'s open tabs, if any, and never open one.
+    fn refresh(&self, topic: &str) -> usize {
+        let msg = if topic == self.list() {
+            format!("event: show\ndata: {}\n\n", list_path(topic, None))
+        } else {
+            self.change_event(topic)
+        };
+        let mut st = self.lock();
+        st.last_activity = Instant::now();
+        Self::tell(&mut st, topic, &msg)
     }
 
     /// Reload `topic`'s tabs, or say whether a new one should be opened —

@@ -24,6 +24,7 @@ use regex::Regex;
 use super::draft::{self, is_name};
 use super::html::escape;
 use super::listing::{self, Row};
+use super::versions::Switch;
 use super::{session, words, Shown};
 use crate::claude::IntentSettings;
 use crate::templates;
@@ -284,9 +285,60 @@ fn field_html(value: &str) -> String {
     }
 }
 
+/// What a read-only Zen page shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ZenKind {
+    /// An intent file.
+    Intent,
+    /// An /intent reading copy: an intent file translated.
+    Copy,
+    /// A /recap report.
+    Recap,
+}
+
+/// How a read-only Zen page is shown.
+pub struct Zen<'a> {
+    pub kind: ZenKind,
+    /// The page's name in the viewer: its tabs' topic.
+    pub topic: &'a str,
+    /// The list the page links back to, and its entry there — on the viewer's
+    /// pages only.
+    pub list: Option<(&'a str, &'a str)>,
+    /// Served by the viewer, so it follows the file; a static page doesn't.
+    pub live: bool,
+    pub switch: &'a Switch,
+    /// A reading copy's intent file, shown with the fields.
+    pub original: Option<&'a str>,
+}
+
 /// The read-only page for intent file text `md` (revision `rev`, at `source`),
 /// whose one script carries `nonce`; its own words in `language`.
 pub fn page(md: &str, source: &str, rev: &str, nonce: &str, language: &str) -> Result<String> {
+    let name = source.rsplit('/').next().unwrap_or(source);
+    let slug = name.trim_end_matches(".md");
+    let z = Zen {
+        kind: ZenKind::Intent,
+        topic: slug,
+        list: Some((LIST, slug)),
+        live: true,
+        switch: &Switch::default(),
+        original: None,
+    };
+    page_with(md, source, rev, nonce, language, &z)
+}
+
+/// The read-only Zen page for Markdown `md` (revision `rev`, at `source`) —
+/// an intent file, a reading copy or a recap report, as `z` says — whose one
+/// script carries `nonce`; its own words in `language`. The page shows the file
+/// rendered the way GitHub would, or its Markdown as written.
+pub fn page_with(
+    md: &str,
+    source: &str,
+    rev: &str,
+    nonce: &str,
+    language: &str,
+    z: &Zen,
+) -> Result<String> {
     let w = words::for_language(language);
     let mut env = Environment::new();
     env.set_auto_escape_callback(|_| AutoEscape::Html);
@@ -294,33 +346,69 @@ pub fn page(md: &str, source: &str, rev: &str, nonce: &str, language: &str) -> R
         .context("parsing the notes page style")?;
     env.add_template_owned("palette.css", templates::load(draft::PALETTE)?)
         .context("parsing the pages' palettes")?;
+    env.add_template_owned("langs.html", templates::load(super::html::LANGS)?)
+        .context("parsing the language switch template")?;
     env.add_template_owned("adr.html", templates::load(TEMPLATE)?)
         .context("parsing the intent file template")?;
     let name = source.rsplit('/').next().unwrap_or(source).to_string();
-    let slug = name.trim_end_matches(".md");
     let p = parts(md);
     // Escaped here: minijinja's own escaping also turns `/` into `&#x2f;`.
     let safe = |s: &str| Value::from_safe_string(escape(s));
-    let fields: Vec<Value> = p
+    let field = |k: &str, v: Value| {
+        let mut m: BTreeMap<&str, Value> = BTreeMap::new();
+        m.insert("key", safe(k));
+        m.insert("value", v);
+        Value::from(m)
+    };
+    let mut fields: Vec<Value> = p
         .fields
         .iter()
-        .map(|(k, v)| {
-            let mut m: BTreeMap<&str, Value> = BTreeMap::new();
-            m.insert("key", safe(k));
-            m.insert("value", Value::from_safe_string(field_html(v)));
-            Value::from(m)
-        })
+        .map(|(k, v)| field(k, Value::from_safe_string(field_html(v))))
         .collect();
+    if let Some(o) = z.original {
+        fields.push(field(
+            w.versions.original.trim_end_matches(':'),
+            Value::from_safe_string(format!("<code>{}</code>", escape(o))),
+        ));
+    }
+    let (kind_title, footer, generator) = match z.kind {
+        ZenKind::Intent => (
+            w.docs.intent_title,
+            w.docs.intent_footer,
+            "ocgen — an /intent file, read-only; edit the .md file",
+        ),
+        ZenKind::Copy => (
+            w.versions.copy_title,
+            w.versions.copy_footer,
+            "ocgen — an /intent reading copy, read-only; edit the .md file",
+        ),
+        ZenKind::Recap => (
+            w.versions.recap_title,
+            w.versions.recap_footer,
+            "ocgen — a /recap report, read-only; edit the .md file",
+        ),
+    };
+    let (list, base) = z.list.unwrap_or(("", ""));
     let ctx = minijinja::context! {
         w => listing::words_value(w),
-        title => safe(p.title.as_deref().unwrap_or(slug)),
+        title => safe(p.title.as_deref().unwrap_or(name.trim_end_matches(".md"))),
         fields => fields,
         body => Value::from_safe_string(draft::render_safe(&p.body, false)),
+        source_text => safe(md),
         source => safe(source),
-        slug => safe(slug),
+        slug => safe(z.topic),
         rev => safe(rev),
         nonce => safe(nonce),
-        list => LIST,
+        list => list,
+        base => safe(base),
+        live => z.live,
+        eyebrow => safe(if z.kind == ZenKind::Recap { "/recap" } else { "/intent" }),
+        kind_title => kind_title,
+        footer => footer,
+        generator => generator,
+        offline => Value::from_safe_string(w.docs.intent_offline.to_string()),
+        versions => z.switch.versions.clone(),
+        notice => z.switch.notice.clone(),
     };
     let mut page = env
         .get_template("adr.html")?
@@ -355,7 +443,7 @@ pub fn list_page(
 ) -> Result<String> {
     let dir = dir(project, s);
     let all = files(&dir, s);
-    let row = |_: &Path, text: &str| {
+    let row = |p: &Path, text: &str| {
         let fields = parts(text).fields;
         let tag = |key: &str| {
             fields
@@ -366,6 +454,7 @@ pub fn list_page(
         Row {
             summary: summary(text),
             tags: ["Status", "Date"].iter().filter_map(|k| tag(k)).collect(),
+            page: Some(preferred_page(project, &stem(p))),
         }
     };
     let source = s.dir.trim_matches('/').to_string();
@@ -477,9 +566,76 @@ pub fn show(
     if !super::browser::decide(env, super::browser::this_os(), explicit) {
         return Ok(Shown::Off);
     }
+    let page = preferred_page(root, &slug);
     let info = viewer(root, env)?;
-    let action = super::viewer::reload(&info, &slug, explicit);
-    draft::shown(action, || info.url(&slug), env)
+    let action = super::viewer::reload(&info, &page, explicit);
+    draft::shown(action, || info.url(&page), env)
+}
+
+/// The page that opens intent file `stem` of project `root`: its reading copy
+/// in the answer language when there is one (`<stem>.<language>`), else the
+/// intent file's own.
+pub fn preferred_page(root: &Path, stem: &str) -> String {
+    let Ok(project) = crate::render::Project::load_state(root) else {
+        return stem.to_string();
+    };
+    let answer = crate::render::canonical_language(project.response_language());
+    let copy = (answer != "English")
+        .then(|| copy_family(root, &project, stem))
+        .flatten()
+        .and_then(|f| f.path(&answer))
+        .filter(|p| p.is_file());
+    match copy {
+        Some(_) => format!("{stem}.{}", super::versions::suffix(&answer)),
+        None => stem.to_string(),
+    }
+}
+
+/// The reading copies of intent file `stem` of project `root`, when its name
+/// can name them.
+pub fn copy_family(
+    root: &Path,
+    project: &crate::render::Project,
+    stem: &str,
+) -> Option<super::versions::Family> {
+    let base = stem.to_ascii_lowercase();
+    super::is_slug(&base).then(|| {
+        super::versions::Family::new(
+            super::versions::Kind::Copy,
+            &root.join(super::versions::Kind::Copy.dir()),
+            &base,
+            Some((root, project)),
+        )
+    })
+}
+
+/// After reading copy `md` of project `root` is written: refresh the tabs that
+/// show it, or open it once — a later write only refreshes — or, with no
+/// viewer to run, its page as a file, once.
+pub fn show_copy(
+    root: &Path,
+    md: &Path,
+    page: &str,
+    env: &HashMap<String, String>,
+) -> Result<Shown> {
+    if !super::browser::decide(env, super::browser::this_os(), false) {
+        return Ok(Shown::Off);
+    }
+    let Ok(info) = viewer(root, env) else {
+        return super::show_file_page(md, env, false);
+    };
+    let n = super::viewer::refresh(&info, page);
+    if n > 0 {
+        return Ok(Shown::Reloaded(n));
+    }
+    let marker = md.with_file_name(format!(".{}.opened", stem(md)));
+    if marker.exists() {
+        return Ok(Shown::Pending);
+    }
+    let url = info.url(page);
+    super::browser::open(&url, env).context("opening the browser")?;
+    let _ = fs::write(marker, "");
+    Ok(Shown::Opened(url))
 }
 
 /// Open the list of the intent files of project `root` — on the page holding

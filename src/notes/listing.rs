@@ -35,6 +35,9 @@ pub struct Row {
     pub summary: String,
     /// Short tags, as text: its status, a date.
     pub tags: Vec<String>,
+    /// The page the row opens, when not the document's own: the version in
+    /// the answer language.
+    pub page: Option<String>,
 }
 
 /// What a list shows.
@@ -111,8 +114,10 @@ pub fn page(
                 .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                 .map_or(0, |d| d.as_secs() as i64);
             let (y, mo, d, h, mi, _) = crate::clock::civil(when);
+            let page = row.page.clone().unwrap_or_else(|| slug.clone());
             minijinja::context! {
                 slug => safe(&slug),
+                page => safe(&page),
                 name => safe(&format!("{slug}.md")),
                 summary => safe(&row.summary),
                 tags => row.tags.iter().map(|t| safe(t)).collect::<Vec<_>>(),
@@ -196,6 +201,10 @@ pub(crate) fn words_value(w: &'static Words) -> Value {
         ("intent_title", w.docs.intent_title),
         ("all_intents", w.docs.all_intents),
         ("intent_footer", w.docs.intent_footer),
+        ("languages", w.versions.languages),
+        ("views", w.versions.views),
+        ("preview", w.versions.preview),
+        ("source", w.versions.source),
     ] {
         m.insert(k, Value::from(v));
     }

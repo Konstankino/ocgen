@@ -308,9 +308,23 @@ fn recap_report_follows_the_answer_language() {
     p.response_language = "Ukrainian".into();
     let (_dir, md) = scaffolded(&p);
     assert!(md.contains("Write the report in Ukrainian"), "{md}");
+    // Kept in the instruction language too: that one first, so the page that
+    // opens — the answer language's — already links it.
+    let english = md
+        .find("`.claude/notes/recap/<YYYY-MM-DD>.english.md`")
+        .expect("the English report");
+    let ukrainian = md
+        .find("in Ukrainian to\n   `.claude/notes/recap/<YYYY-MM-DD>.md`")
+        .expect("the Ukrainian report");
+    assert!(english < ukrainian, "{md}");
 
     let (_dir, md) = scaffolded(&claude("rl2"));
     assert!(!md.contains("Write the report in"), "{md}");
+    assert!(!md.contains(".english.md"), "{md}");
+    assert!(
+        md.contains("ocgen renders it as a page beside it and opens it"),
+        "{md}"
+    );
 }
 
 #[test]

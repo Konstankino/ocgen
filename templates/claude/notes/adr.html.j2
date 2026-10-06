@@ -4,8 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="no-referrer">
-<meta name="generator" content="ocgen — an /intent file, read-only; edit the .md file">
-<title>{{ title }} · {{ w.intent_title }}</title>
+<meta name="generator" content="{{ generator }}">
+<title>{{ title }} · {{ kind_title }}</title>
 <style>
 {% include "page.css" %}
 [hidden] { display: none !important; }
@@ -20,9 +20,18 @@ body.intent-file { background: var(--bg); color: var(--z-text);
 .intent-file .where code { font-size: 12.5px; color: var(--muted); overflow-wrap: anywhere; }
 .intent-file .where .all { color: var(--muted); text-decoration: none; border-radius: 6px; padding: 0 4px; margin-left: -4px; }
 .intent-file .where .all:hover { color: var(--text); background: var(--surface-2); }
-.intent-file .palette { display: inline-flex; gap: 2px; }
-.intent-file .palette button { font: inherit; color: var(--muted); background: transparent; border: 0; border-radius: 6px; padding: 5px 9px; cursor: pointer; }
-.intent-file .palette button:hover, .intent-file .palette button[aria-pressed="true"] { color: var(--text); background: var(--surface-2); }
+.intent-file .tools { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 2px; }
+.intent-file .views, .intent-file .palette { display: inline-flex; gap: 2px; }
+.intent-file .tools button { font: inherit; color: var(--muted); background: transparent; border: 0; border-radius: 6px; padding: 5px 9px; cursor: pointer; }
+.intent-file .tools button:hover, .intent-file .tools button[aria-pressed="true"] { color: var(--text); background: var(--surface-2); }
+.intent-file .tools .sep { width: 1px; height: 14px; background: var(--border); margin: 0 6px; }
+.intent-file .langs { margin: 14px 0 0; }
+.intent-file .version-note { margin: 12px 0 0; }
+/* the file as written */
+.intent-file pre.source { margin: 18px 0 0; padding: 16px 18px; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text);
+  background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+  font: 13.5px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
+.intent-file pre.source code { color: inherit; font: inherit; }
 .intent-file :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .intent-file h1.title { margin: 18px 0 10px; font-size: 1.75em; font-weight: 600; line-height: 1.3; letter-spacing: 0; color: var(--text); }
 .intent-file .fields { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 24px; padding: 0; list-style: none; font-size: 13px; }
@@ -65,16 +74,26 @@ body.intent-file { background: var(--bg); color: var(--z-text);
 </style>
 </head>
 <body class="intent-file" data-rev="{{ rev }}" data-slug="{{ slug }}">
-<div class="offline">{{ w.intent_offline }}</div>
+{%- if live %}
+<div class="offline">{{ offline }}</div>
+{%- endif %}
 <header class="bar">
-  <p class="where"><a class="all" href="{{ list }}/{{ slug }}">← {{ w.all_intents }}</a> <span>/intent · {{ w.intent_title }}</span> <code>{{ source }}</code></p>
-  <span class="palette" role="group" aria-label="{{ w.palette }}">
-    <button type="button" id="palette-black" aria-pressed="true">{{ w.black }}</button>
-    <button type="button" id="palette-white" aria-pressed="false">{{ w.white }}</button>
+  <p class="where">{% if list %}<a class="all" href="{{ list }}/{{ base }}">← {{ w.all_intents }}</a> {% endif %}<span>{{ eyebrow }} · {{ kind_title }}</span> <code>{{ source }}</code></p>
+  <span class="tools">
+    <span class="views" role="group" aria-label="{{ w.views }}">
+      <button type="button" id="view-page" aria-pressed="true" aria-controls="page">{{ w.preview }}</button>
+      <button type="button" id="view-source" aria-pressed="false" aria-controls="markdown">{{ w.source }}</button>
+    </span>
+    <span class="sep" aria-hidden="true"></span>
+    <span class="palette" role="group" aria-label="{{ w.palette }}">
+      <button type="button" id="palette-black" aria-pressed="true">{{ w.black }}</button>
+      <button type="button" id="palette-white" aria-pressed="false">{{ w.white }}</button>
+    </span>
   </span>
 </header>
 <main>
-  <article>
+{%- include "langs.html" %}
+  <article id="page">
     <h1 class="title">{{ title }}</h1>
 {%- if fields %}
     <ul class="fields">
@@ -83,7 +102,8 @@ body.intent-file { background: var(--bg); color: var(--z-text);
 {%- endif %}
     <div class="markdown-body">{{ body }}</div>
   </article>
-  <footer>{{ w.intent_footer }} <code>{{ source }}</code></footer>
+  <pre class="source" id="markdown" hidden><code>{{ source_text }}</code></pre>
+  <footer>{{ footer }} <code>{{ source }}</code></footer>
 </main>
 <script nonce="{{ nonce }}">
 (function () {
@@ -98,6 +118,23 @@ body.intent-file { background: var(--bg); color: var(--z-text);
   document.getElementById("palette-black").addEventListener("click", function () { palette("black"); });
   document.getElementById("palette-white").addEventListener("click", function () { palette("white"); });
 
+  // The page or its Markdown, as written. The choice is kept in the address
+  // (#markdown), so a reload — the file changed — keeps it.
+  var article = document.getElementById("page"), md = document.getElementById("markdown");
+  function view(source, remember) {
+    article.hidden = source;
+    md.hidden = !source;
+    document.getElementById("view-page").setAttribute("aria-pressed", String(!source));
+    document.getElementById("view-source").setAttribute("aria-pressed", String(source));
+    if (remember) {
+      try { history.replaceState(null, "", source ? "#markdown" : location.pathname + location.search); } catch (e) {}
+    }
+  }
+  document.getElementById("view-page").addEventListener("click", function () { view(false, true); });
+  document.getElementById("view-source").addEventListener("click", function () { view(true, true); });
+  if (location.hash === "#markdown") view(true, false);
+{%- if live %}
+
   // The file changes on disk (or the word is sent again): show it as it is now.
   var errors = 0;
   var es = new EventSource("events?topic=" + encodeURIComponent(page.getAttribute("data-slug")) +
@@ -106,6 +143,7 @@ body.intent-file { background: var(--bg); color: var(--z-text);
   es.onopen = function () { errors = 0; page.removeAttribute("data-viewer"); };
   es.onerror = function () { if (++errors > 5) page.setAttribute("data-viewer", "offline"); };
   window.addEventListener("pageshow", function (e) { if (e.persisted) location.reload(); });
+{%- endif %}
 })();
 </script>
 </body>
