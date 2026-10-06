@@ -876,6 +876,18 @@ impl Project {
         .context("rendering the mindset")
     }
 
+    /// How agents write commits, and that nothing they write credits AI help:
+    /// a section of the Claude workflow rule (always English, like the rule), and
+    /// part of every OpenCode agent's text (in the instruction language).
+    fn authorship(&self, env: &Environment, language: &str) -> Result<String> {
+        env.render_str(
+            &templates::load("authorship.md.j2")?,
+            context! { language => canonical_language(language) },
+        )
+        .map(|n| n.trim().to_string())
+        .context("rendering the commit and authorship rules")
+    }
+
     /// The language agents answer the user in: `response_language`, else the
     /// instruction language, else English.
     pub fn response_language(&self) -> &str {
@@ -1176,6 +1188,9 @@ impl Project {
         // Per-agent files (+ external prompt files).
         let agent_tmpl = templates::load("opencode/agents/_agent.md.j2")?;
         let mindset = self.mindset(&env)?;
+        // OpenCode has no setting for commit attribution and no rule file every
+        // agent loads, so each agent's text carries it.
+        let authorship = self.authorship(&env, lang)?;
         for agent in &self.agents {
             // What ocgen adds to a coordinator goes at the end of its prompt file,
             // or of its body when it has none.
@@ -1192,6 +1207,7 @@ impl Project {
                     Some(n) => with_paragraph(text, n),
                     None => text.to_string(),
                 };
+                let text = with_paragraph(&text, &authorship);
                 with_paragraph(&text, &mindset)
             };
             let body = if primary && !has_prompt_file {
@@ -1752,6 +1768,9 @@ impl Project {
             loop_guard_max => self.claude.workflow.loop_guard_max,
             check_cmd => self.claude.workflow.check_cmd.trim(),
             trusted_docs => self.trusted_docs.join(", "),
+            // Subagents and teammates load the rules too, so this reaches every
+            // agent that writes a commit or a document.
+            authorship => self.authorship(&env, "English")?,
         };
         components.push((
             "rules/ocgen-workflow.md".to_string(),
@@ -1948,6 +1967,13 @@ impl Project {
             "model": model
         });
         let obj = root.as_object_mut().unwrap();
+        // No Claude Code trailer on commits and no line in PR descriptions; the
+        // workflow rule covers everything else agents write. Not `false`: a
+        // Claude Code older than v2.1.281 would skip this whole file.
+        obj.insert(
+            "attribution".into(),
+            json!({ "commit": "", "pr": "", "sessionUrl": false }),
+        );
         // Claude Code's own answer language, when it isn't the instructions'.
         if self.answers_differ() {
             obj.insert(
