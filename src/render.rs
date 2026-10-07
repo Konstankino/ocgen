@@ -1841,15 +1841,14 @@ impl Project {
             if let Some(mcp) = self.mcp_json()? {
                 out.push((PathBuf::from(".mcp.json"), mcp));
             }
-            if self.claude.workflow.fanout || self.claude.workflow.deliver {
-                // Root-level file (not under .claude/): gitignored files copied into
-                // each new worktree — `.env` plus, when `.claude/` is ignored, the
-                // settings/hooks/rules that /fanout and multi-session delivery need.
-                out.push((
-                    PathBuf::from(".worktreeinclude"),
-                    templates::load("claude/worktreeinclude")?,
-                ));
-            }
+            // Root-level file (not under .claude/): gitignored files copied into each
+            // new worktree — `.env`, plus the config (gitcheck::WORKTREE_COPIES)
+            // when it isn't committed. Every project gets it: `claude --worktree`
+            // and desktop worktree sessions exist without /fanout or /deliver.
+            out.push((
+                PathBuf::from(".worktreeinclude"),
+                templates::load("claude/worktreeinclude")?,
+            ));
         }
 
         if want_plugin {
@@ -2760,6 +2759,10 @@ impl Project {
         if self.target == Target::ClaudeCode {
             if let PrePush::Installed(p) = self.install_pre_push(target)? {
                 written.push(p);
+            }
+            if self.claude.output.project || !self.claude.output.plugin {
+                // Uncommitted config reaches worktrees only when git-ignored.
+                crate::gitcheck::sync_exclude(target)?;
             }
             codeowners::remove_old_link(target);
         }

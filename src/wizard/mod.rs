@@ -617,7 +617,7 @@ fn build_claude_project(
     p.claude.workflow.fanout = ask_confirm(
         theme,
         "Include the /fanout worktree command?",
-        "Fans work out to worktree-isolated subagents (parallel edits never collide); adds .worktreeinclude.",
+        "Fans work out to worktree-isolated subagents (parallel edits never collide).",
         true,
     )?;
     p.claude.workflow.verify_todos = ask_confirm(
@@ -2391,6 +2391,12 @@ pub fn run_doctor(path: String, dry_run: bool, yes: bool, force: bool) -> Result
         )),
         ocgen::render::PrePush::NotApplicable => {}
     }
+    if project.target == Target::ClaudeCode && ocgen::gitcheck::excluded_locally(&target) {
+        println!(
+            "  {}",
+            ui::muted("git: .claude/ config kept out of git in this clone (.git/info/exclude), so .worktreeinclude copies it into worktrees")
+        );
+    }
     for note in project.codeowners_report(&target) {
         ui::warning(&note);
     }
@@ -2398,11 +2404,12 @@ pub fn run_doctor(path: String, dry_run: bool, yes: bool, force: bool) -> Result
     ui::success(&format!("applied {} change(s)", changed.len() - keep.len()));
     report_backup(&target, backup.as_deref());
     report_kept(&keep);
-    // Not auto-fixable: the project's .gitignore belongs to the user.
-    if project.target == Target::ClaudeCode
-        && ocgen::gitcheck::claude_config_ignored(&target) == Some(true)
-    {
-        ui::warning(ocgen::gitcheck::IGNORED_CONFIG_WARNING);
+    // What's left can't be fixed here: committed config the user hasn't finished
+    // committing (their .gitignore and their commits are theirs).
+    if project.target == Target::ClaudeCode {
+        if let Some(g) = ocgen::gitcheck::worktree_gaps(&target).filter(|g| !g.missing.is_empty()) {
+            ui::warning(&ocgen::gitcheck::gaps_warning(&g));
+        }
     }
     Ok(())
 }

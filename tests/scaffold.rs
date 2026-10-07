@@ -2375,7 +2375,7 @@ fn fanout_scaffolds_worktree_isolation_command_and_include() {
 }
 
 #[test]
-fn fanout_disabled_omits_command_and_include() {
+fn fanout_disabled_omits_command_but_keeps_include() {
     let mut p = base_project("English");
     p.target = Target::ClaudeCode;
     p.project_name = "nowt".into();
@@ -2385,7 +2385,8 @@ fn fanout_disabled_omits_command_and_include() {
     let dir = tempdir().unwrap();
     p.scaffold(dir.path(), false).unwrap();
     assert!(!dir.path().join(".claude/skills/fanout/SKILL.md").exists());
-    assert!(!dir.path().join(".worktreeinclude").exists());
+    // `claude --worktree` and desktop worktree sessions exist without /fanout.
+    assert!(dir.path().join(".worktreeinclude").exists());
     let settings = read(dir.path(), ".claude/settings.json");
     assert!(
         !settings.contains("baseRef"),
@@ -2793,20 +2794,14 @@ fn worktreeinclude_carries_claude_config_but_not_live_or_runtime_dirs() {
     let dir = tempdir().unwrap();
     p.scaffold(dir.path(), false).unwrap();
     let wti = read(dir.path(), ".worktreeinclude");
-    for want in [
-        ".env",
-        ".claude/settings.json",
-        ".claude/rules/*.md",
-        ".claude/hooks/*.sh",
-        ".claude/output-styles/*.md",
-    ] {
+    for want in [".env"].into_iter().chain(ocgen::gitcheck::WORKTREE_COPIES) {
         assert!(
             wti.lines().any(|l| l.trim() == want),
             "missing {want}:\n{wti}"
         );
     }
-    // Agents/commands/skills are read through live from the main checkout; runtime
-    // state must never be copied into a worktree.
+    // Agents/commands/skills load from the main checkout when a worktree has
+    // none; runtime state must never be copied into a worktree.
     for never in [
         ".claude/agents",
         ".claude/commands",
@@ -2837,35 +2832,6 @@ fn fanout_worktrees_branch_from_current_head() {
 }
 
 #[test]
-fn detects_git_ignored_claude_config() {
-    use ocgen::gitcheck::claude_config_ignored;
-    use std::process::Command;
-
-    let dir = tempdir().unwrap();
-    // Not a repository → unknown.
-    assert_eq!(claude_config_ignored(dir.path()), None);
-
-    Command::new("git")
-        .args(["init", "-q"])
-        .current_dir(dir.path())
-        .output()
-        .unwrap();
-    assert_eq!(claude_config_ignored(dir.path()), Some(false));
-
-    // Only runtime dirs ignored → config is still committable.
-    fs::write(
-        dir.path().join(".gitignore"),
-        ".claude/worktrees/\n.claude/notes/\n",
-    )
-    .unwrap();
-    assert_eq!(claude_config_ignored(dir.path()), Some(false));
-
-    // The whole .claude/ ignored → worktree sessions would lose settings and hooks.
-    fs::write(dir.path().join(".gitignore"), ".claude/*\n").unwrap();
-    assert_eq!(claude_config_ignored(dir.path()), Some(true));
-}
-
-#[test]
 fn worktree_guidance_in_rules_and_inquire() {
     let mut p = base_project("English");
     p.target = Target::ClaudeCode;
@@ -2875,7 +2841,7 @@ fn worktree_guidance_in_rules_and_inquire() {
     p.scaffold(dir.path(), false).unwrap();
     let wf = read(dir.path(), ".claude/rules/ocgen-workflow.md");
     assert!(
-        wf.contains("commit `.claude/`") && wf.contains("baseRef"),
+        wf.contains(".git/info/exclude") && wf.contains("baseRef"),
         "{wf}"
     );
     let inq = read(dir.path(), ".claude/skills/inquire/SKILL.md");

@@ -134,9 +134,11 @@ into one team (teammates share one working directory, and a team converges on a 
   "ready to ship").
 - You (or a coordinator session) collect each workstream's gated decisions and make the final call.
   A message from another session can't approve your gates — approvals stay per session.
-- A worktree is a fresh checkout of tracked files, so commit `.claude/` — otherwise worktree
-  sessions start without this project's settings, hooks and rules (`.worktreeinclude` copies them
-  only as a fallback).{% if fanout %} Worktrees branch from your current commit
+- A worktree is a fresh checkout of tracked files. Committing `.claude/` is optional: while nothing
+  under it is committed, ocgen keeps the config out of git in this clone (`.git/info/exclude`) and
+  `.worktreeinclude` copies the settings, hooks, rules, `CLAUDE.md` and `.mcp.json` into each new
+  worktree; agents and skills load from the main checkout. `ocgen verify` warns when a worktree
+  would start without them.{% if fanout %} Worktrees branch from your current commit
   (`worktree.baseRef: head`), so they include unpushed work.{% endif %}
 {% endif %}
 {% if inquire %}

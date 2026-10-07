@@ -1056,8 +1056,8 @@ pub struct Workflow {
     /// Anthropic's prompt-engineering technique). The matching skill preset is
     /// available via `ocgen add skill`.
     pub improve_prompt: bool,
-    /// Emit the `/fanout` command + `.worktreeinclude` + CLAUDE.md protocol for
-    /// fanning work out to worktree-isolated subagents.
+    /// Emit the `/fanout` command + CLAUDE.md protocol for fanning work out to
+    /// worktree-isolated subagents (`.worktreeinclude` is written either way).
     pub fanout: bool,
     /// Emit CLAUDE.md guidance to build self-checking/verification into the todo
     /// list for complex prompts (definition-of-done, per-task verify, self-review,

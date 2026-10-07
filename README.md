@@ -563,7 +563,12 @@ repo used for a plugin's marketplace and release workflow; `--team` enables
 .claude/hooks/*.sh                   # gate scripts, loop guard, optional notify/format/audit hooks
 .claude/output-styles/ocgen-concise.md
 .mcp.json                            # project MCP servers (`ocgen add mcp`)
+.claude/rules/*.md                   # the workflow (and team) rules every session loads
+.claude/statusline.sh                # the status line (optional)
+.claude/.ocgen-state.json            # ocgen's record of the project: `apply`, `doctor` and the hooks read it
 .gitattributes                       # an ocgen block pinning LF line endings for the files above
+.worktreeinclude                     # what Claude Code copies into each new worktree: `.env` + the config when it isn't committed
+.git/info/exclude                    # an ocgen block keeping the config out of git in this clone, while nothing under .claude/ is committed
 CLAUDE.md                      # project instructions + the roster; the coordinator lives here
 ```
 
@@ -1754,22 +1759,35 @@ unlimited, not recommended). Set a subagent's max turns with `ocgen edit agent`.
 loop guard from `ocgen doctor`. Their existing agents keep unlimited turns until you set
 max turns with `ocgen edit agent`.
 
-#### Worktrees: commit `.claude/`
+#### Worktrees: `.claude/` in git or not
 
 A git worktree is a fresh checkout of **tracked** files. `claude --worktree <name>` sessions,
-desktop worktree sessions and ocgen's multi-session delivery all start in one. If your project
-git-ignores `.claude/`, these sessions start **without** its settings, hooks and rules. That
-means no approval gate, confidence gates or loop guard, no permission deny list, and whatever
-model your `~/.claude/settings.json` names. Agents and commands still load, because Claude
-Code reads them from the main checkout. Skills need Claude Code 2.1.277+ for that.
+desktop worktree sessions, ocgen's multi-session delivery and `isolation: worktree` subagents all
+start in one. A worktree session needs the project's settings, hooks and rules: without them
+there is no approval gate, no confidence gates or loop guard, no permission deny list, and the
+model is whatever your `~/.claude/settings.json` names. Agents, commands and skills are different:
+Claude Code loads them from the main checkout when a worktree has none. Skills need Claude Code
+2.1.277+ for that.
 
-- **Commit `.claude/`** (recommended) and ignore only the local parts: `.claude/settings.local.json`,
+Committing `.claude/` is optional. Both ways work:
+
+- **Not in git** (nothing under `.claude/` committed): `ocgen new`, `apply` and `doctor` add a
+  block to the repository's `.git/info/exclude`. That file is local to your clone, never
+  committed, and shared by all its worktrees. The block keeps ocgen's config out of git:
+  `.claude/` settings, rules, hooks, agents, skills, agent memory and state, plus `CLAUDE.md`,
+  `.mcp.json` and `.claude/worktrees/`. Because the config is now git-ignored, the generated `.worktreeinclude`
+  copies the settings, rules, hooks, status line, output styles, state file, `/intent` templates,
+  `CLAUDE.md` and `.mcp.json` into each new worktree. The copy is a snapshot taken when the
+  worktree is created. `git status` doesn't show these files in this clone.
+- **In git:** commit `.claude/` and ignore only the local parts: `.claude/settings.local.json`,
   `.claude/worktrees/`, `.claude/notes/`, `.claude/loop-guard/` and `.claude/team/execution-*`.
-- **Detection:** `ocgen landscape` and `ocgen doctor` warn when `.claude/` is git-ignored.
-- **Safety net:** the generated `.worktreeinclude` copies `.claude/settings.json`, the rules, the
-  hook scripts and the output styles into each new worktree. It only copies files that are
-  git-ignored, so it does nothing once `.claude/` is committed. The copy is a snapshot taken
-  when the worktree is created.
+  Once anything under `.claude/` is tracked, ocgen stops adding the block and removes it. To
+  switch, delete the `# ocgen:exclude` block from `.git/info/exclude`, then commit `.claude/`,
+  `CLAUDE.md` and `.mcp.json`.
+- **Detection:** `ocgen verify` ("`.claude/` config reaches worktrees"), `ocgen landscape` and
+  `ocgen doctor` warn about any config file that is neither committed nor git-ignored, because no
+  worktree gets it. With nothing committed, `ocgen doctor` fixes it. With `.claude/` committed, the
+  warning names the files still to commit.
 - **Base branch:** with `/fanout` enabled, `settings.json` sets `"worktree": {"baseRef": "head"}`.
   `/fanout` workers and `--worktree` sessions then branch from your current commit and include
   unpushed work, instead of `origin`'s default branch.
@@ -1777,9 +1795,9 @@ Code reads them from the main checkout. Skills need Claude Code 2.1.277+ for tha
   lost when it's removed, and the isolation checks stop a worktree session from writing to the
   main checkout. `/inquire` warns if you run it in a worktree.
 
-Subagent isolation (`/fanout`, the implementer's `isolation: worktree`) is not affected by an
-ignored `.claude/`. The parent session in your main checkout owns the settings, and its hooks
-fire for the subagent's tool calls.
+Subagent isolation (`/fanout`, the implementer's `isolation: worktree`) works the same either way.
+The parent session in your main checkout owns the settings, and its hooks fire for the
+subagent's tool calls.
 
 Every other command is target-aware. On a Claude project, `ocgen landscape` shows the
 agents' aliases and tools, the skills, the workflow/output setup, the delegation topology

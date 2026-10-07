@@ -591,8 +591,8 @@ fn run_claude(root: &Path, project: &Project) -> Result<()> {
 
     let mut warnings = project.issues();
     warnings.extend(project.skill_file_issues(root));
-    if ocgen::gitcheck::claude_config_ignored(root) == Some(true) {
-        warnings.push(ocgen::gitcheck::IGNORED_CONFIG_WARNING.to_string());
+    if let Some(g) = ocgen::gitcheck::worktree_gaps(root).filter(|g| !g.missing.is_empty()) {
+        warnings.push(ocgen::gitcheck::gaps_warning(&g));
     }
     if warnings.is_empty() {
         ui::section("Checks");

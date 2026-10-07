@@ -1,15 +1,23 @@
 # Gitignored files copied into each new Claude Code worktree (.gitignore syntax).
-# A worktree is a fresh checkout, so local-only config must be carried in explicitly.
+# A worktree is a fresh checkout of committed files, so local-only files must be
+# carried in explicitly. Only git-ignored files are copied: a committed file is
+# already in every worktree, and its line here does nothing.
 .env
 .env.local
 
-# Claude config — a safety net for projects that git-ignore `.claude/`: only
-# ignored files are copied, so these lines do nothing once `.claude/` is committed
-# (recommended). Without them a worktree session would start with no settings,
-# hooks (approval gate, confidence gates, loop guard) or rules. Agents, commands
-# and skills are deliberately absent: Claude Code reads them live from the main
-# checkout. Runtime state (notes, loop-guard, worktrees) is never copied.
+# Claude config. Committing `.claude/` is optional: while nothing under it is
+# committed, ocgen keeps this config out of git in your clone (a block in
+# `.git/info/exclude`), so these lines copy it. Without them a worktree session
+# would start with no settings, hooks (approval gate, confidence gates, loop
+# guard), rules or project instructions. Agents, commands and skills are
+# deliberately absent: Claude Code loads them from the main checkout when a
+# worktree has none. Runtime state (notes, loop-guard, worktrees) is never copied.
+CLAUDE.md
+.mcp.json
 .claude/settings.json
 .claude/rules/*.md
 .claude/hooks/*.sh
 .claude/output-styles/*.md
+.claude/statusline.sh
+.claude/.ocgen-state.json
+.claude/intent/*.md

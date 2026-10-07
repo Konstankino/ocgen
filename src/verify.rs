@@ -2708,16 +2708,25 @@ fn codeowners(project: &Project, root: &Path) -> Check {
     check(name, Status::Pass, format!("{}: {what}", s.codeowners))
 }
 
+/// Worktree sessions get the config only if it's committed, or git-ignored so
+/// `.worktreeinclude` copies it.
 fn git_tracking(root: &Path) -> Check {
-    let name = ".claude/ tracked by git";
-    match crate::gitcheck::claude_config_ignored(root) {
+    let name = ".claude/ config reaches worktrees";
+    match crate::gitcheck::worktree_gaps(root) {
         None => check(name, Status::Skip, "not a git repository"),
-        Some(false) => check(
+        Some(g) if !g.missing.is_empty() => {
+            check(name, Status::Warn, crate::gitcheck::gaps_warning(&g))
+        }
+        Some(_) if crate::gitcheck::excluded_locally(root) => check(
             name,
             Status::Pass,
-            "worktree sessions get the settings, hooks and rules",
+            "kept out of git in this clone (.git/info/exclude); .worktreeinclude copies it",
         ),
-        Some(true) => check(name, Status::Warn, crate::gitcheck::IGNORED_CONFIG_WARNING),
+        Some(_) => check(
+            name,
+            Status::Pass,
+            "committed, or git-ignored and copied by .worktreeinclude",
+        ),
     }
 }
 

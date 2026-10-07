@@ -26,5 +26,7 @@ When the subagents finish, review their results, then **merge each worktree's br
 your working branch (resolve conflicts if any), and **clean up**: `git worktree remove` each one.
 
 ## 4. Hygiene
-Ensure `.claude/worktrees/` is git-ignored (add the line if it is missing). `.worktreeinclude`
-already copies local files like `.env` into each new worktree.
+Ensure `.claude/worktrees/` is git-ignored: `git check-ignore -q .claude/worktrees/x` succeeds (ocgen
+ignores it locally while `.claude/` isn't committed); if it fails, add the line to `.gitignore`.
+`.worktreeinclude` already copies local files like `.env`, and the uncommitted config, into each new
+worktree.
