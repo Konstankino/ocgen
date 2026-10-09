@@ -1,0 +1,10 @@
+{
+  "state_version": 1,
+  "hook_protocol": 1,
+  "spec": "sha256:cc617f1cccb670b0264103e149d0f67d11a67237f232a937301ddfde5a79e84d",
+  "files": {
+    ".claude/agents/explorer.md": "sha256:ff5f27f778528d071373474822cbf96e954869a155638928c8046f0702a14860",
+    ".claude/agents/implementer.md": "sha256:70f038f09a10bcb7715fde10412e26c90a689f5934699fcb30e13a843118f10d",
+    ".claude/settings.json": "sha256:83eecb27405a2b3edf6b9ccebd236ad70dbfc346f369ea6a95be8801c8477f4e"
+  }
+}

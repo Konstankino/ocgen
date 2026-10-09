@@ -12,3 +12,6 @@
 
 # Local printable reference (PDF + its generator) — kept out of git.
 /docs/reference/
+
+# Personal Claude Code settings.
+CLAUDE.local.md
