@@ -14,6 +14,13 @@ use cli::{
 use ocgen::templates;
 
 fn main() -> Result<()> {
+    // The hooks' sandbox helper, before anything else: a sandbox that
+    // restricts its own process needs it to have started no threads.
+    ocgen::sandbox::this_is_the_binary();
+    let args: Vec<std::ffi::OsString> = std::env::args_os().collect();
+    if args.get(1).is_some_and(|a| a == "__sandbox") {
+        ocgen::sandbox::helper_main(&args[2..]);
+    }
     let cli = Cli::parse();
     match cli.command.unwrap_or(Command::New {
         path: None,
@@ -127,6 +134,7 @@ fn main() -> Result<()> {
                  Linux/WSL: /etc/claude-code/, Windows: C:\\Program Files\\ClaudeCode\\. Projects can't override it."
             );
         }
+        Command::Sandbox { action } => overview::run_sandbox(action)?,
         Command::Fields => reference::run(),
         Command::Templates { action } => match action {
             TemplatesAction::Init { force } => {

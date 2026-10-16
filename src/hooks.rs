@@ -23,7 +23,7 @@ use serde_json::Value;
 /// embedded in the ocgen that generated the project (hook scripts can't be
 /// overridden from the template dir), so they implement the same protocol —
 /// unless someone edits the project's copies by hand.
-pub const PROTOCOL: &str = "ocgen-hooks 14";
+pub const PROTOCOL: &str = "ocgen-hooks 15";
 
 /// Every hook `ocgen hook <name>` accepts (matching the script names minus `.sh`).
 pub const NAMES: [&str; 14] = [
@@ -960,15 +960,23 @@ impl<'a> Hook<'a> {
                 }
             }
         };
-        let ok = run.current_dir(&root).output().map(|o| o.status.success());
-        if ok.unwrap_or(false) {
+        let out = run.current_dir(&root).output();
+        if out.as_ref().is_ok_and(|o| o.status.success()) {
             Outcome::allow()
         } else {
-            // Never blocks: a failing formatter is reported, not fatal.
+            // Never blocks: a failing formatter is reported, not fatal — with
+            // what the sandbox said, if it said anything.
+            let said: String = out
+                .map(|o| String::from_utf8_lossy(&o.stderr).into_owned())
+                .unwrap_or_default()
+                .lines()
+                .filter(|l| l.starts_with("ocgen sandbox:"))
+                .map(|l| format!("{l}\n"))
+                .collect();
             Outcome {
                 code: 0,
                 stdout: String::new(),
-                stderr: format!("format hook: '{cmd}' failed (ignored)\n"),
+                stderr: format!("format hook: '{cmd}' failed (ignored)\n{said}"),
             }
         }
     }
@@ -2086,280 +2094,19 @@ fn shell(cmd: &str) -> Command {
 //
 // Claude Code runs hooks outside its sandbox, so with the project's sandbox on
 // (`OCGEN_SANDBOX=1`) the project code a hook starts itself — the check, the
-// formatter — runs in an OS sandbox of its own: no writes to the paths in
-// `OCGEN_SANDBOX_DENY_WRITE` (nor to the withheld credentials), no reads of
-// `OCGEN_SANDBOX_DENY_READ`, and `OCGEN_SANDBOX_DENY_ENV` unset. Everything else
-// stays as the user has it, so it is narrower than Claude Code's sandbox (no
-// network limit, writes elsewhere allowed). Seatbelt on macOS; bubblewrap on
-// Linux, where a missing `bwrap` means the command doesn't run at all — never
-// unsandboxed. Native Windows has no sandbox: commands run as before.
-
-/// Where macOS keeps Seatbelt's command-line front end.
-const SEATBELT: &str = "/usr/bin/sandbox-exec";
-
-/// Why a sandboxed command can't run on Linux (also printed by the scripts).
-pub const NO_BWRAP: &str = "the project's sandbox is on, but bubblewrap (bwrap) isn't installed, and ocgen never runs this command unsandboxed — install bubblewrap (e.g. sudo apt install bubblewrap); Claude Code's own sandbox needs it too";
-
-/// Why a sandboxed command can't run on macOS (also printed by the scripts).
-pub const NO_SEATBELT: &str = "the project's sandbox is on, but /usr/bin/sandbox-exec is missing, and ocgen never runs this command unsandboxed";
-
-/// What a hook's sandbox is made from: the env's deny lists (sandbox path
-/// syntax: `~/` the home folder, `/` absolute, anything else relative), the home
-/// folder, the project, and the folder the command runs in. Relative entries
-/// name a path in the project and the same path in that folder.
-pub struct SandboxSpec<'a> {
-    pub deny_write: &'a str,
-    pub deny_read: &'a str,
-    pub home: &'a str,
-    pub project: &'a Path,
-    pub dir: &'a Path,
-}
-
-impl SandboxSpec<'_> {
-    /// The project and the command's folder, resolved.
-    fn bases(&self) -> (String, String) {
-        (
-            real_path(&self.project.to_string_lossy()),
-            real_path(&self.dir.to_string_lossy()),
-        )
-    }
-
-    /// The paths `entries` name, each once (as `sb_paths` in the scripts):
-    /// `~/x` in the home folder, `/x` as is, a relative one in `base` — with
-    /// `relative_only`, only the relative ones. On Linux an entry in `.claude/`
-    /// stands for `.claude` itself: bubblewrap can only protect what exists, and
-    /// a whole read-only `.claude` also keeps a missing settings file from being
-    /// created.
-    fn paths(&self, entries: &str, base: &str, relative_only: bool, linux: bool) -> Vec<String> {
-        let mut out = Vec::new();
-        for e in entries.split_ascii_whitespace() {
-            let raw = if e == "~" || e.starts_with("~/") {
-                if relative_only || self.home.is_empty() {
-                    continue;
-                }
-                format!("{}{}", self.home, &e[1..])
-            } else if e.starts_with('/') {
-                if relative_only {
-                    continue;
-                }
-                e.to_string()
-            } else {
-                let mut rel = e.strip_prefix("./").unwrap_or(e);
-                if linux && rel.starts_with(".claude/") {
-                    rel = ".claude";
-                }
-                format!("{base}/{rel}")
-            };
-            push_new(&mut out, real_path(&raw));
-        }
-        out
-    }
-
-    /// The paths to write-protect (every entry, in the project), the ones to
-    /// write-protect in the command's own folder (relative entries, when it
-    /// isn't the project), and the ones to hide (both).
-    fn targets(&self, linux: bool) -> (Vec<String>, Vec<String>, Vec<String>) {
-        let (p, d) = self.bases();
-        let write = self.paths(self.deny_write, &p, false, linux);
-        let mut inner = Vec::new();
-        let mut read = self.paths(self.deny_read, &p, false, linux);
-        if d != p {
-            inner = self.paths(self.deny_write, &d, true, linux);
-            for r in self.paths(self.deny_read, &d, true, linux) {
-                push_new(&mut read, r);
-            }
-        }
-        (write, inner, read)
-    }
-}
-
-/// The Seatbelt profile (`sandbox-exec -p`) for a command: writes denied to the
-/// write-protected paths and to the withheld credentials, reads denied to the
-/// credentials, and no folder above any of them renamed or removed (which would
-/// move a protected path out of the way).
-pub fn seatbelt_profile(spec: &SandboxSpec) -> String {
-    let (write, inner, read) = spec.targets(false);
-    let mut all = Vec::new();
-    for t in write.iter().chain(&inner).chain(&read) {
-        push_new(&mut all, t.clone());
-    }
-    let clause = |op: &str, filter: &str, paths: &[String]| {
-        if paths.is_empty() {
-            return String::new();
-        }
-        let list: String = paths
-            .iter()
-            .map(|p| {
-                format!(
-                    " ({filter} \"{}\")",
-                    p.replace('\\', "\\\\").replace('"', "\\\"")
-                )
-            })
-            .collect();
-        format!("(deny {op}{list})")
-    };
-    format!(
-        "(version 1)(allow default){}{}{}",
-        clause("file-write*", "subpath", &all),
-        clause("file-write-unlink", "literal", &ancestors(&all)),
-        clause("file-read*", "subpath", &read)
-    )
-}
-
-/// The bubblewrap options for a command, in order: the whole system as it is;
-/// every folder above a protected path bound onto itself (a mount point can't be
-/// renamed away); the write-protected paths that exist read-only — then, when
-/// the command's folder lies inside one (a worker's worktree in `.claude/`), that
-/// folder writable again, and its own protected paths read-only; last, an empty
-/// folder over each withheld credential folder and /dev/null over each file.
-pub fn bwrap_args(spec: &SandboxSpec) -> Vec<String> {
-    let (write, inner, read) = spec.targets(true);
-    let (p, d) = spec.bases();
-    let exists = |t: &str| Path::new(t).exists();
-    let mut args: Vec<String> = ["--dev-bind", "/", "/"].map(String::from).to_vec();
-    let mut all = write.clone();
-    all.extend(inner.iter().cloned());
-    all.extend(read.iter().cloned());
-    for a in ancestors(&all) {
-        if Path::new(&a).is_dir() {
-            args.extend(["--bind".into(), a.clone(), a]);
-        }
-    }
-    let mut reopen = false;
-    for t in write.iter().filter(|t| exists(t)) {
-        args.extend(["--ro-bind".into(), t.clone(), t.clone()]);
-        reopen |= d != p && format!("{d}/").starts_with(&format!("{t}/"));
-    }
-    if reopen {
-        args.extend(["--bind".into(), d.clone(), d]);
-    }
-    for t in inner.iter().filter(|t| exists(t)) {
-        args.extend(["--ro-bind".into(), t.clone(), t.clone()]);
-    }
-    for r in read {
-        if Path::new(&r).is_dir() {
-            args.extend(["--tmpfs".into(), r]);
-        } else if exists(&r) {
-            args.extend(["--ro-bind".into(), "/dev/null".into(), r]);
-        }
-    }
-    args
-}
-
-/// Every folder above each path (shallowest first, once), but not `/`.
-fn ancestors(paths: &[String]) -> Vec<String> {
-    let mut out = Vec::new();
-    for t in paths {
-        let parts: Vec<&str> = t.split('/').collect();
-        let mut p = String::new();
-        for c in parts.iter().skip(1).take(parts.len().saturating_sub(2)) {
-            p.push('/');
-            p.push_str(c);
-            push_new(&mut out, p.clone());
-        }
-    }
-    out
-}
-
-fn push_new(v: &mut Vec<String>, s: String) {
-    if !v.contains(&s) {
-        v.push(s);
-    }
-}
-
-/// A path as the kernel sees it: its longest existing part with every symlink
-/// resolved, then the rest as written (as `sb_real` in the scripts computes it).
-/// Only Unix sandboxes; elsewhere the path stays as written.
-fn real_path(path: &str) -> String {
-    if !cfg!(unix) {
-        return path.to_string();
-    }
-    let mut full = PathBuf::from(path);
-    if full.is_relative() {
-        if let Ok(cwd) = std::env::current_dir() {
-            full = cwd.join(full);
-        }
-    }
-    let mut rest = Vec::new();
-    let mut cur = full.as_path();
-    loop {
-        if let Ok(mut real) = fs::canonicalize(cur) {
-            for r in rest.iter().rev() {
-                real.push(r);
-            }
-            return real.to_string_lossy().into_owned();
-        }
-        match (cur.parent(), cur.file_name()) {
-            (Some(parent), Some(name)) => {
-                rest.push(name.to_os_string());
-                cur = parent;
-            }
-            _ => return full.to_string_lossy().into_owned(),
-        }
-    }
-}
-
-/// An environment variable's name (what `unset` takes).
-fn env_name(s: &str) -> bool {
-    s.bytes().next().is_some_and(|b| !b.is_ascii_digit())
-        && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
-}
-
-/// A program on `path` (a `PATH` value), as `command -v` finds it.
-fn on_path(name: &str, path: &str) -> Option<PathBuf> {
-    path.split(':').filter(|d| !d.is_empty()).find_map(|d| {
-        let p = Path::new(d).join(name);
-        #[cfg(unix)]
-        let runnable = {
-            use std::os::unix::fs::PermissionsExt;
-            fs::metadata(&p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
-        };
-        #[cfg(not(unix))]
-        let runnable = p.is_file();
-        runnable.then_some(p)
-    })
-}
+// formatter — runs in ocgen's own sandbox (`crate::sandbox`), which denies
+// whatever the hook env's lists don't grant. Where no sandbox can enforce
+// them, the command doesn't run at all — never unsandboxed.
 
 impl Hook<'_> {
     /// How a hook runs project code (`cmd`, through `sh -c`, in `dir`): in the
-    /// sandbox when the project's is on and the system has one, else as is.
-    /// `Err` says why it can't run at all: the sandbox is on, but its tool isn't
-    /// there.
-    fn project_command(&self, cmd: &str, dir: &Path) -> Result<Command, &'static str> {
-        if self.env("OCGEN_SANDBOX") != "1" || !cfg!(any(target_os = "macos", target_os = "linux"))
-        {
+    /// sandbox when the project's is on, else as is. `Err` says why it can't
+    /// run at all.
+    fn project_command(&self, cmd: &str, dir: &Path) -> Result<Command, String> {
+        if self.env("OCGEN_SANDBOX") != "1" {
             return Ok(shell(cmd));
         }
-        let project = self.project();
-        let spec = SandboxSpec {
-            deny_write: self.env("OCGEN_SANDBOX_DENY_WRITE"),
-            deny_read: self.env("OCGEN_SANDBOX_DENY_READ"),
-            home: self.env("HOME"),
-            project: &project,
-            dir,
-        };
-        let mut c = if cfg!(target_os = "macos") {
-            if !Path::new(SEATBELT).is_file() {
-                return Err(NO_SEATBELT);
-            }
-            let mut c = Command::new(SEATBELT);
-            c.arg("-p").arg(seatbelt_profile(&spec));
-            c
-        } else {
-            let bwrap = on_path("bwrap", self.env("PATH")).ok_or(NO_BWRAP)?;
-            let mut c = Command::new(bwrap);
-            c.args(bwrap_args(&spec));
-            c
-        };
-        c.args(["/bin/sh", "-c", cmd]);
-        for v in self
-            .env("OCGEN_SANDBOX_DENY_ENV")
-            .split_ascii_whitespace()
-            .filter(|v| env_name(v))
-        {
-            c.env_remove(v);
-        }
-        Ok(c)
+        crate::sandbox::command(self.env, &self.project(), dir, cmd)
     }
 }
 
@@ -3185,176 +2932,5 @@ mod tests {
     fn cksum_matches_posix() {
         assert_eq!(cksum(b""), "4294967295 0");
         assert_eq!(cksum(b"a\n"), "2418082923 2");
-    }
-
-    /// Paths that exist nowhere, so the builders' output is the same on every OS.
-    const NOWHERE: &str = "/ocgen-sandbox-test-nowhere";
-
-    fn spec<'a>(
-        write: &'a str,
-        read: &'a str,
-        home: &'a str,
-        p: &'a Path,
-        d: &'a Path,
-    ) -> SandboxSpec<'a> {
-        SandboxSpec {
-            deny_write: write,
-            deny_read: read,
-            home,
-            project: p,
-            dir: d,
-        }
-    }
-
-    #[test]
-    fn sandbox_entries_name_home_absolute_and_project_paths() {
-        let home = format!("{NOWHERE}/home");
-        let p = PathBuf::from(format!("{NOWHERE}/proj"));
-        let d = PathBuf::from(format!("{NOWHERE}/proj/.claude/worktrees/w1"));
-        let entries = format!("~/.claude ./.claude/hooks .git/hooks {NOWHERE}/abs ~/.claude");
-        let s = spec(&entries, "~/.ssh", &home, &p, &d);
-        let (write, inner, read) = s.targets(false);
-        let at = |s: &str| format!("{NOWHERE}/{s}");
-        assert_eq!(
-            write,
-            [
-                at("home/.claude"),
-                at("proj/.claude/hooks"),
-                at("proj/.git/hooks"),
-                at("abs")
-            ],
-            "each once, in order"
-        );
-        // The command's own folder gets the relative entries only.
-        assert_eq!(
-            inner,
-            [
-                at("proj/.claude/worktrees/w1/.claude/hooks"),
-                at("proj/.claude/worktrees/w1/.git/hooks")
-            ]
-        );
-        assert_eq!(read, [at("home/.ssh")]);
-        // On Linux an entry in .claude/ stands for .claude itself.
-        let (write, _, _) = s.targets(true);
-        assert_eq!(write[1], at("proj/.claude"));
-        // No home: no `~/` entries. The project itself: no inner list.
-        let s = spec("~/.claude ./.mcp.json", "~/.ssh", "", &p, &p);
-        assert_eq!(
-            s.targets(false),
-            (vec![at("proj/.mcp.json")], vec![], vec![])
-        );
-    }
-
-    #[test]
-    fn the_seatbelt_profile_denies_writes_reads_and_renames() {
-        let home = format!("{NOWHERE}/h\"q");
-        let p = PathBuf::from(format!("{NOWHERE}/p"));
-        let s = spec("~/.claude ./.git/hooks", "~/.ssh", &home, &p, &p);
-        let n = NOWHERE;
-        assert_eq!(
-            seatbelt_profile(&s),
-            format!(
-                "(version 1)(allow default)\
-                 (deny file-write* (subpath \"{n}/h\\\"q/.claude\") (subpath \"{n}/p/.git/hooks\") (subpath \"{n}/h\\\"q/.ssh\"))\
-                 (deny file-write-unlink (literal \"{n}\") (literal \"{n}/h\\\"q\") (literal \"{n}/p\") (literal \"{n}/p/.git\"))\
-                 (deny file-read* (subpath \"{n}/h\\\"q/.ssh\"))"
-            )
-        );
-        // Nothing to protect: just the default.
-        assert_eq!(
-            seatbelt_profile(&spec("", "", &home, &p, &p)),
-            "(version 1)(allow default)"
-        );
-    }
-
-    #[test]
-    fn bwrap_leaves_out_what_does_not_exist() {
-        let p = PathBuf::from(format!("{NOWHERE}/p"));
-        let s = spec("~/.claude ./.claude/x", "~/.ssh", NOWHERE, &p, &p);
-        assert_eq!(bwrap_args(&s), ["--dev-bind", "/", "/"]);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn bwrap_protects_what_exists_and_reopens_a_worker_folder_inside_it() {
-        let t = tempfile::tempdir().unwrap();
-        let real = |rel: &str| format!("{}/{rel}", real_path(&t.path().to_string_lossy()));
-        for dir in [
-            "home/.claude/ocgen",
-            "home/.ssh",
-            "p/.claude/worktrees/w1/.claude",
-            "p/.git/hooks",
-        ] {
-            fs::create_dir_all(t.path().join(dir)).unwrap();
-        }
-        fs::write(t.path().join("home/.npmrc"), "").unwrap();
-        let home = t.path().join("home").to_string_lossy().into_owned();
-        let p = t.path().join("p");
-        let d = p.join(".claude/worktrees/w1");
-        let s = spec(
-            "~/.claude ./.claude/settings.json ./.git/hooks ./.mcp.json",
-            "~/.ssh ~/.npmrc ~/.aws",
-            &home,
-            &p,
-            &d,
-        );
-        let args = bwrap_args(&s);
-        let pos = |a: &str, b: &str| {
-            args.windows(2)
-                .rposition(|w| w[0] == a && w[1] == b)
-                .unwrap_or_else(|| panic!("no {a} {b} in {args:?}"))
-        };
-        assert_eq!(args[..3], ["--dev-bind", "/", "/"]);
-        // Folders above protected paths can't be renamed away.
-        let above = pos("--bind", &real("p/.claude/worktrees"));
-        // The protected paths that exist: .claude whole on Linux.
-        let store = pos("--ro-bind", &real("home/.claude"));
-        let dot_claude = pos("--ro-bind", &real("p/.claude"));
-        pos("--ro-bind", &real("p/.git/hooks"));
-        assert!(!args.iter().any(|a| a.ends_with(".mcp.json")), "{args:?}");
-        // The worker's folder writable again, after, then its own .claude.
-        let reopen = pos("--bind", &real("p/.claude/worktrees/w1"));
-        let own = pos("--ro-bind", &real("p/.claude/worktrees/w1/.claude"));
-        assert!(
-            above < store && dot_claude < reopen && reopen < own,
-            "{args:?}"
-        );
-        // Credentials: an empty folder, /dev/null over a file, nothing for one
-        // that isn't there.
-        pos("--tmpfs", &real("home/.ssh"));
-        assert!(args
-            .windows(3)
-            .any(|w| w == ["--ro-bind", "/dev/null", &real("home/.npmrc")]));
-        assert!(!args.iter().any(|a| a.ends_with(".aws")));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn real_path_resolves_symlinks_and_keeps_a_missing_tail() {
-        let t = tempfile::tempdir().unwrap();
-        let base = real_path(&t.path().to_string_lossy());
-        fs::create_dir_all(t.path().join("dotfiles/claude")).unwrap();
-        std::os::unix::fs::symlink(t.path().join("dotfiles/claude"), t.path().join(".claude"))
-            .unwrap();
-        let link = format!("{}/.claude/ocgen/approvals", t.path().display());
-        assert_eq!(
-            real_path(&link),
-            format!("{base}/dotfiles/claude/ocgen/approvals")
-        );
-        assert_eq!(
-            real_path(&format!("{}//x/", t.path().display())),
-            format!("{base}/x")
-        );
-    }
-
-    #[test]
-    fn sandbox_helpers() {
-        assert!(env_name("GH_TOKEN") && env_name("_x1"));
-        assert!(!env_name("") && !env_name("1A") && !env_name("A-B") && !env_name("A B"));
-        assert_eq!(
-            ancestors(&["/a/b/c".into(), "/a/d".into(), "/e".into()]),
-            ["/a", "/a/b"]
-        );
-        assert_eq!(on_path("ocgen-no-such-tool", "/nowhere:"), None);
     }
 }

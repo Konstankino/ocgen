@@ -29,6 +29,7 @@ pub mod paths;
 pub mod recap;
 pub mod render;
 pub mod risk;
+pub mod sandbox;
 pub mod seeds;
 pub mod target;
 pub mod templates;

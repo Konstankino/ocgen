@@ -5,6 +5,7 @@
 //! understand the prefix — so any path that leaves the process (as an argument, an
 //! environment variable, or a key shared with a shell script) must be plain.
 
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 /// `p` without the Windows verbatim prefix (`\\?\C:\x` → `C:\x`,
@@ -25,6 +26,26 @@ pub fn plain(p: &Path) -> PathBuf {
 /// in JSON.
 pub fn for_shell(p: &Path) -> String {
     plain(p).to_string_lossy().replace('\\', "/")
+}
+
+/// A program in `path` (a PATH value) with PATHEXT `exts`; empty `exts` means the bare
+/// name. Only extensions `Command` can start (batch files via cmd) count.
+pub fn find_in(path: &OsStr, name: &str, exts: &str) -> Option<PathBuf> {
+    let exts: Vec<String> = if exts.is_empty() {
+        vec![String::new()]
+    } else {
+        exts.split(';')
+            .map(|e| e.trim().to_ascii_lowercase())
+            .filter(|e| [".com", ".exe", ".bat", ".cmd"].contains(&e.as_str()))
+            .collect()
+    };
+    std::env::split_paths(path)
+        .flat_map(|d| {
+            exts.iter()
+                .map(|e| d.join(format!("{name}{e}")))
+                .collect::<Vec<_>>()
+        })
+        .find(|p| p.is_file())
 }
 
 #[cfg(test)]

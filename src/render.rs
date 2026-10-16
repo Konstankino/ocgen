@@ -2145,7 +2145,10 @@ impl Project {
         if self.claude.sandbox.enabled && !(check.is_empty() && format.is_empty()) {
             // Claude Code doesn't sandbox hooks: the hooks run the check and the
             // formatter in an OS sandbox of their own, from these lists.
-            use crate::claude::{CREDENTIAL_ENV, CREDENTIAL_PATHS, HOOK_DENY_WRITE};
+            use crate::claude::{
+                CREDENTIAL_ENV, CREDENTIAL_PATHS, HOOK_ALLOW_EXEC, HOOK_ALLOW_READ,
+                HOOK_ALLOW_WRITE, HOOK_DENY_WRITE,
+            };
             env.insert("OCGEN_SANDBOX".into(), json!("1"));
             env.insert(
                 "OCGEN_SANDBOX_DENY_WRITE".into(),
@@ -2160,6 +2163,37 @@ impl Project {
                     "OCGEN_SANDBOX_DENY_ENV".into(),
                     json!(CREDENTIAL_ENV.join(" ")),
                 );
+            }
+            // Everything else is denied: what the sandbox grants on top of the
+            // system's folders and the project.
+            let sb = &self.claude.sandbox;
+            for (key, base, extra) in [
+                (
+                    "OCGEN_SANDBOX_ALLOW_READ",
+                    &HOOK_ALLOW_READ[..],
+                    &sb.hook_read,
+                ),
+                (
+                    "OCGEN_SANDBOX_ALLOW_EXEC",
+                    &HOOK_ALLOW_EXEC[..],
+                    &sb.hook_exec,
+                ),
+                (
+                    "OCGEN_SANDBOX_ALLOW_WRITE",
+                    &HOOK_ALLOW_WRITE[..],
+                    &sb.hook_write,
+                ),
+            ] {
+                let mut list: Vec<String> = base.iter().map(|s| s.to_string()).collect();
+                for e in extra.iter().map(|e| e.trim()).filter(|e| !e.is_empty()) {
+                    if !list.iter().any(|x| x == e) {
+                        list.push(e.to_string());
+                    }
+                }
+                env.insert(key.into(), json!(list.join(" ")));
+            }
+            if sb.hook_network {
+                env.insert("OCGEN_SANDBOX_NETWORK".into(), json!("1"));
             }
         }
         if self.claude.sandbox.enabled && !self.claude.sandbox.allow_credentials {

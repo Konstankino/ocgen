@@ -953,7 +953,7 @@ pub fn run_edit_team(path: String) -> Result<()> {
 }
 
 /// What native Windows users are told about the sandbox and the approval gate.
-const SANDBOX_UNSUPPORTED: &str = "The sandbox isn't available on native Windows, so here the approval gate is advisory (it still applies where these settings run on macOS, Linux or WSL2).";
+const SANDBOX_UNSUPPORTED: &str = "Claude Code's sandbox isn't available on native Windows, so here the approval gate is advisory (it still applies where these settings run on macOS, Linux or WSL2); the hooks' check and formatter still run in ocgen's own sandbox.";
 
 /// The sandbox question's help line. With the approval gate on it says what the
 /// gate amounts to without the sandbox.
@@ -966,7 +966,7 @@ fn sandbox_help_for(supported: bool, gate: bool) -> String {
     let what = "Bash runs with limited file and network access (Seatbelt on macOS, bubblewrap on Linux/WSL2); new network hosts prompt until allowed.";
     match (supported, gate) {
         (false, true) => format!("{what} {SANDBOX_UNSUPPORTED}"),
-        (false, false) => format!("{what} It isn't available on native Windows; it applies where these settings run on macOS, Linux or WSL2."),
+        (false, false) => format!("{what} It isn't available on native Windows; it applies where these settings run on macOS, Linux or WSL2. The hooks' check and formatter run in ocgen's own sandbox here too."),
         (true, true) => format!("{what} It keeps sandboxed commands (and the hooks' check and formatter) off the approval store and away from the credentials ocgen knows about. Without it the approval gate is advisory only: a pattern match an agent can phrase its way around."),
         (true, false) => format!("{what} Off by default."),
     }

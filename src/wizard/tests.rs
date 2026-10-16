@@ -724,8 +724,11 @@ fn the_sandbox_help_names_the_gate_only_when_it_is_on() {
     // when there is a gate.
     assert!(sandbox_help_for(false, true).contains("isn't available on native Windows"));
     assert!(sandbox_help_for(false, true).contains("approval gate is advisory"));
+    // …but the hooks' check and formatter still get ocgen's own.
+    assert!(sandbox_help_for(false, true).contains("ocgen's own sandbox"));
     let off = sandbox_help_for(false, false);
     assert!(off.contains("isn't available on native Windows"), "{off}");
+    assert!(off.contains("ocgen's own sandbox"), "{off}");
     assert!(!off.contains("approval gate"), "{off}");
 }
 

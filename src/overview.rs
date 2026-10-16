@@ -518,8 +518,13 @@ fn run_claude(root: &Path, project: &Project) -> Result<()> {
         "sandbox",
         &if project.claude.sandbox.enabled {
             format!(
-                "on (strict; {} extra domain(s))",
-                project.claude.sandbox.extra_domains.len()
+                "on (strict; {} extra domain(s); hooks: {})",
+                project.claude.sandbox.extra_domains.len(),
+                if project.claude.sandbox.hook_network {
+                    "network"
+                } else {
+                    "no network"
+                }
             )
         } else {
             ui::muted("off")
@@ -785,6 +790,146 @@ pub fn run_verify(path: String, run_claude: bool, run_check: bool) -> Result<boo
         ui::success("all checks passed");
     }
     Ok(fail == 0)
+}
+
+/// `ocgen sandbox …`: the hooks' own sandbox on this machine.
+pub fn run_sandbox(action: crate::cli::SandboxAction) -> Result<()> {
+    use crate::cli::SandboxAction;
+    use ocgen::sandbox;
+    // The project's folder: an ocgen project's root, else the folder given.
+    let root_of = |path: &str| -> Result<std::path::PathBuf> {
+        let p = Path::new(path);
+        Ok(match Project::discover(p) {
+            Ok((root, _)) => root,
+            Err(_) => ocgen::paths::plain(&p.canonicalize()?),
+        })
+    };
+    match action {
+        SandboxAction::Status { path, json } => {
+            let root = root_of(&path)?;
+            let env = ocgen::verify::sandbox_env(&root);
+            let r = sandbox::report(&env, &root);
+            if json {
+                let backends: Vec<serde_json::Value> = r
+                    .backends
+                    .iter()
+                    .map(|(k, ok)| {
+                        serde_json::json!({
+                            "kind": k,
+                            "works": ok.is_ok(),
+                            "why": ok.as_ref().err(),
+                        })
+                    })
+                    .collect();
+                let (policy, error) = match &r.policy {
+                    Ok(p) => (serde_json::to_value(p)?, None),
+                    Err(e) => (serde_json::Value::Null, Some(e.clone())),
+                };
+                let out = serde_json::json!({
+                    "on": r.on,
+                    "backend": r.native(),
+                    "backends": backends,
+                    "policy": policy,
+                    "error": error,
+                });
+                println!("{}", serde_json::to_string_pretty(&out)?);
+                return Ok(());
+            }
+            ui::banner("sandbox");
+            ui::kv("path", &ui::muted(&root.display().to_string()));
+            ui::kv("hooks' sandbox", if r.on { "on" } else { "off" });
+            println!();
+            for (k, ok) in &r.backends {
+                match ok {
+                    Ok(()) if Some(*k) == r.native() => println!(
+                        "  {} {}  {}",
+                        style("✔").green(),
+                        style(k.name()).bold(),
+                        ui::muted("runs the check and the formatter here")
+                    ),
+                    Ok(()) => println!("  {} {}", style("✔").green(), k.name()),
+                    Err(e) => println!("  {} {}  {}", style("✘").red(), k.name(), ui::muted(e)),
+                }
+            }
+            println!();
+            match &r.policy {
+                Ok(_) => ui::kv("grants", &r.detail()),
+                Err(e) => ui::warning(e),
+            }
+            Ok(())
+        }
+        SandboxAction::Run { path, command } => {
+            let root = root_of(&path)?;
+            let env = ocgen::verify::sandbox_env(&root);
+            if env.get("OCGEN_SANDBOX").map(String::as_str) != Some("1") {
+                bail!(
+                    "the hooks' sandbox is off for {} (its settings don't set OCGEN_SANDBOX=1)",
+                    root.display()
+                );
+            }
+            // The current folder when it is in the project (a worker's
+            // worktree), else the project's.
+            let here = std::env::current_dir()
+                .ok()
+                .map(|d| ocgen::paths::plain(&d.canonicalize().unwrap_or(d)))
+                .filter(|d| d.starts_with(&root))
+                .unwrap_or_else(|| root.clone());
+            let mut cmd = sandbox::command(&env, &root, &here, &command).map_err(|e| anyhow!(e))?;
+            let status = cmd.current_dir(&here).status()?;
+            std::process::exit(status.code().unwrap_or(1));
+        }
+        SandboxAction::Grant { path } => {
+            let root = root_of(&path)?;
+            #[cfg(windows)]
+            {
+                let env = ocgen::verify::sandbox_env(&root);
+                let p = sandbox::policy::compile(&sandbox::policy::Request {
+                    env: &env,
+                    project: &root,
+                    dir: &root,
+                    git: &[],
+                })
+                .map_err(|e| anyhow!(e))?;
+                let (_, _, m) = sandbox::windows::grant(&p).map_err(|e| anyhow!(e))?;
+                ui::success(&format!(
+                    "{} can run sandboxed checks ({}: {} paths for it, {} shared)",
+                    root.display(),
+                    m.profile,
+                    m.package.len(),
+                    m.toolchain.len()
+                ));
+            }
+            #[cfg(not(windows))]
+            println!(
+                "nothing to grant: the hooks' sandbox needs no setup on {} ({})",
+                std::env::consts::OS,
+                root.display()
+            );
+            Ok(())
+        }
+        SandboxAction::Reset { path, all } => {
+            #[cfg(windows)]
+            {
+                let root = if all { None } else { Some(root_of(&path)?) };
+                let done = sandbox::windows::reset(root.as_deref()).map_err(|e| anyhow!(e))?;
+                if done.is_empty() {
+                    println!("nothing to reset: ocgen gave no AppContainer permissions here");
+                }
+                for d in done {
+                    ui::success(&format!("reset {d}"));
+                }
+            }
+            #[cfg(not(windows))]
+            {
+                let _ = (path, all);
+                println!(
+                    "nothing to reset: the hooks' sandbox leaves nothing behind on {}",
+                    std::env::consts::OS
+                );
+            }
+            Ok(())
+        }
+    }
 }
 
 /// `ocgen approve`: a human unlocks high-impact actions for a limited time.
