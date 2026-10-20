@@ -114,6 +114,35 @@ impl Cmd {
     }
 }
 
+/// On Windows, what a refused command that ended with 0 ran into: the
+/// permissions on the protected file and the folders above it, what the file
+/// holds, and whom the sandbox ran the command as. Nothing elsewhere.
+fn windows_state(f: &Fixture) -> String {
+    if !cfg!(windows) {
+        return String::new();
+    }
+    let file = f.p.join(r".claude\settings.json");
+    let mut s = String::new();
+    for path in [file.clone(), f.p.join(".claude"), f.p.clone()] {
+        let o = Command::new("icacls").arg(&path).output().unwrap();
+        s.push_str(&String::from_utf8_lossy(&o.stdout));
+    }
+    s.push_str(&format!(
+        "{} holds: {:?}\n",
+        file.display(),
+        fs::read_to_string(&file).unwrap_or_default()
+    ));
+    let who = run(f, "whoami /groups /fo list");
+    s.push_str(&format!("whoami in the sandbox: {who:?}\n"));
+    // PowerShell says why a write fails, whatever cmd's exit code was.
+    let ps = run(
+        f,
+        r#"powershell -NoProfile -NonInteractive -Command "Add-Content -LiteralPath .claude\settings.json -Value x -ErrorAction Stop""#,
+    );
+    s.push_str(&format!("PowerShell's write in the sandbox: {ps:?}"));
+    s
+}
+
 /// The sandbox the machine must be using, when the environment says.
 fn expect_backend(f: &Fixture) {
     let Ok(want) = std::env::var("OCGEN_TEST_SANDBOX_EXPECT") else {
@@ -141,6 +170,7 @@ fn a_sandboxed_command_does_its_work_and_nothing_else() {
     assert_eq!(o.0, 0, "{o:?}");
     assert!(f.p.join("src/out.txt").exists());
 
+    let mut ran = Vec::new();
     for c in [
         // What Claude Code and git run unsandboxed: written, created, renamed.
         Cmd {
@@ -184,8 +214,16 @@ fn a_sandboxed_command_does_its_work_and_nothing_else() {
     ] {
         let cmd = c.text(&f);
         let o = run(&f, &cmd);
-        assert_ne!(o.0, 0, "{cmd}: {o:?}");
+        if o.0 == 0 {
+            ran.push(format!("{cmd}: {o:?}"));
+        }
     }
+    assert!(
+        ran.is_empty(),
+        "refused, yet ended with 0:\n{}\n{}",
+        ran.join("\n"),
+        windows_state(&f)
+    );
     let settings = fs::read_to_string(f.p.join(".claude/settings.json")).unwrap();
     assert!(settings.starts_with("{\"env\""), "{settings}");
     assert!(!f.p.join(".claude/settings.local.json").exists());
