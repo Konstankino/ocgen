@@ -436,6 +436,16 @@ fn remove(path: &Path, sids: &[&Sid]) -> Result<(), String> {
 
 // ------------------------------------------------------------ manifest --
 
+/// What a shell's start-up check runs (`exit 7`) must end with. A shell that
+/// dies while starting can still end with 0 (Git Bash's runtime can't start
+/// in an AppContainer, and its launcher reports success), so success alone
+/// doesn't show it ran.
+const PROBE_EXIT: u32 = 7;
+
+/// The start-up check's version: shells found to start by an older check (one
+/// that took any 0 for success) are checked again.
+const PROBE_VERSION: u32 = 2;
+
 /// What ocgen put on the files for one project's container.
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Manifest {
@@ -455,6 +465,22 @@ pub struct Manifest {
     /// The same for PowerShell.
     #[serde(default)]
     pub powershell: Option<(PathBuf, u64, bool)>,
+    /// The start-up check that found them ([`PROBE_VERSION`]).
+    #[serde(default)]
+    pub probe: u32,
+}
+
+impl Manifest {
+    /// Forget what an older start-up check found.
+    fn current(mut self) -> Self {
+        if self.probe != PROBE_VERSION {
+            self.shell = None;
+            self.bash = None;
+            self.powershell = None;
+            self.probe = PROBE_VERSION;
+        }
+        self
+    }
 }
 
 pub fn manifest_dir() -> Option<PathBuf> {
@@ -468,8 +494,9 @@ fn manifest_path(profile: &str) -> Option<PathBuf> {
 fn load(profile: &str) -> Manifest {
     manifest_path(profile)
         .and_then(|p| std::fs::read_to_string(p).ok())
-        .and_then(|s| serde_json::from_str(&s).ok())
+        .and_then(|s| serde_json::from_str::<Manifest>(&s).ok())
         .unwrap_or_default()
+        .current()
 }
 
 fn save(m: &Manifest) {
@@ -811,7 +838,7 @@ fn shell_works(
     let ok = starts(
         &mut m.shell,
         &sh,
-        &["-c", "exit 0"],
+        &["-c", "exit 7"],
         package,
         caps,
         env,
@@ -821,8 +848,8 @@ fn shell_works(
     ok.then_some(sh)
 }
 
-/// Whether `prog` with `args` (a no-op) starts and exits 0 in the container:
-/// remembered in `slot` per program (path and modified time).
+/// Whether `prog` with `args` (`exit 7`) starts in the container and ends with
+/// [`PROBE_EXIT`]: remembered in `slot` per program (path and modified time).
 fn starts(
     slot: &mut Option<(PathBuf, u64, bool)>,
     prog: &Path,
@@ -852,7 +879,7 @@ fn starts(
         env,
         dir,
         20_000,
-    ) == Ok(0);
+    ) == Ok(PROBE_EXIT);
     *slot = Some((prog.to_path_buf(), modified, ok));
     ok
 }
@@ -1024,7 +1051,7 @@ pub fn check_shells(p: &Policy) -> Result<Vec<(PathBuf, bool)>, String> {
         let ok = starts(
             &mut m.bash,
             &bash,
-            &["-c", "exit 0"],
+            &["-c", "exit 7"],
             &package,
             &caps,
             &env,
@@ -1034,7 +1061,7 @@ pub fn check_shells(p: &Policy) -> Result<Vec<(PathBuf, bool)>, String> {
     }
     if let Some(ps) = powershell() {
         m.powershell = None;
-        let args = ["-NoProfile", "-NonInteractive", "-Command", "exit 0"];
+        let args = ["-NoProfile", "-NonInteractive", "-Command", "exit 7"];
         let ok = starts(&mut m.powershell, &ps, &args, &package, &caps, &env, &p.dir);
         out.push((ps, ok));
     }
@@ -1083,7 +1110,7 @@ pub fn run_agent(p: &Policy, sh: Shell, cmd: &str) -> Result<i32, String> {
             if !starts(
                 &mut m.bash,
                 &bash,
-                &["-c", "exit 0"],
+                &["-c", "exit 7"],
                 &package,
                 &caps,
                 &env,
@@ -1111,7 +1138,7 @@ pub fn run_agent(p: &Policy, sh: Shell, cmd: &str) -> Result<i32, String> {
                 "Bypass",
             ];
             let mut probe = args.to_vec();
-            probe.extend(["-Command", "exit 0"]);
+            probe.extend(["-Command", "exit 7"]);
             if !starts(
                 &mut m.powershell,
                 &ps,
@@ -1202,6 +1229,23 @@ pub fn describe(p: &Policy) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn what_an_older_start_up_check_found_is_checked_again() {
+        let old: Manifest = serde_json::from_str(
+            r#"{"project":"C:/p","profile":"x","package":[],"toolchain":[],"labels":[],"shell":["C:/Git/bin/sh.exe",1,true]}"#,
+        )
+        .unwrap();
+        let m = old.current();
+        assert_eq!((m.shell, m.probe), (None, PROBE_VERSION));
+        let now = Manifest {
+            shell: Some((PathBuf::from("C:/Git/bin/sh.exe"), 1, false)),
+            probe: PROBE_VERSION,
+            ..Manifest::default()
+        }
+        .current();
+        assert!(now.shell.is_some(), "kept");
+    }
 
     #[test]
     fn profile_names_ignore_case_and_the_verbatim_prefix() {

@@ -37,10 +37,19 @@ const NETWORK_SERVICES: [&str; 5] = [
     "com.apple.networkd",
 ];
 
+/// Apple's rules for starting a process with dyld (macOS 13 and later, where
+/// the system's libraries live in a cryptex): reading and mapping its shared
+/// cache there, and opening `/`. Without them dyld halts every command before
+/// it runs (SIGABRT). Imported rather than copied, so they follow the system.
+pub const DYLD_SUPPORT: &str = "/System/Library/Sandbox/Profiles/dyld-support.sb";
+
 /// The Seatbelt profile (SBPL) for `p`. Later rules win, so the denials for
 /// protected and hidden paths come after the grants that contain them.
 pub fn profile(p: &Policy) -> String {
     let mut s = String::from("(version 1)(deny default)");
+    if Path::new(DYLD_SUPPORT).is_file() {
+        s.push_str("(import \"dyld-support.sb\")");
+    }
     s.push_str("(allow process-fork)(allow signal (target same-sandbox))(allow sysctl-read)");
     s.push_str("(allow process-info* (target self))(allow user-preference-read)");
     // Names and sizes along any path (`realpath`, `getcwd`), not contents.
@@ -57,6 +66,8 @@ pub fn profile(p: &Policy) -> String {
     s.push_str(&rule("allow mach-lookup", "global-name", &services));
     let runnable: Vec<&PathBuf> = p.exec.iter().chain(&p.write).collect();
     s.push_str(&rule("allow process-exec", "subpath", &runnable));
+    // The libraries a granted program loads (rustc's, from ~/.rustup).
+    s.push_str(&rule("allow file-map-executable", "subpath", &runnable));
     let readable: Vec<&PathBuf> = p.grants().collect();
     s.push_str(&rule("allow file-read*", "subpath", &readable));
     // A granted path that is a symlink: the link itself, read on the way.
@@ -200,6 +211,67 @@ mod tests {
             !s.contains("(allow mach*") && !s.contains("(allow default"),
             "{s}"
         );
+    }
+
+    /// What a process needs to start at all: on a macOS whose system lives in
+    /// a cryptex, dyld reads its shared cache there and opens `/` — without
+    /// them every command aborts before it runs (SIGABRT in dyld). Apple's
+    /// own rules for that are imported; and a library a granted program loads
+    /// (rustc's, from ~/.rustup) may be mapped to run.
+    #[test]
+    fn a_process_can_start_under_the_profile() {
+        let s = profile(&policy());
+        assert_eq!(
+            s.contains("(import \"dyld-support.sb\")"),
+            Path::new(DYLD_SUPPORT).is_file(),
+            "{s}"
+        );
+        assert!(
+            s.contains("(allow file-map-executable (subpath \"/usr\") (subpath \"/h/.cargo/bin\") (subpath \"/p\") (subpath \"/h/.cargo/registry\"))"),
+            "{s}"
+        );
+    }
+
+    /// The profile compiles here, as `sandbox_init` would compile it (an
+    /// operation this macOS doesn't know fails it, and every command with it).
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_profile_compiles_on_this_macos() {
+        use std::ffi::{c_char, c_int, c_void, CStr, CString};
+        extern "C" {
+            fn dlopen(path: *const c_char, mode: c_int) -> *mut c_void;
+            fn dlsym(handle: *mut c_void, name: *const c_char) -> *mut c_void;
+        }
+        type Compile =
+            unsafe extern "C" fn(*const c_char, *mut c_void, *mut *mut c_char) -> *mut c_void;
+        let lib = CString::new("/usr/lib/libsandbox.1.dylib").unwrap();
+        let name = CString::new("sandbox_compile_string").unwrap();
+        // SAFETY: the system's libsandbox, and its compiler's C signature.
+        let sandbox_compile_string: Compile = unsafe {
+            let h = dlopen(lib.as_ptr(), 1);
+            assert!(!h.is_null(), "no libsandbox");
+            let f = dlsym(h, name.as_ptr());
+            assert!(!f.is_null(), "no sandbox_compile_string");
+            std::mem::transmute::<*mut c_void, Compile>(f)
+        };
+        let mut p = policy();
+        for network in [false, true] {
+            p.network = network;
+            let text = CString::new(profile(&p)).unwrap();
+            let mut err: *mut c_char = std::ptr::null_mut();
+            // SAFETY: a NUL-terminated profile; the error string is read once.
+            let compiled =
+                unsafe { sandbox_compile_string(text.as_ptr(), std::ptr::null_mut(), &mut err) };
+            let why = if err.is_null() {
+                String::new()
+            } else {
+                // SAFETY: libsandbox returns a NUL-terminated message.
+                unsafe { CStr::from_ptr(err) }
+                    .to_string_lossy()
+                    .into_owned()
+            };
+            assert!(!compiled.is_null(), "{why}\n{}", text.to_string_lossy());
+        }
     }
 
     #[test]

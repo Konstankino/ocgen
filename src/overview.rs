@@ -882,6 +882,13 @@ pub fn run_sandbox(action: crate::cli::SandboxAction) -> Result<()> {
                 .unwrap_or_else(|| root.clone());
             let mut cmd = sandbox::command(&env, &root, &here, &command).map_err(|e| anyhow!(e))?;
             let status = cmd.current_dir(&here).status()?;
+            // Killed by a signal (the sandbox, or what it starts, crashing):
+            // say so, and exit as a shell does.
+            #[cfg(unix)]
+            if let Some(sig) = std::os::unix::process::ExitStatusExt::signal(&status) {
+                eprintln!("ocgen sandbox: the command was killed by signal {sig}");
+                std::process::exit(128 + sig);
+            }
             std::process::exit(status.code().unwrap_or(1));
         }
         SandboxAction::Grant { path } => {
