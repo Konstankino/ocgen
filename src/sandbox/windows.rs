@@ -34,12 +34,15 @@ use windows_sys::Win32::Security::Isolation::{
 };
 use windows_sys::Win32::Security::{
     AclSizeInformation, AddAce, CreateWellKnownSid, DeriveCapabilitySidsFromName, EqualSid,
-    FreeSid, GetAce, GetAclInformation, GetLengthSid, GetSecurityDescriptorSacl, InitializeAcl,
+    FreeSid, GetAce, GetAclInformation, GetLengthSid, GetSecurityDescriptorSacl,
+    GetSidSubAuthority, GetSidSubAuthorityCount, GetTokenInformation, InitializeAcl,
+    TokenAppContainerSid, TokenIntegrityLevel, TokenIsAppContainer,
     WinCapabilityInternetClientServerSid, WinCapabilityInternetClientSid,
     WinCapabilityPrivateNetworkClientServerSid, ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, ACL_REVISION,
     ACL_SIZE_INFORMATION, CONTAINER_INHERIT_ACE, DACL_SECURITY_INFORMATION, INHERITED_ACE,
     LABEL_SECURITY_INFORMATION, NO_INHERITANCE, OBJECT_INHERIT_ACE, PSID, SECURITY_CAPABILITIES,
-    SID_AND_ATTRIBUTES, WELL_KNOWN_SID_TYPE,
+    SID_AND_ATTRIBUTES, TOKEN_APPCONTAINER_INFORMATION, TOKEN_INFORMATION_CLASS,
+    TOKEN_MANDATORY_LABEL, TOKEN_QUERY, WELL_KNOWN_SID_TYPE,
 };
 use windows_sys::Win32::System::Com::CoTaskMemFree;
 use windows_sys::Win32::System::JobObjects::{
@@ -51,12 +54,14 @@ use windows_sys::Win32::System::JobObjects::{
     JOB_OBJECT_UILIMIT_GLOBALATOMS, JOB_OBJECT_UILIMIT_HANDLES, JOB_OBJECT_UILIMIT_READCLIPBOARD,
     JOB_OBJECT_UILIMIT_SYSTEMPARAMETERS, JOB_OBJECT_UILIMIT_WRITECLIPBOARD,
 };
+use windows_sys::Win32::System::Registry::{RegGetValueW, HKEY_LOCAL_MACHINE, RRF_RT_REG_DWORD};
 use windows_sys::Win32::System::Threading::{
     CreateProcessW, DeleteProcThreadAttributeList, GetCurrentProcess, GetExitCodeProcess,
-    InitializeProcThreadAttributeList, ResumeThread, TerminateProcess, UpdateProcThreadAttribute,
-    WaitForSingleObject, CREATE_NO_WINDOW, CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT,
-    EXTENDED_STARTUPINFO_PRESENT, INFINITE, PROCESS_INFORMATION, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
-    PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES, STARTF_USESTDHANDLES, STARTUPINFOEXW,
+    InitializeProcThreadAttributeList, OpenProcessToken, ResumeThread, TerminateProcess,
+    UpdateProcThreadAttribute, WaitForSingleObject, CREATE_NO_WINDOW, CREATE_SUSPENDED,
+    CREATE_UNICODE_ENVIRONMENT, EXTENDED_STARTUPINFO_PRESENT, INFINITE, PROCESS_INFORMATION,
+    PROC_THREAD_ATTRIBUTE_HANDLE_LIST, PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
+    STARTF_USESTDHANDLES, STARTUPINFOEXW,
 };
 
 use super::acl::{self, Ace, Level, Who};
@@ -73,6 +78,8 @@ const SE_GROUP_ENABLED: u32 = 4;
 const ALLOWED: u8 = 0;
 const DENIED: u8 = 1;
 const MANDATORY_LABEL: u8 = 0x11;
+/// The Low integrity level's RID (`S-1-16-4096`), an AppContainer's.
+const LOW_RID: u32 = 0x1000;
 
 fn wide(s: impl AsRef<OsStr>) -> Vec<u16> {
     s.as_ref().encode_wide().chain([0]).collect()
@@ -601,6 +608,101 @@ pub fn reset(project: Option<&Path>) -> Result<Vec<String>, String> {
     Ok(done)
 }
 
+// ------------------------------------------------------------ checking --
+
+/// Why ocgen doesn't use an AppContainer on a machine with UAC off.
+pub const UAC_OFF: &str = "UAC is off here (EnableLUA is 0 in HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System), and ocgen doesn't rely on an AppContainer without it: turn UAC on to sandbox commands here";
+
+/// Whether UAC is on: `EnableLUA` isn't 0 (a missing value means on).
+pub fn uac_on() -> bool {
+    let key = wide(r"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System");
+    let name = wide("EnableLUA");
+    let mut value: u32 = 1;
+    let mut size = std::mem::size_of::<u32>() as u32;
+    // SAFETY: a DWORD value read into a DWORD of the size given.
+    let rc = unsafe {
+        RegGetValueW(
+            HKEY_LOCAL_MACHINE,
+            key.as_ptr(),
+            name.as_ptr(),
+            RRF_RT_REG_DWORD,
+            null_mut(),
+            &mut value as *mut u32 as *mut c_void,
+            &mut size,
+        )
+    };
+    rc != 0 || value != 0
+}
+
+/// Whether an AppContainer can sandbox commands here, and if not, why.
+pub fn probe() -> Result<(), String> {
+    if uac_on() {
+        Ok(())
+    } else {
+        Err(UAC_OFF.to_string())
+    }
+}
+
+/// Whether a started process is contained as asked: in an AppContainer, the
+/// project's, at Low integrity or below — and if not, why.
+fn contained(in_container: bool, ours: bool, rid: Option<u32>) -> Result<(), String> {
+    if !in_container {
+        return Err("it isn't in an AppContainer".into());
+    }
+    if !ours {
+        return Err("it's in another AppContainer than the project's".into());
+    }
+    match rid {
+        Some(r) if r <= LOW_RID => Ok(()),
+        Some(r) => Err(format!("it runs at integrity level {r:#x}, above Low")),
+        None => Err("its integrity level can't be read".into()),
+    }
+}
+
+/// One kind of information about `token`, in a buffer aligned for it.
+///
+/// # Safety
+/// `token` is a token handle opened with `TOKEN_QUERY`.
+unsafe fn token_info(token: HANDLE, class: TOKEN_INFORMATION_CLASS) -> Option<Vec<u64>> {
+    let mut n = 0u32;
+    GetTokenInformation(token, class, null_mut(), 0, &mut n);
+    if n == 0 {
+        return None;
+    }
+    let mut buf = vec![0u64; (n as usize).div_ceil(8)];
+    let ok = GetTokenInformation(token, class, buf.as_mut_ptr() as *mut c_void, n, &mut n) != 0;
+    ok.then_some(buf)
+}
+
+/// Whether `process` (started, not yet running) runs in `package` at Low
+/// integrity, as its token says — and if not, why.
+///
+/// # Safety
+/// `process` is a process handle with `PROCESS_QUERY_INFORMATION` access.
+unsafe fn check_token(process: HANDLE, package: &Sid) -> Result<(), String> {
+    let mut token: HANDLE = null_mut();
+    if OpenProcessToken(process, TOKEN_QUERY, &mut token) == 0 {
+        return Err(format!("its token can't be read: {}", last_error()));
+    }
+    let token = Owned(token);
+    let in_container =
+        token_info(token.0, TokenIsAppContainer).is_some_and(|b| *(b.as_ptr() as *const u32) != 0);
+    let ours = in_container
+        && token_info(token.0, TokenAppContainerSid).is_some_and(|b| {
+            let sid = (*(b.as_ptr() as *const TOKEN_APPCONTAINER_INFORMATION)).TokenAppContainer;
+            !sid.is_null() && EqualSid(sid, package.ptr()) != 0
+        });
+    let rid = token_info(token.0, TokenIntegrityLevel).and_then(|b| {
+        let sid = (*(b.as_ptr() as *const TOKEN_MANDATORY_LABEL)).Label.Sid;
+        if sid.is_null() {
+            return None;
+        }
+        let count = *GetSidSubAuthorityCount(sid);
+        (count > 0).then(|| *GetSidSubAuthority(sid, u32::from(count) - 1))
+    });
+    contained(in_container, ours, rid)
+}
+
 // ------------------------------------------------------------- running --
 
 /// Close a handle when dropped.
@@ -787,6 +889,14 @@ fn run_contained(
             ));
         }
         let (process, thread) = (Owned(pi.hProcess), Owned(pi.hThread));
+        // Before it runs: a container that didn't take would run it unsandboxed.
+        if let Err(why) = check_token(process.0, package) {
+            TerminateProcess(process.0, 1);
+            return Err(format!(
+                "{} didn't start contained ({why}), so ocgen ended it before it ran: it never runs a command unsandboxed",
+                app.display()
+            ));
+        }
         // A job this process is in may forbid a nested job's UI limits.
         let mut job_h = job(true)?;
         if AssignProcessToJobObject(job_h.0, process.0) == 0 {
@@ -1165,6 +1275,54 @@ mod tests {
         }
         .current();
         assert!(now.shell.is_some(), "kept");
+    }
+
+    #[test]
+    fn only_the_projects_container_at_low_integrity_counts_as_contained() {
+        assert_eq!(contained(true, true, Some(LOW_RID)), Ok(()));
+        // An AppContainer below Low (untrusted) is still contained.
+        assert_eq!(contained(true, true, Some(0)), Ok(()));
+        for (in_container, ours, rid, why) in [
+            (false, false, Some(0x3000), "isn't in an AppContainer"),
+            (true, false, Some(LOW_RID), "another AppContainer"),
+            (true, true, Some(0x2000), "0x2000, above Low"),
+            (true, true, None, "can't be read"),
+        ] {
+            let e = contained(in_container, ours, rid).unwrap_err();
+            assert!(e.contains(why), "{e}");
+        }
+    }
+
+    /// The command ocgen starts runs in the project's container at Low
+    /// integrity, as its token says (where an AppContainer can be used).
+    #[test]
+    fn a_started_command_is_checked_against_its_token() {
+        if probe().is_err() {
+            eprintln!("skipped: {UAC_OFF}");
+            return;
+        }
+        let t = tempfile::tempdir().unwrap();
+        let dir = crate::paths::plain(&t.path().canonicalize().unwrap());
+        let p = Policy {
+            project: dir.clone(),
+            dir: dir.clone(),
+            write: vec![dir.clone()],
+            ..Policy::default()
+        };
+        let (package, toolchain, _) = grant(&p).unwrap();
+        let comspec = std::env::var("ComSpec").unwrap();
+        let env: Vec<(OsString, OsString)> = std::env::vars_os().collect();
+        let code = run_contained(
+            &package,
+            &[toolchain],
+            Path::new(&comspec),
+            "cmd /d /c exit 3",
+            &env,
+            &dir,
+            60_000,
+        );
+        assert_eq!(code, Ok(3));
+        let _ = reset(Some(&dir));
     }
 
     #[test]

@@ -97,7 +97,7 @@ pub fn probe(kind: Kind, env: &HashMap<String, String>) -> Result<(), String> {
         #[cfg(target_os = "linux")]
         Kind::Landlock => landlock::abi().map(|_| ()),
         #[cfg(windows)]
-        Kind::AppContainer => Ok(()),
+        Kind::AppContainer => windows::probe(),
         Kind::Wasm => Ok(()),
         #[allow(unreachable_patterns)]
         other => Err(format!("{} isn't available on this OS", other.name())),

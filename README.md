@@ -1727,11 +1727,12 @@ the gates stop taking the agent's word alone:
     project's top folder, `.git/` or `.claude/` (a check that creates `target/` there the first
     time fails, and `ocgen verify` warns). On native Windows (no WSL needed), an
     AppContainer in a job object: ocgen puts access entries on the granted folders the first time
-    (`ocgen sandbox grant` does it ahead, `ocgen sandbox reset` takes them off again) and runs the
-    check as one program without a shell (`cargo test --locked`; a pipe or `&&` is refused):
+    (`ocgen sandbox grant` does it ahead, `ocgen sandbox reset` takes them off again), checks that
+    each command starts in the project's container at Low integrity before it runs (and ends it if
+    not), and runs the check as one program without a shell (`cargo test --locked`; a pipe or `&&` is refused):
     Git Bash can't run reliably in an AppContainer (its runtime needs a shared object folder a
     container may not create, and a command that dies of it can still end with 0). Loopback stays closed
-    there even with the network on. Where none of these works, a command that is a WASI module
+    there even with the network on. With UAC off (`EnableLUA` 0) ocgen doesn't use an AppContainer. Where none of these works, a command that is a WASI module
     (`*.wasm`) runs in wasmtime; anything else isn't run and counts as failed, and the formatter
     is skipped. Never unsandboxed.
   - Where a sandbox can only protect what exists (bubblewrap, Windows), a protected file the
