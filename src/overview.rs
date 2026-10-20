@@ -517,13 +517,19 @@ fn run_claude(root: &Path, project: &Project) -> Result<()> {
     ui::kv(
         "sandbox",
         &if project.claude.sandbox.enabled {
+            let net = |on: bool| if on { "network" } else { "no network" };
+            let sb = &project.claude.sandbox;
             format!(
-                "on (strict; {} extra domain(s); hooks: {})",
-                project.claude.sandbox.extra_domains.len(),
-                if project.claude.sandbox.hook_network {
-                    "network"
+                "on (strict; {} extra domain(s); hooks: {}{})",
+                sb.extra_domains.len(),
+                net(sb.hook_network),
+                if ocgen::claude::ocgen_sandboxes_shell() {
+                    format!(
+                        "; Claude's commands: {}, in ocgen's sandbox",
+                        net(sb.agent_network)
+                    )
                 } else {
-                    "no network"
+                    String::new()
                 }
             )
         } else {
@@ -880,31 +886,14 @@ pub fn run_sandbox(action: crate::cli::SandboxAction) -> Result<()> {
         }
         SandboxAction::Grant { path } => {
             let root = root_of(&path)?;
-            #[cfg(windows)]
-            {
-                let env = ocgen::verify::sandbox_env(&root);
-                let p = sandbox::policy::compile(&sandbox::policy::Request {
-                    env: &env,
-                    project: &root,
-                    dir: &root,
-                    git: &[],
-                })
-                .map_err(|e| anyhow!(e))?;
-                let (_, _, m) = sandbox::windows::grant(&p).map_err(|e| anyhow!(e))?;
-                ui::success(&format!(
-                    "{} can run sandboxed checks ({}: {} paths for it, {} shared)",
-                    root.display(),
-                    m.profile,
-                    m.package.len(),
-                    m.toolchain.len()
-                ));
+            let env = ocgen::verify::sandbox_env(&root);
+            for line in sandbox::grant_project(&env, &root).map_err(|e| anyhow!(e))? {
+                if cfg!(windows) {
+                    ui::success(&line);
+                } else {
+                    println!("{line}");
+                }
             }
-            #[cfg(not(windows))]
-            println!(
-                "nothing to grant: the hooks' sandbox needs no setup on {} ({})",
-                std::env::consts::OS,
-                root.display()
-            );
             Ok(())
         }
         SandboxAction::Reset { path, all } => {

@@ -8,7 +8,9 @@
 //!
 //! The command runs through Git Bash's `sh` when that starts in an
 //! AppContainer here (checked once, then remembered); otherwise as one program
-//! without a shell ([`cmdline::split`]).
+//! without a shell ([`cmdline::split`]). A command Claude runs ([`run_agent`])
+//! runs in the shell it was written for — Git Bash's `bash`, or PowerShell —
+//! and is refused when that shell can't start here.
 
 use std::ffi::{c_void, OsStr, OsString};
 use std::os::windows::ffi::OsStrExt;
@@ -61,6 +63,7 @@ use windows_sys::Win32::System::Threading::{
 use super::acl::{self, Ace, Level, Who};
 use super::cmdline;
 use super::policy::{is_within, Policy};
+use super::shell::Shell;
 
 /// The capability every project's container holds, for the toolchains and
 /// caches granted once per machine.
@@ -446,6 +449,12 @@ pub struct Manifest {
     pub labels: Vec<PathBuf>,
     /// Whether Git Bash's `sh` (path, modified time) starts in a container.
     pub shell: Option<(PathBuf, u64, bool)>,
+    /// The same for Git Bash's `bash`, which runs the commands Claude runs.
+    #[serde(default)]
+    pub bash: Option<(PathBuf, u64, bool)>,
+    /// The same for PowerShell.
+    #[serde(default)]
+    pub powershell: Option<(PathBuf, u64, bool)>,
 }
 
 pub fn manifest_dir() -> Option<PathBuf> {
@@ -799,25 +808,77 @@ fn shell_works(
     dir: &Path,
 ) -> Option<PathBuf> {
     let sh = find_on_path("sh")?;
-    let modified = std::fs::metadata(&sh)
+    let ok = starts(
+        &mut m.shell,
+        &sh,
+        &["-c", "exit 0"],
+        package,
+        caps,
+        env,
+        dir,
+    );
+    save(m);
+    ok.then_some(sh)
+}
+
+/// Whether `prog` with `args` (a no-op) starts and exits 0 in the container:
+/// remembered in `slot` per program (path and modified time).
+fn starts(
+    slot: &mut Option<(PathBuf, u64, bool)>,
+    prog: &Path,
+    args: &[&str],
+    package: &Sid,
+    caps: &[Sid],
+    env: &[(OsString, OsString)],
+    dir: &Path,
+) -> bool {
+    let modified = std::fs::metadata(prog)
         .and_then(|x| x.modified())
         .ok()
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
         .map_or(0, |d| d.as_secs());
-    if let Some((p, t, ok)) = &m.shell {
-        if *p == sh && *t == modified {
-            return ok.then_some(sh);
+    if let Some((p, t, ok)) = slot {
+        if p == prog && *t == modified {
+            return *ok;
         }
     }
-    let line = cmdline::command_line(&[
-        sh.to_string_lossy().into_owned(),
-        "-c".into(),
-        "exit 0".into(),
-    ]);
-    let ok = run_contained(package, caps, &sh, &line, env, dir, 20_000) == Ok(0);
-    m.shell = Some((sh.clone(), modified, ok));
-    save(m);
-    ok.then_some(sh)
+    let mut line = vec![prog.to_string_lossy().into_owned()];
+    line.extend(args.iter().map(|a| a.to_string()));
+    let ok = run_contained(
+        package,
+        caps,
+        prog,
+        &cmdline::command_line(&line),
+        env,
+        dir,
+        20_000,
+    ) == Ok(0);
+    *slot = Some((prog.to_path_buf(), modified, ok));
+    ok
+}
+
+/// Git Bash's `bash`: the one Claude Code is told to use
+/// (`CLAUDE_CODE_GIT_BASH_PATH`), else the one beside Git's `sh` on PATH —
+/// never `System32\bash.exe`, which starts WSL.
+fn git_bash() -> Option<PathBuf> {
+    if let Some(p) = std::env::var_os("CLAUDE_CODE_GIT_BASH_PATH").map(PathBuf::from) {
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    let sh = find_on_path("sh")?;
+    let bash = sh.with_file_name("bash.exe");
+    bash.is_file().then_some(bash)
+}
+
+/// The PowerShell Claude Code runs commands with: `pwsh`, else Windows
+/// PowerShell.
+fn powershell() -> Option<PathBuf> {
+    find_on_path("pwsh").or_else(|| {
+        let root = std::env::var_os("SystemRoot")?;
+        let p = PathBuf::from(root).join(r"System32\WindowsPowerShell\v1.0\powershell.exe");
+        p.is_file().then_some(p)
+    })
 }
 
 /// A program to start: its path, its command line, and the variables the
@@ -949,6 +1010,169 @@ pub fn run(p: &Policy, cmd: &str) -> Result<i32, String> {
         let _ = std::fs::remove_dir_all(t);
     }
     result
+}
+
+/// Check again whether Git Bash's bash and PowerShell start in the project's
+/// container (granting `p` first): each one found, and whether it does.
+pub fn check_shells(p: &Policy) -> Result<Vec<(PathBuf, bool)>, String> {
+    let (package, toolchain, mut m) = grant(p)?;
+    let caps = vec![toolchain];
+    let env: Vec<(OsString, OsString)> = std::env::vars_os().collect();
+    let mut out = Vec::new();
+    if let Some(bash) = git_bash() {
+        m.bash = None;
+        let ok = starts(
+            &mut m.bash,
+            &bash,
+            &["-c", "exit 0"],
+            &package,
+            &caps,
+            &env,
+            &p.dir,
+        );
+        out.push((bash, ok));
+    }
+    if let Some(ps) = powershell() {
+        m.powershell = None;
+        let args = ["-NoProfile", "-NonInteractive", "-Command", "exit 0"];
+        let ok = starts(&mut m.powershell, &ps, &args, &package, &caps, &env, &p.dir);
+        out.push((ps, ok));
+    }
+    save(&m);
+    Ok(out)
+}
+
+/// Run `cmd`, which Claude runs in `sh`, under `p` in the AppContainer; its
+/// exit code. Its temporary folder lasts, as the system's does: a later
+/// command may use what an earlier one left there.
+pub fn run_agent(p: &Policy, sh: Shell, cmd: &str) -> Result<i32, String> {
+    let (package, toolchain, mut m) = grant(p)?;
+    let mut caps = vec![toolchain];
+    if p.network {
+        for k in [
+            WinCapabilityInternetClientSid,
+            WinCapabilityInternetClientServerSid,
+            WinCapabilityPrivateNetworkClientServerSid,
+        ] {
+            caps.push(well_known(k)?);
+        }
+    }
+    let mut env: Vec<(OsString, OsString)> = std::env::vars_os()
+        .filter(|(k, _)| {
+            let k = k.to_string_lossy();
+            !p.env_remove.iter().any(|v| k.eq_ignore_ascii_case(v))
+                && !k.eq_ignore_ascii_case(super::shell::COMMAND_VAR)
+        })
+        .collect();
+    if let Some(t) = container_folder(&package).map(|ac| ac.join("Temp").join("agent")) {
+        if std::fs::create_dir_all(&t).is_ok() {
+            env.retain(|(k, _)| {
+                !["TEMP", "TMP", "TMPDIR"]
+                    .iter()
+                    .any(|v| k.eq_ignore_ascii_case(v))
+            });
+            for v in ["TEMP", "TMP", "TMPDIR"] {
+                env.push((v.into(), t.clone().into_os_string()));
+            }
+        }
+    }
+    let never = "and ocgen never runs it unsandboxed";
+    let (app, line) = match sh {
+        Shell::Bash => {
+            let bash = git_bash().ok_or(format!("Git Bash's bash isn't found, {never}"))?;
+            if !starts(
+                &mut m.bash,
+                &bash,
+                &["-c", "exit 0"],
+                &package,
+                &caps,
+                &env,
+                &p.dir,
+            ) {
+                save(&m);
+                return Err(format!(
+                    "{} can't start in an AppContainer here, so ocgen can't sandbox the command, {never}",
+                    bash.display()
+                ));
+            }
+            let line = cmdline::command_line(&[
+                bash.to_string_lossy().into_owned(),
+                "-c".into(),
+                cmd.into(),
+            ]);
+            (bash, line)
+        }
+        Shell::PowerShell => {
+            let ps = powershell().ok_or(format!("PowerShell isn't found, {never}"))?;
+            let args = [
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+            ];
+            let mut probe = args.to_vec();
+            probe.extend(["-Command", "exit 0"]);
+            if !starts(
+                &mut m.powershell,
+                &ps,
+                &probe,
+                &package,
+                &caps,
+                &env,
+                &p.dir,
+            ) {
+                save(&m);
+                return Err(format!(
+                    "{} can't start in an AppContainer here, so ocgen can't sandbox the command, {never}",
+                    ps.display()
+                ));
+            }
+            let utf16: Vec<u8> = super::shell::powershell_script(cmd)
+                .encode_utf16()
+                .flat_map(u16::to_le_bytes)
+                .collect();
+            let mut line: Vec<String> = vec![ps.to_string_lossy().into_owned()];
+            line.extend(args.iter().map(|a| a.to_string()));
+            line.extend(["-EncodedCommand".into(), super::shell::base64(&utf16)]);
+            (ps, cmdline::command_line(&line))
+        }
+    };
+    save(&m);
+    run_contained(&package, &caps, &app, &line, &env, &p.dir, INFINITE).map(|c| c as i32)
+}
+
+/// Whether every folder `p` grants or protects has had its entry put on once
+/// (the project's own, and the toolchains' shared ones) — taking care of
+/// what is missing could take minutes, too long for one command — and `sh`
+/// hasn't been found unable to start in the container; if not, why.
+pub fn ready(p: &Policy, sh: Shell) -> Result<(), String> {
+    let m = load(&profile_name(&p.project));
+    let (slot, name) = match sh {
+        Shell::Bash => (&m.bash, "Git Bash's bash"),
+        Shell::PowerShell => (&m.powershell, "PowerShell"),
+    };
+    if let Some((prog, _, false)) = slot {
+        if prog.is_file() {
+            return Err(format!(
+                "{name} ({}) can't start in an AppContainer on this machine, so ocgen can't sandbox the command, and it never runs it unsandboxed. `ocgen sandbox status` shows the sandbox; after a {name} update, `ocgen sandbox grant` checks again.",
+                prog.display()
+            ));
+        }
+    }
+    let missing = acl::plan(p).aces.into_iter().find(|a| {
+        let done = match a.who {
+            Who::Package => &m.package,
+            Who::Toolchain => &m.toolchain,
+        };
+        a.inherit && a.path.is_dir() && !done.iter().any(|d| super::policy::same(d, &a.path))
+    });
+    match missing {
+        None => Ok(()),
+        Some(a) => Err(format!(
+            "the project's sandbox (its AppContainer) has no permissions on {} yet. Run `ocgen sandbox grant` in a terminal in the project — once; a large project takes a while — then run the command again.",
+            a.path.display()
+        )),
+    }
 }
 
 /// One line on the container for `ocgen sandbox status`.

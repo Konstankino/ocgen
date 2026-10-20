@@ -23,10 +23,10 @@ use serde_json::Value;
 /// embedded in the ocgen that generated the project (hook scripts can't be
 /// overridden from the template dir), so they implement the same protocol —
 /// unless someone edits the project's copies by hand.
-pub const PROTOCOL: &str = "ocgen-hooks 15";
+pub const PROTOCOL: &str = "ocgen-hooks 17";
 
 /// Every hook `ocgen hook <name>` accepts (matching the script names minus `.sh`).
-pub const NAMES: [&str; 14] = [
+pub const NAMES: [&str; 15] = [
     "subagent-confidence-gate",
     "team-task-completed",
     "team-task-created",
@@ -41,6 +41,7 @@ pub const NAMES: [&str; 14] = [
     "intent-draft",
     "intent-approvers",
     "recap-github",
+    "shell-sandbox",
 ];
 
 /// A Bash command that starts with one `cd <target>` and goes on after `&&` or
@@ -140,6 +141,7 @@ pub fn run(name: &str, payload: &str, env: &HashMap<String, String>) -> Outcome 
         "intent-draft" => h.intent_draft(),
         "intent-approvers" => h.intent_approvers(),
         "recap-github" => h.recap_github(),
+        "shell-sandbox" => h.shell_sandbox(),
         other => Outcome {
             code: 1,
             stdout: String::new(),
@@ -1128,6 +1130,11 @@ impl<'a> Hook<'a> {
         // filesystem `/w/App` is not `/w/app`, and `/x/…` is a folder, not a drive.
         let windows =
             cfg!(windows) || !self.env("MSYSTEM").is_empty() || self.env("OS") == "Windows_NT";
+        // There the shell-sandbox hook rewrites the command, and of two hooks
+        // that rewrite it, Claude Code keeps the one that ends last: stand down.
+        if windows && self.env("OCGEN_SANDBOX") == "1" {
+            return Outcome::allow();
+        }
         if !same_folder(target, &cwd, windows) {
             return Outcome::allow();
         }
@@ -2092,6 +2099,47 @@ fn shell(cmd: &str) -> Command {
 
 // ---------------------------------------------------------------- sandbox --
 //
+impl Hook<'_> {
+    /// PreToolUse (Bash|PowerShell), native Windows with the project's sandbox
+    /// on: Claude Code has no sandbox there, so run the command in ocgen's —
+    /// rewritten to run through `ocgen __sandbox`, after the project's deny and
+    /// ask rules are checked against it as written ([`crate::sandbox::shell`]).
+    /// Anywhere else, or with the sandbox off, it says nothing.
+    fn shell_sandbox(&self) -> Outcome {
+        if !cfg!(windows) || self.env("OCGEN_SANDBOX") != "1" {
+            return Outcome::allow();
+        }
+        let Some(sh) = crate::sandbox::shell::Shell::of_tool(&self.field("tool_name")) else {
+            return Outcome::allow();
+        };
+        let project = self.project();
+        let Some(exe) = crate::sandbox::helper_exe(self.env) else {
+            return Outcome::block(format!("{}\n", crate::sandbox::NEEDS_BINARY));
+        };
+        let cwd = match self.field("cwd") {
+            c if c.is_empty() => project.clone(),
+            c => PathBuf::from(c),
+        };
+        let rules = crate::sandbox::shell::Rules::load(&project);
+        let ready = crate::sandbox::agent_ready(self.env, &project, &cwd, sh);
+        let out = crate::sandbox::shell::pre_tool_use(&crate::sandbox::shell::Request {
+            event: &self.json,
+            project: &project,
+            exe: &exe,
+            rules: &rules,
+            ready,
+        });
+        match out {
+            Some(v) => Outcome {
+                code: 0,
+                stdout: format!("{v}\n"),
+                stderr: String::new(),
+            },
+            None => Outcome::allow(),
+        }
+    }
+}
+
 // Claude Code runs hooks outside its sandbox, so with the project's sandbox on
 // (`OCGEN_SANDBOX=1`) the project code a hook starts itself — the check, the
 // formatter — runs in ocgen's own sandbox (`crate::sandbox`), which denies

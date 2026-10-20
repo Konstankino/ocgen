@@ -487,8 +487,10 @@ impl PermissionRules {
 /// without it. Secret read-denies need no repeat here — permission rules feed
 /// the sandbox. Claude Code runs hooks outside its sandbox, so the hooks run
 /// the project code they start themselves (the check, the formatter) in an OS
-/// sandbox of their own ([`HOOK_DENY_WRITE`]).
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// sandbox of their own ([`HOOK_DENY_WRITE`]). On native Windows, where Claude
+/// Code has no sandbox, a hook runs the Bash and PowerShell commands Claude
+/// runs in that same sandbox ([`crate::sandbox::shell`]).
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SandboxProfile {
     pub enabled: bool,
@@ -517,13 +519,39 @@ pub struct SandboxProfile {
     pub hook_exec: Vec<String>,
     /// More paths they may write ([`HOOK_ALLOW_WRITE`]).
     pub hook_write: Vec<String>,
+    /// Native Windows: let the commands Claude runs, which ocgen sandboxes
+    /// there, reach the network. On by default: that sandbox can only allow
+    /// all of it or none (Claude Code's limits it to the allowed domains).
+    pub agent_network: bool,
 }
 
-/// Whether Claude Code can sandbox shell commands here: macOS (Seatbelt) and
-/// Linux/WSL2 (bubblewrap). Native Windows has no sandbox, so there the approval
-/// gate is advisory.
+impl Default for SandboxProfile {
+    fn default() -> Self {
+        SandboxProfile {
+            enabled: false,
+            extra_domains: Vec::new(),
+            allow_credentials: false,
+            declined: false,
+            hook_network: false,
+            hook_read: Vec::new(),
+            hook_exec: Vec::new(),
+            hook_write: Vec::new(),
+            agent_network: true,
+        }
+    }
+}
+
+/// Whether the commands Claude runs can be sandboxed here: by Claude Code on
+/// macOS (Seatbelt) and Linux/WSL2 (bubblewrap), by ocgen on native Windows
+/// (an AppContainer, see [`crate::sandbox::shell`]).
 pub fn sandbox_supported() -> bool {
-    cfg!(any(target_os = "macos", target_os = "linux"))
+    cfg!(any(target_os = "macos", target_os = "linux", windows))
+}
+
+/// Whether the commands Claude runs here are sandboxed by ocgen (native
+/// Windows) rather than by Claude Code.
+pub fn ocgen_sandboxes_shell() -> bool {
+    cfg!(windows)
 }
 
 /// Credential files withheld from sandboxed commands: SSH keys, cloud and
