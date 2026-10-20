@@ -9,9 +9,9 @@
 //!
 //! With several drafts, the same editor serves their list ([`LIST`]) to pick
 //! from, [`PER_PAGE`] a page, newest first. The hook also runs after each write
-//! and around each Bash call, and remembers, per session, the draft that session
-//! wrote last ([`remember`], [`after_bash`]): the word opens the list with that
-//! draft selected, whichever draft changed last.
+//! and on each change Claude Code's file watcher sees, and remembers, per
+//! session, the draft that session wrote last ([`remember`]): the word opens the
+//! list with that draft selected, whichever draft changed last.
 //!
 //! The editor is a prebuilt bundle (built by `tools/milkdown`, never by Cargo)
 //! inlined into the page's one nonce-tagged script, so the page's policy still
@@ -57,9 +57,6 @@ pub const PER_PAGE: usize = 10;
 /// Where each session's last-written draft is kept, in the drafts directory
 /// (which git-ignores itself): one file per session id, holding a slug.
 pub const SESSIONS: &str = session::SESSIONS;
-/// Where, in [`SESSIONS`], the drafts' state is kept from just before a Bash
-/// call to just after it: one file per tool call.
-pub const BEFORE: &str = session::BEFORE;
 /// The longest draft name (without `.md`): it leaves room for the editor's
 /// temporary file beside it within the 255 bytes a file name may have.
 pub const MAX_NAME: usize = 200;
@@ -229,24 +226,6 @@ fn stem(p: &Path) -> String {
 /// that can't name a file, or a write that failed.
 pub fn remember(dir: &Path, session: &str, slug: &str) -> bool {
     session::remember(dir, session, slug, is_name)
-}
-
-/// Before Bash call `call` (its tool-use id): keep the drafts' state until
-/// [`after_bash`], and drop states kept for calls that never finished (a refused
-/// command) a day ago. False when nothing was kept: no drafts directory yet, a
-/// call id that can't name a file, or a write that failed.
-pub fn before_bash(dir: &Path, call: &str) -> bool {
-    dir.is_dir() && session::before_bash(dir, call, &drafts(dir))
-}
-
-/// After Bash call `call`: the drafts it added or changed — by size, time or
-/// text, against the state [`before_bash`] kept — and of those the newest, then
-/// the first by name, becomes `session`'s ([`remember`]). Returns that draft.
-/// Whatever command made the change (`cp`, `mv`, `sed -i`, a redirect), the
-/// answer depends only on the files.
-pub fn after_bash(dir: &Path, call: &str, session: &str) -> Option<String> {
-    // Newest first, then by name: the order the list shows.
-    session::after_bash(dir, call, session, &drafts(dir), is_name)
 }
 
 /// The draft `session` wrote last, while it still exists.

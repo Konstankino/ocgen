@@ -24,6 +24,9 @@ check="${OCGEN_CHECK_CMD:-}"
 [ "$thr" -gt 0 ] || [ -n "$check" ] || exit 0
 lim="${OCGEN_CHECK_TIMEOUT:-300}"
 case "$lim" in '' | *[!0-9]*) lim=300 ;; esac
+# A minute short of this hook's own timeout (hooks::CHECK_TIMEOUT_MAX): Claude
+# Code lets the change through when it times a gate out.
+[ "$lim" -le 3540 ] || lim=3540
 
 payload=$(cat)
 proj="${CLAUDE_PROJECT_DIR:-.}"
