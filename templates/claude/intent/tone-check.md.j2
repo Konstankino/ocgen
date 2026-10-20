@@ -1,7 +1,7 @@
 {# /intent's shared text (claude::INTENT_PARTIALS), included by /intent and /review-intent
    (where `review` is set). /intent renders exactly as it did before the split. -#}
-- **Tone check**, before showing anything: give a fresh {% if reviewer %}`reviewer`{% elif prefer_explorer %}`explorer`{% else %}`Explore`{% endif %} subagent the drafts, the numbered
-  findings with their severities, the writing standard and both templates' comment blocks, and ask
+- **Tone check**, before showing anything: give a fresh {% if reviewer %}`reviewer`{% elif prefer_explorer %}`explorer`{% else %}`Explore`{% endif %} subagent the drafts, the
+  findings (by slug) with their severities, the writing standard and both templates' comment blocks, and ask
   it to report:
   (a) **Blame and alarm** — banned words, people as subjects, names from git history, judgmental framing.
   (b) **Softening and omission** (the more important) — every Verified finding of Medium or higher

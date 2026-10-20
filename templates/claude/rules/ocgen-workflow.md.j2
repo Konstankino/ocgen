@@ -21,7 +21,7 @@ For any complex or multi-step prompt, build self-checking into the plan — "don
 `{{ check_cmd }}` must pass before a worker that changed files may finish, and before a team
 task may be completed — a hook runs it and sends the work back while it fails, whatever
 confidence was stated (a hung check is stopped after `OCGEN_CHECK_TIMEOUT` seconds, 300 by
-default, and counts as failed). Run it yourself before you declare anything done, fix what it
+default and at most 3540, and counts as failed). Run it yourself before you declare anything done, fix what it
 reports, and never claim success over a failing check. If it can't pass for a reason outside your
 change, stop and say so with the output.
 {% endif %}
@@ -43,6 +43,16 @@ Never grind on the same problem indefinitely:
   Every trip is logged to `.claude/loop-guard/escalations.md`. Before summarizing any work, read
   that file and report each entry as unresolved — never present released work as done.
 {%- endif %}
+
+## Naming what you refer back to
+
+When a plan, report, note or draft lists things that something later refers back to — findings,
+options, risks, success criteria, open questions — give each one a short kebab-case slug that says
+what it is about (`cache-cold-after-deploy`, `version-the-keys`), and refer to it by that slug
+everywhere: later in the same text, in other documents, and in later sessions. Never label them
+with codes such as R1, A1, F2 or "option B": a reader has to look a code up, and the same code
+means something else in the next document. Keep a slug once it is used; a list may still be
+numbered for its order.
 
 ## Parallel exploration
 

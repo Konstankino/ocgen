@@ -3645,6 +3645,163 @@ fn optional_hooks_are_wired_with_their_scripts() {
     assert!(!dir2.path().join(".claude/hooks/notify.sh").exists());
 }
 
+/// What a document refers back to — findings, options, risks, criteria — is
+/// named by a slug that says what it is about, never a code a reader has to
+/// look up (R1, A1, F2): the rules say so, and no generated skill, agent or
+/// template teaches a code.
+#[test]
+fn documents_name_what_they_refer_back_to_by_slug() {
+    fn md_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
+        for e in fs::read_dir(dir).into_iter().flatten().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                md_files(&p, out);
+            } else if p.extension().is_some_and(|x| x == "md") {
+                out.push(p);
+            }
+        }
+    }
+    let dir = tempdir().unwrap();
+    claude_default("slugs").scaffold(dir.path(), false).unwrap();
+    let rules = read(dir.path(), ".claude/rules/ocgen-workflow.md");
+    assert!(
+        rules.contains("kebab-case slug") && rules.contains("R1"),
+        "{rules}"
+    );
+    // A code: a capital and a number (F1, R12) or `#` (F#), a range of them
+    // (R1–Rn), or a lettered option (**A.**, Option B).
+    let code = regex::Regex::new(
+        r"\b[A-Z][0-9]{1,2}\b|\b[A-Z]#|\b[A-Z][0-9]–[A-Z]n\b|\*\*[A-Z]\.\*\*|\bOption [A-Z]\b",
+    )
+    .unwrap();
+    let mut files = Vec::new();
+    md_files(&dir.path().join(".claude"), &mut files);
+    let rule = dir.path().join(".claude/rules/ocgen-workflow.md");
+    for must in [
+        "skills/intent/SKILL.md",
+        "skills/review-intent/SKILL.md",
+        "intent/issue-template.md",
+        "intent/intent-template.md",
+    ] {
+        assert!(
+            files.contains(&dir.path().join(".claude").join(must)),
+            "{must} not generated"
+        );
+    }
+    for file in files.iter().filter(|f| **f != rule) {
+        let text = fs::read_to_string(file).unwrap();
+        let found: Vec<&str> = code.find_iter(&text).map(|m| m.as_str()).collect();
+        assert!(found.is_empty(), "{}: {found:?}", file.display());
+    }
+}
+
+/// The Claude Code hook fields ocgen sets on its own hooks.
+#[test]
+fn hooks_carry_their_claude_code_fields() {
+    let dir = tempdir().unwrap();
+    let mut p = claude_default("hf");
+    p.claude.workflow.check_cmd = "cargo test".into();
+    p.claude.hooks_extra.format_cmd = "cargo fmt".into();
+    p.claude.hooks_extra.notify = true;
+    p.claude.team = Team {
+        enabled: true,
+        mode: "in-process".into(),
+        hooks: true,
+        plan_gate: false,
+        confidence_threshold: 96,
+        risk_rounds: false,
+        approval_gate: true,
+    };
+    p.scaffold(dir.path(), false).unwrap();
+    let s = settings_of(dir.path());
+    let group = |event: &str, script: &str| -> serde_json::Value {
+        hook_groups(&s, event)
+            .into_iter()
+            .find(|g| g.to_string().contains(&format!("/{script}.sh")))
+            .unwrap_or_else(|| panic!("no {event} group runs {script}: {s:#}"))
+    };
+    let hook = |event: &str, script: &str| group(event, script)["hooks"][0].clone();
+
+    // The gates that run the check outlast it: Claude Code lets a change
+    // through when it times a gate out.
+    for (event, script) in [
+        ("SubagentStop", "subagent-confidence-gate"),
+        ("TaskCompleted", "team-task-completed"),
+    ] {
+        let h = hook(event, script);
+        assert_eq!(
+            h["timeout"],
+            ocgen::hooks::CHECK_GATE_TIMEOUT,
+            "{event}: {h}"
+        );
+        assert!(
+            h["statusMessage"].as_str().is_some_and(|m| !m.is_empty()),
+            "{event}: {h}"
+        );
+    }
+    let max = ocgen::hooks::CHECK_TIMEOUT_MAX;
+    assert!(max >= 300 && max + 60 <= ocgen::hooks::CHECK_GATE_TIMEOUT);
+    // SubagentStart only records the tree: Claude Code's defaults.
+    let start = hook("SubagentStart", "subagent-confidence-gate");
+    assert!(
+        start.get("timeout").is_none() && start.get("statusMessage").is_none(),
+        "{start}"
+    );
+    // The formatter says what it is doing.
+    assert!(hook("PostToolUse", "format")["statusMessage"].is_string());
+
+    // `cd` rewriting runs only for a command with a `cd`…
+    assert_eq!(hook("PreToolUse", "drop-noop-cd")["if"], "Bash(cd *)");
+    // …but no safety hook is filtered: an `if` that misses a call skips the hook.
+    for (event, script) in [
+        ("PreToolUse", "team-approval-gate"),
+        ("PreToolUse", "https-only-fetch"),
+        ("SubagentStop", "subagent-confidence-gate"),
+        ("TaskCompleted", "team-task-completed"),
+        ("TaskCreated", "team-task-created"),
+        ("TeammateIdle", "team-teammate-idle"),
+    ] {
+        assert!(hook(event, script).get("if").is_none(), "{script}");
+    }
+
+    // The tip opens a session: not again on resume, /clear or compaction.
+    let tip = hook_groups(&s, "SessionStart")
+        .into_iter()
+        .find(|g| g.to_string().contains("Tip:"))
+        .expect("the tip");
+    assert_eq!(tip["matcher"], "startup");
+
+    // Notifications run in the foreground: the bell is the hook's own output.
+    for event in ["Notification", "StopFailure"] {
+        assert!(hook(event, "notify").get("async").is_none(), "{event}");
+    }
+
+    // The loop guard's state for a session goes when the session ends, however
+    // it ends; Claude Code gives a SessionEnd hook 1.5 s unless it says more.
+    let end = group("SessionEnd", "session-end");
+    assert!(end.get("matcher").is_none(), "{end}");
+    assert!(
+        end["hooks"][0]["timeout"].as_u64().is_some_and(|t| t >= 5),
+        "{end}"
+    );
+    let script = dir.path().join(".claude/hooks/session-end.sh");
+    assert!(std::process::Command::new("sh")
+        .arg("-n")
+        .arg(&script)
+        .status()
+        .unwrap()
+        .success());
+
+    // No gate, no loop guard: nothing to clean up.
+    let dir = tempdir().unwrap();
+    let mut p = claude_default("hf2");
+    p.claude.workflow.subagent_confidence = 0;
+    p.scaffold(dir.path(), false).unwrap();
+    let s = settings_of(dir.path());
+    assert!(hook_groups(&s, "SessionEnd").is_empty(), "{s:#}");
+    assert!(!dir.path().join(".claude/hooks/session-end.sh").exists());
+}
+
 #[test]
 fn format_hook_never_blocks_and_audit_log_ignores_itself() {
     let dir = tempdir().unwrap();
@@ -4941,7 +5098,8 @@ fn intent_skill_demands_an_exhaustive_evidence_based_analysis() {
     ] {
         assert!(md.contains(section), "report missing {section}");
     }
-    assert!(md.contains("F1") && md.contains("Assumption"));
+    // Findings are cited by a slug that says what they are about, not a number.
+    assert!(md.contains("kebab-case slug") && md.contains("Assumption"));
     assert!(md.contains("Verified") && md.contains("Inferred"));
 
     // Web docs only from trusted domains; gh failures, a missing gh included,
@@ -5014,7 +5172,7 @@ fn intent_drafts_are_blameless_but_honest() {
         "soften the framing, never the facts",
         "System, not people",
         "Context before the flaw",
-        "When [trigger], [behavior], which means [impact] (evidence: F#, `file:line`)",
+        "When [trigger], [behavior], which means [impact] (evidence: the finding's slug, `file:line`)",
         "Severity",
         "Likelihood",
         "Balanced",
@@ -5353,24 +5511,30 @@ fn verify_reports_the_draft_review() {
     let drafts = dir.path().join(".claude/intent/drafts");
     fs::create_dir_all(&drafts).unwrap();
     fs::write(drafts.join("adr-0001-x.md"), "## Intent\n").unwrap();
-    // The hook is there twice: on the word, and after each write (to remember
-    // the draft this session works on).
+    // The hook is there on the word, and to remember the draft this session
+    // works on: after each write, and on each change to a draft or an intent
+    // file (one made by `cp`, `mv`…) — never around every Bash call.
     let s = settings_of(dir.path());
     let matcher = |event: &str| {
         s["hooks"][event]
             .as_array()
-            .unwrap()
+            .unwrap_or(&Vec::new())
             .iter()
             .find(|g| g.to_string().contains("intent-draft.sh"))
             .map(|g| g["matcher"].as_str().unwrap_or("").to_string())
     };
     assert_eq!(matcher("UserPromptSubmit").as_deref(), Some(""));
-    // After a write, and around each Bash call (a draft made by `cp`, `mv`…).
     assert_eq!(
         matcher("PostToolUse").as_deref(),
-        Some("Write|Edit|MultiEdit|Bash")
+        Some("Write|Edit|MultiEdit")
     );
-    assert_eq!(matcher("PreToolUse").as_deref(), Some("Bash"));
+    assert_eq!(matcher("PreToolUse"), None);
+    // FileChanged matches a file name, so the hook names its folders as watch
+    // paths when the session starts and whenever its folder changes (which
+    // drops them), and takes every change.
+    for event in ["SessionStart", "CwdChanged", "FileChanged"] {
+        assert_eq!(matcher(event).as_deref(), Some(""), "{event}");
+    }
     // Whatever ocgen is on PATH, a working project never fails this check.
     let checks = verify_no_claude(dir.path());
     let status = status_of(&checks, "draft review");
@@ -5397,20 +5561,22 @@ fn verify_reports_the_draft_review() {
     );
     fs::write(&path, kept.clone()).unwrap();
 
-    // Nor without the one before Bash calls.
-    let mut s = settings_of(dir.path());
-    s["hooks"]["PreToolUse"]
-        .as_array_mut()
-        .unwrap()
-        .retain(|g| !g.to_string().contains("intent-draft"));
-    fs::write(&path, serde_json::to_string_pretty(&s).unwrap()).unwrap();
-    let checks = verify_no_claude(dir.path());
-    assert_eq!(
-        status_of(&checks, "draft review"),
-        Status::Warn,
-        "{checks:#?}"
-    );
-    fs::write(&path, kept).unwrap();
+    // Nor without the ones that watch the folders.
+    for event in ["SessionStart", "CwdChanged", "FileChanged"] {
+        let mut s = settings_of(dir.path());
+        s["hooks"][event]
+            .as_array_mut()
+            .unwrap()
+            .retain(|g| !g.to_string().contains("intent-draft"));
+        fs::write(&path, serde_json::to_string_pretty(&s).unwrap()).unwrap();
+        let checks = verify_no_claude(dir.path());
+        assert_eq!(
+            status_of(&checks, "draft review"),
+            Status::Warn,
+            "{event}: {checks:#?}"
+        );
+        fs::write(&path, kept.clone()).unwrap();
+    }
 
     // A hand-edited hook command is reported, never run.
     let mut s = settings_of(dir.path());
@@ -5856,7 +6022,7 @@ fn inquire_registers_the_notes_hook() {
     assert_eq!(notes["matcher"], "Write|Edit|MultiEdit");
     let cmd = notes["hooks"][0]["command"].as_str().unwrap();
     assert!(
-        cmd.contains("ocgen hook inquire-notes") && cmd.contains("ocgen-hooks 17"),
+        cmd.contains("ocgen hook inquire-notes") && cmd.contains("ocgen-hooks 18"),
         "{cmd}"
     );
     assert_eq!(notes["hooks"][0]["shell"], "bash");

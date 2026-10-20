@@ -533,11 +533,13 @@ impl Project {
             return said;
         }
         let v: serde_json::Value = serde_json::from_str(&said).unwrap();
+        // The word is answered for the user, and the prompt goes no further:
+        // no turn is spent on it.
+        assert_eq!(v["decision"], "block", "{said}");
         assert_eq!(v["hookSpecificOutput"]["hookEventName"], "UserPromptSubmit");
-        v["hookSpecificOutput"]["additionalContext"]
-            .as_str()
-            .unwrap()
-            .to_string()
+        assert_eq!(v["hookSpecificOutput"]["suppressOriginalPrompt"], true);
+        assert!(v["hookSpecificOutput"].get("additionalContext").is_none());
+        v["reason"].as_str().unwrap().to_string()
     }
 
     /// The user sends `prompt` in session `sid`; the hook's answer.
@@ -826,28 +828,26 @@ fn adr_opens_nothing_one_file_or_the_list_with_the_sessions_file_selected() {
 }
 
 #[test]
-fn an_intent_file_a_bash_command_writes_is_the_sessions_too() {
+fn an_intent_file_the_watcher_sees_change_is_the_sessions_too() {
     let p = Project::new("ADR");
     let adr = p.adr();
     fs::write(adr.join("ADR-0001-cache.md"), intent("ADR-0001", "Cache")).unwrap();
     fs::write(adr.join("ADR-0002-queue.md"), intent("ADR-0002", "Queue")).unwrap();
-    let bash = |event: &str| {
-        p.hook_with(
-            "intent-draft",
-            serde_json::json!({
-                "hook_event_name": event, "session_id": "s-1", "tool_name": "Bash",
-                "tool_use_id": "toolu_1", "tool_input": { "command": "sed -i s/x/y/ docs/adr/ADR-0001-cache.md" }
-            }),
-            "0",
-        )
-    };
-    assert_eq!(bash("PreToolUse"), "");
+    // `sed -i` in a Bash call, an editor: Claude Code's file watcher sees it.
     fs::write(
         adr.join("ADR-0001-cache.md"),
         intent("ADR-0001", "Cache, rewritten"),
     )
     .unwrap();
-    assert_eq!(bash("PostToolUse"), "");
+    let changed = p.hook_with(
+        "intent-draft",
+        serde_json::json!({
+            "hook_event_name": "FileChanged", "session_id": "s-1",
+            "file_path": adr.join("ADR-0001-cache.md").to_string_lossy(), "event": "change"
+        }),
+        "0",
+    );
+    assert_eq!(changed, "");
     let said = p.say_off("intent-draft", "adr");
     assert!(said.contains("2 intent files"), "{said}");
     let state = p.viewer();
@@ -1145,5 +1145,5 @@ fn the_notes_word_is_registered_with_the_ledgers() {
     assert!(on("UserPromptSubmit", "inquire-notes"));
     assert!(on("UserPromptSubmit", "intent-draft"));
     // No new hook: projects generated before get `adr` with the new binary.
-    assert_eq!(ocgen::hooks::PROTOCOL, "ocgen-hooks 17");
+    assert_eq!(ocgen::hooks::PROTOCOL, "ocgen-hooks 18");
 }

@@ -577,6 +577,12 @@ repo used for a plugin's marketplace and release workflow; `--team` enables
 CLAUDE.md                      # project instructions + the roster; the coordinator lives here
 ```
 
+**Slugs, not codes.** The workflow rule has agents name what a plan, report, note or draft refers
+back to — findings, options, risks, success criteria, open questions — by a short kebab-case slug
+that says what it is about (`cache-cold-after-deploy`), never a code such as R1, A1 or "option B",
+and cite it by that slug in later documents and sessions: a reader knows what each one is without a
+lookup.
+
 The **coordinator** (an agent whose mode is `primary`) is not written as an agent file —
 it becomes `CLAUDE.md` plus the `/multi` command, because Claude Code's main session *is*
 the coordinator. Every other agent becomes a subagent file. The wizard opens `CLAUDE.md`
@@ -684,9 +690,11 @@ of them ever block Claude):
   Claude is re-pointed at `.claude/rules/` and any `/inquire` notes in `.claude/notes/`.
 - **Drop a no-op `cd`** (on by default): `cd <the folder Claude is in> && …` becomes `…`
   (see **Fewer read-block prompts** below). It never allows, asks or blocks; the
-  shorter command is permission-checked as usual. The sh fallback needs `jq`.
+  shorter command is permission-checked as usual. Claude Code runs it only for a command with a
+  `cd` in it (the hook's `if`, `Bash(cd *)`). The sh fallback needs `jq`.
 - **Desktop notifications:** when Claude needs you, or a turn fails (`osascript` on macOS,
-  `notify-send` on Linux, otherwise a terminal bell).
+  `notify-send` on Linux, otherwise a terminal bell, which Claude Code rings for the hook: a hook
+  has no terminal of its own).
 - **Formatter after edits:** e.g. `cargo fmt` or `terraform fmt -recursive`. It runs after
   every `Edit`/`Write`, in the project (or, for a `/fanout` worker's file, the same folder in
   that worktree; never in an unrelated repository), and a failure is reported but never blocks.
@@ -722,7 +730,8 @@ claude plugin install <name>@<name>
   `rm -rf` denied;
 - **read-denies for secrets**: `.env`, `.env.local`, `*.pem`, `*.key`, `*.tfstate`. Example
   files such as `.env.example` and `example.tfvars` stay readable;
-- a `SessionStart` hook that nudges `/intake`;
+- a `SessionStart` hook that nudges `/intake` when a session starts (not again on resume,
+  `/clear` or compaction);
 - the `ocgen-concise` output style. It sets `keep-coding-instructions: true` so Claude keeps
   its software-engineering instructions, and has its own name so it doesn't shadow the
   built-in `Concise`. `doctor` removes the old generated `concise.md`;
@@ -1004,9 +1013,11 @@ converted on their next update.
 **Open them from the prompt.** Type **`note`** or **`notes`** (the word alone, as your whole
 message, any case) and the ledger opens in your browser. With several, their list opens first: 10 a
 page, newest first, each with its topic, status and date, and the ledger this session wrote last
-already selected; ↑/↓ and Enter open one, ←/→ turn the page. With none, nothing opens and Claude
-says there are no `/inquire` notes yet. An open tab is reused: sent again, the word refreshes the
-ledger's tab or moves the list's. Any other prompt (`note this`) reaches Claude untouched. The same
+already selected; ↑/↓ and Enter open one, ←/→ turn the page. With none, nothing opens and the hook
+says there are no `/inquire` notes yet. The hook answers the word itself: the prompt stops there
+(Claude Code shows it as blocked by the hook, with what was opened), so no turn is spent on it. An
+open tab is reused: sent again, the word refreshes the ledger's tab or moves the list's. Any other
+prompt (`note this`) reaches Claude untouched. The same
 `inquire-notes` hook catches the word (`UserPromptSubmit`) and remembers the ledger each write
 makes the session's, one small file per session in `.claude/notes/.sessions/`. Projects created
 before get the word with `ocgen doctor [dir]`.
@@ -1048,15 +1059,16 @@ GitHub issue (wizard: "Include the /intent command…"; on by default). You star
 
    It shows an analysis report — current behaviour, root cause, impact, constraints, related work,
    risks, open questions, a coverage checklist (entry points to platforms, security and
-   performance) and what would make it wrong — with numbered findings (F1, F2…), each Verified
-   (`file:line`) or Inferred (`Confidence: NN%`).
+   performance) and what would make it wrong — with findings each named by a slug that says what
+   it is about (`cache-cold-after-deploy`), each Verified (`file:line`) or Inferred
+   (`Confidence: NN%`).
    The read-only git and `gh` commands it needs, and `WebFetch` for the project's **trusted
    documentation sites**, are pre-approved while `/intent` runs (the skill's `allowed-tools`);
    other tools still ask. If `gh` isn't installed (https://cli.github.com), isn't logged in or
    can't reach GitHub, the analysis says so and continues without it. Docs come only from those sites — see
    [Trusted documentation sites](#trusted-documentation-sites-ocgen-edit-docs).
 3. **Plan and approve** — options with a recommendation, scope, risks with mitigations, acceptance
-   criteria. Every statement cites its findings (F#) or is labelled an Assumption; it iterates on
+   criteria. Every statement cites its findings by slug or is labelled an Assumption; it iterates on
    your push-back until you approve. Your approval makes the plan **approved for drafting**, not
    accepted: the **approvers** decide (below).
 4. **Intent file** (optional: `/intent` asks once you approve the plan) — e.g.
@@ -1165,13 +1177,17 @@ draft after its intent, title and all. ocgen can't open any other `.md` file the
 instead of skipping it: in the `draft` note, in the list, and in `ocgen draft`'s output, with the
 rule to rename it by.
 
-A `UserPromptSubmit` hook (`intent-draft`) catches the word and starts the editor. The same hook
-remembers the draft the session wrote last, the same way whatever tool wrote it: after a Write, Edit
-or MultiEdit by its path, and around each Bash call by what changed. It keeps the drafts' state just
-before the call (size, time and text) and compares it afterwards, so a draft made by `cp`, `mv`,
-`sed -i` or a redirect counts, and when a call changes several, the newest (then the first by name)
-wins. One small file per session in `.claude/intent/drafts/.sessions/` (git-ignored like the drafts,
-kept a month). Hooks run outside
+A `UserPromptSubmit` hook (`intent-draft`) catches the word, starts the editor and answers the word
+itself, so no turn is spent on it. The same hook remembers the draft the session wrote last, the
+same way whatever tool wrote it: after a Write, Edit or MultiEdit by its path, and on each change
+Claude Code's file watcher sees in the drafts' folder, so a draft made by `cp`, `mv`, `sed -i` or a
+redirect counts. The hook names the folders to watch (the drafts' and the intent files') when the
+session starts and again when its folder changes, which drops them (`SessionStart`, `CwdChanged`;
+a `FileChanged` hook takes the changes), so nothing runs around every Bash call. The watcher can't
+tell who changed a file: a draft saved from the browser editor, your own editor or another session
+in the same checkout becomes this session's too. A headless session (`claude -p`) has no file
+watcher, so there only writes count. One small file per session in
+`.claude/intent/drafts/.sessions/` (git-ignored like the drafts, kept a month). Hooks run outside
 Claude Code's Bash sandbox, where a local server can start; inside the sandbox it can't. Any other
 prompt passes through untouched. The editor is the same loopback viewer as `/inquire`'s pages,
 behind a random token and same-origin checks for saving. The draft's text can't run scripts or load
@@ -1186,7 +1202,7 @@ the ocgen binary on `PATH`; without it the word reaches Claude, which tells you 
 by default, `rfc` if the prefix is `RFC` (`ocgen edit intent`) — and the intent file opens in your
 browser, read-only; with several, their list opens first, 10 a page, **highest number first**
 (numbers say which is newest: a fresh clone gives every file the same time), with the file this
-session wrote last selected. With none, nothing opens and Claude is told why. The page uses the
+session wrote last selected. With none, nothing opens and the hook says why. The page uses the
 drafts' black and white palettes and is made safe like the draft's preview: raw HTML keeps only
 the tags GitHub allows, links only `http(s)` and `mailto` targets (a relative link shows as text),
 images become links, and the page's one script is ocgen's own. It follows the file: a change on
@@ -1196,7 +1212,7 @@ file. To edit, edit the `.md` file. From a terminal, `ocgen adr [name]` does the
 by name, by its start, or by number (`ocgen adr 7`, `0007`, `ADR-7`).
 
 The same `intent-draft` hook catches this word and remembers the intent file the session wrote last
-(by path, or by what a Bash call changed), so projects created before get it with the new binary,
+(by path, or by a change the file watcher sees), so projects created before get it with the new binary,
 without regenerating. The intent files are tracked, so nothing is written beside them: the viewer
 and the session records live in `.claude/intent/viewer/`, which ignores itself. A prefix spelled
 like a word ocgen already has (`draft`, `note`, `notes`) leaves that word alone; `ocgen adr` still
@@ -1206,7 +1222,9 @@ opens its files.
 follow a writing standard: **soften the framing, never the facts**. The code, design or behaviour
 is the subject of every sentence, never a person; git history explains *why*, never *who*; context
 comes before the flaw; every flaw reads *when [trigger], [behavior], which means [impact]
-(evidence: F#, `file:line`)*, then the proposed fix; severity (Critical, High, Medium, Low, plus a
+(evidence: the finding's slug, `file:line`)*, then the proposed fix; findings, options and risks
+are named by a short slug that says what they are about, never a code such as F1 or "option B", so
+a reader and a later session know what each one is without looking it up; severity (Critical, High, Medium, Low, plus a
 likelihood) rests on the Verified findings, not on adjectives; what works is said too; and the
 drafts make the decision requested explicit. The **tone check** — a fresh `reviewer`
 subagent (or the research agent, if there's no reviewer) — reads both drafts against the findings
@@ -1333,15 +1351,15 @@ offers that you check it out (`gh pr checkout`), and you run that.
 | Find, in one wave | `scope-guard` | the purpose and the commits | what the purpose asks that the change lacks, what the change adds that it doesn't need, the blast radius |
 | | `reviewer` × 4 | the pack and one area: correctness, security, tests, cross-platform | candidates: severity, `file:line`, trigger → behavior → impact, evidence, fix |
 | | `explorer` | the changed symbols | every call site, test and doc that uses them |
-| Merge | the session | the reports | candidates C1, C2, … (duplicates merged, the scope gaps included) |
+| Merge | the session | the reports | candidates, each named by a slug it keeps as a finding (duplicates merged, the scope gaps included) |
 | Verify, in one wave (≤ 8 at a time) | the adversary, one run per candidate (the Low ones together) | one claim, its evidence and fix, the pack — **not** the reviewer's reasoning or confidence | Confirmed (reproduced), Confirmed (by reading), Rejected or Unsettled, plus a severity and a fix check |
 | Draft | the session, then a fresh `reviewer` for `/intent`'s tone check | the confirmed findings | the issue draft |
 
 **Trustworthy: nothing unchecked reaches the draft.** Only candidates the adversary confirms become
-findings, numbered **R1, R2, …** by severity, one line each:
+findings, ordered by severity, one line each, under the slug the candidate got:
 
 ```
-- **R3 · High · Possible · Verified** (cross-platform) — When `--target` is a Windows path with spaces, `resolve_target` (`src/review.rs:88`) splits it, so the review silently skips the change, which means the report is clean for code nobody checked. Evidence: test `target_with_spaces` fails. Fix: pass the path through `paths::for_shell`. red-team: confirmed (reproduced: `cargo test target_with_spaces`).
+- **`target-path-split-on-spaces` · High · Possible · Verified** (cross-platform) — When `--target` is a Windows path with spaces, `resolve_target` (`src/review.rs:88`) splits it, so the review silently skips the change, which means the report is clean for code nobody checked. Evidence: test `target_with_spaces` fails. Fix: pass the path through `paths::for_shell`. red-team: confirmed (reproduced: `cargo test target_with_spaces`).
 ```
 
 A reproduced finding is **Verified**. One confirmed by reading is **Inferred**, with a confidence;
@@ -1573,7 +1591,7 @@ and inside the ocgen binary (`ocgen hook <name>`). The generated hook command us
 binary when a compatible ocgen is installed, and the script otherwise:
 
 ```sh
-if [ "$(ocgen hook --check 2>/dev/null)" = "ocgen-hooks 17" ]; then ocgen hook team-approval-gate; else sh ".../team-approval-gate.sh"; fi
+if [ "$(ocgen hook --check 2>/dev/null)" = "ocgen-hooks 18" ]; then ocgen hook team-approval-gate; else sh ".../team-approval-gate.sh"; fi
 ```
 
 - **The binary gives you** real JSON parsing instead of `grep`, and hooks that work on
@@ -1687,7 +1705,9 @@ the gates stop taking the agent's word alone:
 - **Still bounded:** the loop guard releases a check that keeps failing as UNRESOLVED.
 - **Timeout:** after `OCGEN_CHECK_TIMEOUT` seconds (300 by default; time spent waiting for the
   lock counts) the check and everything it started are stopped, by the Rust hook and the scripts
-  alike.
+  alike. The gates' own hook timeout is an hour, and Claude Code lets a change through when it times
+  a gate out, so the check gets at most 3540 seconds (59 minutes) whatever the variable says, and an
+  overrun fails the gate. While a gate runs, Claude Code's spinner says so.
 - **Sandboxed:** Claude Code doesn't sandbox hooks, so with the sandbox on the hooks run the check
   and the formatter in ocgen's own sandbox, which denies everything it doesn't grant. It grants
   the system's folders and the toolchains' (`~/.cargo/bin`, `~/.rustup`, nvm, pyenv, …) to read
@@ -1812,7 +1832,8 @@ with a shared `.claude/hooks/loop-guard.sh`:
 Tune the budget with the wizard's "Max times a gate may block the same agent" question, or set
 `claude.workflow.loop_guard_max` in `.claude/.ocgen-state.json` and run `ocgen doctor` (`0` =
 unlimited, not recommended). Set a subagent's max turns with `ocgen edit agent`. The
-`.claude/loop-guard/` directory git-ignores itself. Projects made by older versions get the
+`.claude/loop-guard/` directory git-ignores itself; a `SessionEnd` hook removes a session's
+counts when it ends (`escalations.md` stays). Projects made by older versions get the
 loop guard from `ocgen doctor`. Their existing agents keep unlimited turns until you set
 max turns with `ocgen edit agent`.
 

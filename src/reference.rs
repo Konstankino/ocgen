@@ -415,12 +415,13 @@ const CLAUDE_FIELDS: &[Field] = &[
                  in the worker's own directory; team checks run one at a time, and a task may \
                  narrow it with a `Check: <this command> <args>` line in its description (any \
                  other Check: line is ignored). It is stopped, with all it started, after \
-                 OCGEN_CHECK_TIMEOUT seconds (300). With the sandbox on, the hooks run it — and \
-                 the formatter — in ocgen's own sandbox (see hooks' sandbox): the project and the \
-                 toolchains, not the approval store, ~/.claude, shell and git config or the \
-                 project's Claude settings and git hooks, no network, and (unless you allow \
-                 credentials) no credentials; where no sandbox can run it, the check isn't run and \
-                 counts as failed. Empty = off.",
+                 OCGEN_CHECK_TIMEOUT seconds (300, at most 3540: the gate's own hook timeout is \
+                 an hour, and Claude Code lets a change through when it times a gate out). With \
+                 the sandbox on, the hooks run it — and the formatter — in ocgen's own sandbox \
+                 (see hooks' sandbox): the project and the toolchains, not the approval store, \
+                 ~/.claude, shell and git config or the project's Claude settings and git hooks, \
+                 no network, and (unless you allow credentials) no credentials; where no sandbox \
+                 can run it, the check isn't run and counts as failed. Empty = off.",
         example: "cargo test",
     },
     Field {
