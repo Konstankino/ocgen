@@ -1082,7 +1082,7 @@ fn inquire_notes_renders_the_view_and_the_script_is_a_no_op() {
     assert_eq!(o.code, 0);
     assert!(o.stderr.starts_with("inquire-notes:"), "{o:?}");
     assert!(ocgen::hooks::NAMES.contains(&"inquire-notes"));
-    assert_eq!(ocgen::hooks::PROTOCOL, "ocgen-hooks 14");
+    assert_eq!(ocgen::hooks::PROTOCOL, "ocgen-hooks 16");
 }
 
 // ---------------------------------------------------------- intent-draft --
@@ -1121,13 +1121,13 @@ fn intent_draft_parity() {
                 r#"{"hook_event_name":"PostToolUse","session_id":"s-1","tool_name":"Write","tool_input":{"file_path":"{dir}/src/main.rs"}}"#,
                 none,
             ),
-            // Around a Bash call: silent too.
+            // A change Claude Code's file watcher saw: silent too.
             step(
-                r#"{"hook_event_name":"PreToolUse","session_id":"s-1","tool_name":"Bash","tool_use_id":"toolu_1","tool_input":{"command":"cp a b"}}"#,
+                r#"{"hook_event_name":"FileChanged","session_id":"s-1","file_path":"{dir}/.claude/intent/drafts/adr-0001-cache.md","event":"add"}"#,
                 write_draft,
             ),
             step(
-                r#"{"hook_event_name":"PostToolUse","session_id":"s-1","tool_name":"Bash","tool_use_id":"toolu_1","tool_input":{"command":"cp a b"}}"#,
+                r#"{"hook_event_name":"FileChanged","session_id":"s-1","file_path":"{dir}/.claude/intent/drafts/adr-0001-cache.md","event":"unlink"}"#,
                 none,
             ),
         ],
@@ -1219,18 +1219,18 @@ fn recap_github_script_is_a_no_op() {
     assert!(ocgen::hooks::NAMES.contains(&"recap-github"));
 }
 
-/// The context line the hook hands to the model, if any.
+/// What the hook answers the user's word with, if anything: the prompt itself
+/// goes no further, so no turn is spent on it.
 fn draft_context(o: &ocgen::hooks::Outcome) -> String {
-    assert_eq!(o.code, 0, "never blocks: {o:?}");
+    assert_eq!(o.code, 0, "never fails: {o:?}");
     if o.stdout.is_empty() {
         return String::new();
     }
     let v: serde_json::Value = serde_json::from_str(o.stdout.trim()).unwrap();
+    assert_eq!(v["decision"], "block", "{o:?}");
     assert_eq!(v["hookSpecificOutput"]["hookEventName"], "UserPromptSubmit");
-    v["hookSpecificOutput"]["additionalContext"]
-        .as_str()
-        .unwrap()
-        .to_string()
+    assert_eq!(v["hookSpecificOutput"]["suppressOriginalPrompt"], true);
+    v["reason"].as_str().unwrap().to_string()
 }
 
 #[test]
@@ -1345,11 +1345,12 @@ fn intent_draft_remembers_the_draft_a_session_writes_and_names_it() {
     );
     assert_eq!(rec("s-3"), None);
 
-    // A Bash call that writes a draft (`cp`, `mv`, `sed -i`) makes it the session's.
-    let bash = |event: &str, env: &HashMap<String, String>| {
+    // A draft a Bash call writes (`cp`, `mv`, `sed -i`) is the session's once
+    // Claude Code's file watcher sees it change.
+    let changed = |env: &HashMap<String, String>| {
         let payload = serde_json::json!({
-            "hook_event_name": event, "session_id": "s-4", "tool_name": "Bash",
-            "tool_use_id": "toolu_9", "tool_input": { "command": "cp x y" }
+            "hook_event_name": "FileChanged", "session_id": "s-4",
+            "file_path": format!("{d}/.claude/intent/drafts/issue-from-bash.md"), "event": "add"
         });
         let o = ocgen::hooks::run("intent-draft", &payload.to_string(), env);
         assert_eq!(
@@ -1358,13 +1359,10 @@ fn intent_draft_remembers_the_draft_a_session_writes_and_names_it() {
             "{o:?}"
         );
     };
-    bash("PreToolUse", &probe);
     fs::write(drafts.join("issue-from-bash.md"), ISSUE_DRAFT).unwrap();
-    bash("PostToolUse", &probe);
+    changed(&probe);
     assert_eq!(rec("s-4"), None, "a probe writes nothing");
-    bash("PreToolUse", &env);
-    fs::write(drafts.join("issue-from-bash.md"), "## Intent\nRewritten.\n").unwrap();
-    bash("PostToolUse", &env);
+    changed(&env);
     assert_eq!(rec("s-4").as_deref(), Some("issue-from-bash"));
     fs::remove_file(drafts.join("issue-from-bash.md")).unwrap();
 
@@ -1589,4 +1587,150 @@ fn drop_noop_cd_script_uses_the_rust_regex() {
         )),
         "the regex in drop-noop-cd.sh drifted from hooks::NOOP_CD_RE"
     );
+}
+
+// ---------------------------------------------------------------- notify --
+
+/// A folder of programs for `PATH`: the tools the scripts use, linked from the
+/// system, plus `extra` — scripts that log their arguments to `<dir>/<name>.log`.
+#[cfg(unix)]
+fn bin_dir(extra: &[&str]) -> TempDir {
+    let bin = tempfile::tempdir().unwrap();
+    for tool in [
+        "sh", "grep", "sed", "tr", "cut", "head", "cat", "rm", "dirname",
+    ] {
+        let found = ["/usr/bin", "/bin"]
+            .iter()
+            .map(|d| Path::new(d).join(tool))
+            .find(|p| p.is_file())
+            .unwrap_or_else(|| panic!("no {tool}"));
+        std::os::unix::fs::symlink(found, bin.path().join(tool)).unwrap();
+    }
+    for name in extra {
+        let log = bin.path().join(format!("{name}.log"));
+        let script = bin.path().join(name);
+        fs::write(
+            &script,
+            format!("#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\n", log.display()),
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    bin
+}
+
+/// A desktop notifier when there is one; else the terminal bell — which a hook
+/// can't ring itself (it has no terminal), so Claude Code rings it for the hook.
+#[cfg(unix)]
+#[test]
+fn notify_shows_a_notification_or_has_claude_code_ring_the_bell() {
+    let payload = r#"{"hook_event_name":"Notification","message":"Claude needs your permission"}"#;
+    let bell = |out: &str| {
+        let v: serde_json::Value = serde_json::from_str(out.trim()).unwrap();
+        v["terminalSequence"] == "\u{7}" && v.as_object().unwrap().len() == 1
+    };
+    for rust in [false, true] {
+        let who = if rust { "rust" } else { "sh" };
+        let dir = project();
+        let run = |bin: &TempDir| {
+            let env: HashMap<String, String> = [(
+                "PATH".to_string(),
+                bin.path().to_string_lossy().into_owned(),
+            )]
+            .into();
+            if rust {
+                let o = ocgen::hooks::run("notify", payload, &env);
+                (o.code, o.stdout, o.stderr)
+            } else {
+                sh(dir.path(), "notify", &env, payload)
+            }
+        };
+        // No notifier on PATH: the bell, through Claude Code.
+        let none = bin_dir(&[]);
+        let (code, out, err) = run(&none);
+        assert_eq!((code, err.as_str()), (0, ""), "{who}");
+        assert!(bell(&out), "{who}: {out:?}");
+        // A notifier: the message there, and no bell.
+        for notifier in ["osascript", "notify-send"] {
+            let bin = bin_dir(&[notifier]);
+            let (code, out, err) = run(&bin);
+            assert_eq!((code, out.as_str(), err.as_str()), (0, "", ""), "{who}");
+            let log = fs::read_to_string(bin.path().join(format!("{notifier}.log"))).unwrap();
+            assert!(log.contains("Claude needs your permission"), "{who}: {log}");
+        }
+    }
+}
+
+// ----------------------------------------------------------- session-end --
+
+/// The loop guard's state for a session goes when the session ends — not
+/// another session's, nor the escalations a human reads.
+#[test]
+fn session_end_drops_the_ended_sessions_loop_guard_state() {
+    for rust in [false, true] {
+        let who = if rust { "rust" } else { "sh" };
+        let dir = project();
+        let lg = dir.path().join(".claude/loop-guard");
+        for sid in ["s-1", "s-2"] {
+            fs::create_dir_all(lg.join(sid)).unwrap();
+            fs::write(lg.join(sid).join("subagent-confidence-w.count"), "2\n").unwrap();
+        }
+        fs::write(lg.join("escalations.md"), "- x\n").unwrap();
+        fs::write(lg.join(".gitignore"), "*\n").unwrap();
+        let run = |sid: &str, extra: &[(&str, &str)]| {
+            let mut env: HashMap<String, String> = extra
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect();
+            env.insert(
+                "CLAUDE_PROJECT_DIR".into(),
+                ocgen::paths::for_shell(dir.path()),
+            );
+            let payload = serde_json::json!({
+                "hook_event_name": "SessionEnd", "session_id": sid, "reason": "prompt_input_exit"
+            })
+            .to_string();
+            let o = if rust {
+                let o = ocgen::hooks::run("session-end", &payload, &env);
+                (o.code, o.stdout, o.stderr)
+            } else {
+                sh(dir.path(), "session-end", &env, &payload)
+            };
+            assert_eq!(o, (0, String::new(), String::new()), "{who} {sid}");
+        };
+        // `ocgen verify`'s probe changes nothing.
+        run("s-1", &[("OCGEN_HOOK_PROBE", "1")]);
+        assert!(lg.join("s-1").is_dir(), "{who}");
+        // Ids that would name the folder itself, or nothing, are left alone.
+        for odd in [".", "..", "", "s-9"] {
+            run(odd, &[]);
+        }
+        run("s-1", &[]);
+        assert!(!lg.join("s-1").exists(), "{who}");
+        assert!(lg.join("s-2").is_dir(), "{who}");
+        assert!(lg.join("escalations.md").is_file() && lg.join(".gitignore").is_file());
+        // No loop guard folder at all: nothing to do.
+        fs::remove_dir_all(&lg).unwrap();
+        run("s-2", &[]);
+    }
+    assert!(ocgen::hooks::NAMES.contains(&"session-end"));
+}
+
+// ---------------------------------------------------------- check budget --
+
+/// Claude Code lets a change through when it times a gate out, so the check's
+/// budget stops short of the gates' own timeout, whatever OCGEN_CHECK_TIMEOUT
+/// says — in the scripts as in the binary.
+#[test]
+fn the_check_budget_stops_short_of_the_gate_timeout() {
+    let max = ocgen::hooks::CHECK_TIMEOUT_MAX;
+    assert!(max + 60 <= ocgen::hooks::CHECK_GATE_TIMEOUT);
+    for script in ["subagent-confidence-gate", "team-task-completed"] {
+        let body = fs::read_to_string(format!("templates/claude/hooks/{script}.sh")).unwrap();
+        assert!(
+            body.contains(&format!("[ \"$lim\" -le {max} ] || lim={max}")),
+            "{script}.sh doesn't cap the check at hooks::CHECK_TIMEOUT_MAX ({max})"
+        );
+    }
 }

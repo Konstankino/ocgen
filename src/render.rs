@@ -1692,6 +1692,9 @@ impl Project {
         if self.has_blocking_hooks() {
             let body = templates::load_embedded("claude/hooks/loop-guard.sh")?;
             components.push(("hooks/loop-guard.sh".to_string(), body));
+            // …whose state for a session goes when the session ends.
+            let body = templates::load_embedded("claude/hooks/session-end.sh")?;
+            components.push(("hooks/session-end.sh".to_string(), body));
         }
 
         // Workflow commands ship as skills (`.claude/commands` is legacy): same
@@ -2372,22 +2375,30 @@ impl Project {
             // Single-quote the echo argument, escaping any apostrophe in the tip
             // (e.g. "agent's") as '\'' so the command stays valid POSIX shell.
             let escaped = tip.trim().replace('\'', "'\\''");
+            // Once, when a session starts: not again on resume, /clear or compaction.
             hooks.insert(
                 "SessionStart".into(),
-                json!([ { "hooks": [ command_hook(format!("echo '{escaped}'")) ] } ]),
+                json!([ {
+                    "matcher": "startup",
+                    "hooks": [ command_hook(format!("echo '{escaped}'")) ]
+                } ]),
             );
         }
         if self.claude.team.enabled && self.claude.team.hooks {
             for (event, script) in [
                 ("TeammateIdle", "team-teammate-idle.sh"),
                 ("TaskCreated", "team-task-created.sh"),
-                ("TaskCompleted", "team-task-completed.sh"),
             ] {
                 hooks.insert(
                     event.to_string(),
                     json!([ { "hooks": [ command_hook(hook_cmd(prefix, dir, script)) ] } ]),
                 );
             }
+            let gate = command_hook(hook_cmd(prefix, dir, "team-task-completed.sh"));
+            hooks.insert(
+                "TaskCompleted".into(),
+                json!([ { "hooks": [ check_gate(gate, "ocgen: running the project check for the task") ] } ]),
+            );
         }
         // Execution-approval gate: a PreToolUse hook with no matcher, so it sees
         // every tool — any tool with a `command` (Bash, Monitor, PowerShell, MCP…)
@@ -2406,12 +2417,15 @@ impl Project {
         // enough. Independent of teams — it pairs with worktree isolation for
         // isolated writes + enforced confidence.
         if self.worker_gate() {
-            for event in ["SubagentStart", "SubagentStop"] {
-                hooks.insert(
-                    event.into(),
-                    json!([ { "hooks": [ command_hook(hook_cmd(prefix, dir, "subagent-confidence-gate.sh")) ] } ]),
-                );
-            }
+            let gate = command_hook(hook_cmd(prefix, dir, "subagent-confidence-gate.sh"));
+            hooks.insert(
+                "SubagentStart".into(),
+                json!([ { "hooks": [ gate.clone() ] } ]),
+            );
+            hooks.insert(
+                "SubagentStop".into(),
+                json!([ { "hooks": [ check_gate(gate, "ocgen: checking the subagent's changes") ] } ]),
+            );
         }
         // Optional quality-of-life hooks. SessionStart may already hold the tip,
         // so groups are appended rather than inserted.
@@ -2442,9 +2456,15 @@ impl Project {
         let fmt = x.format_cmd.trim();
         if !fmt.is_empty() {
             let fmt = fmt.replace('\'', "'\\''");
+            let mut format = command_hook(hook_cmd(
+                &format!("OCGEN_FORMAT_CMD='{fmt}' {prefix}"),
+                dir,
+                "format.sh",
+            ));
+            format["statusMessage"] = json!("ocgen: formatting");
             push(
                 "PostToolUse",
-                json!({ "matcher": "Edit|Write", "hooks": [ command_hook(hook_cmd(&format!("OCGEN_FORMAT_CMD='{fmt}' {prefix}"), dir, "format.sh")) ] }),
+                json!({ "matcher": "Edit|Write", "hooks": [ format ] }),
             );
         }
         if self.renders_notes() {
@@ -2484,16 +2504,20 @@ impl Project {
             );
             // With several drafts it opens their list, with the one this session
             // wrote last selected: each write to a draft is remembered, and so is
-            // a draft a Bash command adds or changes (seen against its state
-            // just before the call).
-            push(
-                "PreToolUse",
-                json!({ "matcher": "Bash", "hooks": [ command_hook(hook_cmd(prefix, dir, "intent-draft.sh")) ] }),
-            );
+            // each change Claude Code's file watcher sees (a Bash command's). Its
+            // matcher takes file names only, so the hook names the folders to
+            // watch when the session starts, and again when its folder changes,
+            // which drops them.
             push(
                 "PostToolUse",
-                json!({ "matcher": "Write|Edit|MultiEdit|Bash", "hooks": [ command_hook(hook_cmd(prefix, dir, "intent-draft.sh")) ] }),
+                json!({ "matcher": "Write|Edit|MultiEdit", "hooks": [ command_hook(hook_cmd(prefix, dir, "intent-draft.sh")) ] }),
             );
+            for event in ["SessionStart", "CwdChanged", "FileChanged"] {
+                push(
+                    event,
+                    json!({ "hooks": [ command_hook(hook_cmd(prefix, dir, "intent-draft.sh")) ] }),
+                );
+            }
             // The approvers are baked into the /intent skill, so a session started
             // before they changed drafts with the old list: check each write
             // against the state instead.
@@ -2517,9 +2541,13 @@ impl Project {
         );
         if x.drop_noop_cd {
             // `cd <this folder> && …` → `…`, so the read block can check its paths.
+            // Run only for a command with a `cd` in it (`if` takes a permission
+            // rule): never filter a safety hook so, as a call it misses skips it.
+            let mut noop_cd = command_hook(hook_cmd(prefix, dir, "drop-noop-cd.sh"));
+            noop_cd["if"] = json!("Bash(cd *)");
             push(
                 "PreToolUse",
-                json!({ "matcher": "Bash", "hooks": [ command_hook(hook_cmd(prefix, dir, "drop-noop-cd.sh")) ] }),
+                json!({ "matcher": "Bash", "hooks": [ noop_cd ] }),
             );
         }
         if x.config_audit {
@@ -2527,6 +2555,13 @@ impl Project {
                 "ConfigChange",
                 json!({ "hooks": [ command_hook(hook_cmd(prefix, dir, "config-audit.sh")) ] }),
             );
+        }
+        if self.has_blocking_hooks() {
+            // The loop guard's state for a session goes when it ends, however it
+            // ends. Claude Code gives a SessionEnd hook 1.5 s unless it says more.
+            let mut end = command_hook(hook_cmd(prefix, dir, "session-end.sh"));
+            end["timeout"] = json!(10);
+            push("SessionEnd", json!({ "hooks": [ end ] }));
         }
         hooks
     }
@@ -4234,6 +4269,15 @@ fn command_to_skill(name: &str, command_md: &str, user_run: bool) -> String {
 /// Bash is missing, where the command fails to parse and the gate fails open.
 fn command_hook(command: impl Into<String>) -> Value {
     json!({ "type": "command", "command": command.into(), "shell": "bash" })
+}
+
+/// A gate that runs the project check, with a timeout it never reaches
+/// ([`crate::hooks::CHECK_GATE_TIMEOUT`]: Claude Code lets a change through
+/// when it times a gate out) and `status` on the spinner meanwhile.
+fn check_gate(mut hook: Value, status: &str) -> Value {
+    hook["timeout"] = json!(crate::hooks::CHECK_GATE_TIMEOUT);
+    hook["statusMessage"] = json!(status);
+    hook
 }
 
 /// A hook command: run `ocgen hook <name>` when the installed ocgen speaks exactly

@@ -1,6 +1,7 @@
 #!/bin/sh
 # Claude Code — Notification / StopFailure hook: a desktop notification when
-# Claude needs your input or a turn fails. Never blocks.
+# Claude needs your input or a turn fails — or, with no notifier, the terminal
+# bell, which Claude Code rings for the hook. Never blocks.
 payload=$(cat)
 msg=$(printf '%s' "$payload" | grep -oE '"message"[[:space:]]*:[[:space:]]*"[^"]*"' | head -n 1 |
     sed -E 's/^.*:[[:space:]]*"([^"]*)"$/\1/')
@@ -15,6 +16,7 @@ if command -v osascript >/dev/null 2>&1; then
 elif command -v notify-send >/dev/null 2>&1; then
     notify-send "Claude Code" "$msg" >/dev/null 2>&1
 else
-    printf '\a' >/dev/tty 2>/dev/null
+    # A hook has no terminal to ring the bell in: Claude Code rings it.
+    printf '{"terminalSequence":"\\u0007"}\n'
 fi
 exit 0

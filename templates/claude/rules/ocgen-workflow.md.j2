@@ -21,7 +21,7 @@ For any complex or multi-step prompt, build self-checking into the plan — "don
 `{{ check_cmd }}` must pass before a worker that changed files may finish, and before a team
 task may be completed — a hook runs it and sends the work back while it fails, whatever
 confidence was stated (a hung check is stopped after `OCGEN_CHECK_TIMEOUT` seconds, 300 by
-default, and counts as failed). Run it yourself before you declare anything done, fix what it
+default and at most 3540, and counts as failed). Run it yourself before you declare anything done, fix what it
 reports, and never claim success over a failing check. If it can't pass for a reason outside your
 change, stop and say so with the output.
 {% endif %}

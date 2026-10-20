@@ -701,8 +701,28 @@ impl Project {
         out
     }
 
-    /// `ocgen hook intent-draft` with `event` on stdin, as Claude Code runs it.
+    /// What the hook tells the user or Claude for `event`: a prompt's answer
+    /// (the prompt itself stopped), else added context; empty when silent.
     fn hook(&self, event: serde_json::Value) -> String {
+        let said = self.run(event);
+        if said.is_empty() {
+            return said;
+        }
+        let v: serde_json::Value = serde_json::from_str(&said).unwrap();
+        if v["decision"] == "block" {
+            assert_eq!(v["hookSpecificOutput"]["hookEventName"], "UserPromptSubmit");
+            assert_eq!(v["hookSpecificOutput"]["suppressOriginalPrompt"], true);
+            return v["reason"].as_str().unwrap().to_string();
+        }
+        v["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    }
+
+    /// `ocgen hook intent-draft` with `event` on stdin, as Claude Code runs it:
+    /// its stdout.
+    fn run(&self, event: serde_json::Value) -> String {
         let mut child = Command::new(env!("CARGO_BIN_EXE_ocgen"))
             .args(["hook", "intent-draft"])
             .current_dir(self.dir.path())
@@ -727,16 +747,17 @@ impl Project {
             .write_all(event.to_string().as_bytes())
             .unwrap();
         let out = child.wait_with_output().unwrap();
-        assert_eq!(out.status.code(), Some(0), "never blocks: {out:?}");
-        let said = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        if said.is_empty() {
-            return said;
-        }
-        let v: serde_json::Value = serde_json::from_str(&said).unwrap();
-        v["hookSpecificOutput"]["additionalContext"]
-            .as_str()
-            .unwrap()
-            .to_string()
+        assert_eq!(out.status.code(), Some(0), "never fails: {out:?}");
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    /// The hook after Claude Code's file watcher saw `file` change (`event`:
+    /// add, change or unlink) in session `sid`.
+    fn changed(&self, sid: &str, file: &Path, event: &str) -> String {
+        self.hook(serde_json::json!({
+            "hook_event_name": "FileChanged", "session_id": sid,
+            "file_path": file.to_string_lossy(), "event": event
+        }))
     }
 
     /// The hook after Claude writes draft `name` in session `sid`.
@@ -1029,84 +1050,72 @@ fn draft_lists_the_drafts_with_the_one_this_session_wrote_selected() {
 }
 
 #[test]
-fn a_draft_bash_writes_is_the_sessions_too() {
-    let dir = tempfile::tempdir().unwrap();
-    let drafts = dir.path().join(".claude/intent/drafts");
-    fs::create_dir_all(&drafts).unwrap();
+fn a_draft_the_watcher_sees_change_is_the_sessions() {
+    let p = Project::new();
+    let drafts = p.drafts();
+    // The session's start names the folders to watch — the drafts' and the
+    // intent files' — and so does a change of folder, which drops them.
+    for event in ["SessionStart", "CwdChanged"] {
+        let out = p.run(serde_json::json!({
+            "hook_event_name": event, "session_id": "s-1", "source": "startup"
+        }));
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["hookSpecificOutput"]["hookEventName"], event, "{out}");
+        let paths: Vec<PathBuf> = v["hookSpecificOutput"]["watchPaths"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| PathBuf::from(p.as_str().unwrap()))
+            .collect();
+        assert!(
+            paths.iter().any(|w| w.ends_with(".claude/intent/drafts")),
+            "{paths:?}"
+        );
+        assert!(paths.iter().any(|w| w.ends_with("docs/adr")), "{paths:?}");
+        assert!(paths.iter().all(|w| w.is_absolute()), "{paths:?}");
+    }
+
     let short = drafts.join(format!("{SHORT}.md"));
     let long = drafts.join(format!("{LONG}.md"));
     fs::write(&short, DRAFT).unwrap();
-    let base = SystemTime::now() - Duration::from_secs(3600);
-    touch(&short, base);
-
     // The reported case: `cp 082 084` in a Bash call makes 084 the session's.
-    assert!(draft::before_bash(&drafts, "toolu_1"));
     fs::copy(&short, &long).unwrap();
-    assert_eq!(
-        draft::after_bash(&drafts, "toolu_1", "s-1").as_deref(),
-        Some(LONG)
-    );
+    assert_eq!(p.changed("s-1", &long, "add"), "", "silent");
     assert_eq!(draft::session_draft(&drafts, "s-1").as_deref(), Some(LONG));
-    // The listing taken before the call is gone once it's used.
-    assert!(
-        fs::read_dir(drafts.join(draft::SESSIONS).join(draft::BEFORE))
-            .unwrap()
-            .next()
-            .is_none()
-    );
-
-    // A call that changes no draft changes nothing; nor does one never seen before.
-    assert!(draft::before_bash(&drafts, "toolu_2"));
-    assert_eq!(draft::after_bash(&drafts, "toolu_2", "s-1"), None);
-    assert_eq!(draft::after_bash(&drafts, "toolu_unseen", "s-1"), None);
-    assert_eq!(draft::session_draft(&drafts, "s-1").as_deref(), Some(LONG));
-
-    // Changed in place with its time and size kept (`cp -p`, a restore): seen by its text.
-    assert!(draft::before_bash(&drafts, "toolu_3"));
-    let same_size = DRAFT.replace("Deploys keep", "Deploys kept");
-    assert_eq!(same_size.len(), DRAFT.len());
-    fs::write(&short, &same_size).unwrap();
-    touch(&short, base);
-    assert_eq!(
-        draft::after_bash(&drafts, "toolu_3", "s-2").as_deref(),
-        Some(SHORT)
-    );
-
+    // Changed in place (`sed -i`, a save from the browser editor): that one.
+    fs::write(&short, DRAFT.replace("Deploys keep", "Deploys kept")).unwrap();
+    assert_eq!(p.changed("s-1", &short, "change"), "");
+    assert_eq!(draft::session_draft(&drafts, "s-1").as_deref(), Some(SHORT));
     // Renamed (`mv`): the new name.
-    assert!(draft::before_bash(&drafts, "toolu_4"));
-    fs::rename(&short, drafts.join("adr-0082-renamed.md")).unwrap();
+    let renamed = drafts.join("adr-0082-renamed.md");
+    fs::rename(&short, &renamed).unwrap();
+    assert_eq!(p.changed("s-1", &short, "unlink"), "");
+    assert_eq!(p.changed("s-1", &renamed, "add"), "");
     assert_eq!(
-        draft::after_bash(&drafts, "toolu_4", "s-2").as_deref(),
+        draft::session_draft(&drafts, "s-1").as_deref(),
         Some("adr-0082-renamed")
     );
 
-    // Several at once: the newest, then by name — the same answer every time.
-    assert!(draft::before_bash(&drafts, "toolu_5"));
-    let t = SystemTime::now();
-    for name in ["b-two", "a-one", "c-old"] {
-        let p = drafts.join(format!("{name}.md"));
-        fs::write(&p, DRAFT).unwrap();
-        touch(&p, if name == "c-old" { base } else { t });
+    // Not drafts: the hook's own records, a page, a file elsewhere.
+    fs::write(drafts.join("adr-0082-renamed.html"), "<p>").unwrap();
+    fs::write(p.dir.path().join("notes.md"), "x").unwrap();
+    for other in [
+        drafts.join(draft::SESSIONS).join("s-1"),
+        drafts.join(".gitignore"),
+        drafts.join("adr-0082-renamed.html"),
+        p.dir.path().join("notes.md"),
+    ] {
+        assert!(other.is_file(), "{other:?}");
+        assert_eq!(p.changed("s-1", &other, "change"), "", "{other:?}");
+        assert_eq!(
+            draft::session_draft(&drafts, "s-1").as_deref(),
+            Some("adr-0082-renamed"),
+            "{other:?}"
+        );
     }
-    assert_eq!(
-        draft::after_bash(&drafts, "toolu_5", "s-3").as_deref(),
-        Some("a-one")
-    );
-
-    // Bad call ids make no listing; a listing left by a call that never
-    // finished (a refused command) is dropped after a day.
-    for bad in ["", "../x", "a b"] {
-        assert!(!draft::before_bash(&drafts, bad), "{bad:?}");
-    }
-    let before = drafts.join(draft::SESSIONS).join(draft::BEFORE);
-    fs::write(before.join("toolu_orphan"), "").unwrap();
-    touch(
-        &before.join("toolu_orphan"),
-        SystemTime::now() - Duration::from_secs(2 * 24 * 3600),
-    );
-    assert!(draft::before_bash(&drafts, "toolu_6"));
-    assert!(!before.join("toolu_orphan").exists());
-    // Nor are listings drafts.
+    // Nor does a session id that can't name a file record anything.
+    assert_eq!(p.changed("../s", &long, "change"), "");
+    assert!(!drafts.join(draft::SESSIONS).join("../s").exists());
     assert!(draft::drafts(&drafts)
         .iter()
         .all(|p| p.parent() == Some(drafts.as_path())));
@@ -1117,15 +1126,8 @@ fn a_long_named_draft_made_by_bash_is_remembered_listed_opened_and_saved() {
     let p = Project::new();
     let md = p.drafts().join(format!("{LONG}.md"));
     // Made by `cp` in a Bash call, as the reported session did.
-    let bash = |event: &str| {
-        p.hook(serde_json::json!({
-            "hook_event_name": event, "session_id": "s-1", "tool_name": "Bash",
-            "tool_use_id": "toolu_cp", "tool_input": { "command": "cp a b" }
-        }))
-    };
-    assert_eq!(bash("PreToolUse"), "", "silent before");
     fs::copy(p.md(), &md).unwrap();
-    assert_eq!(bash("PostToolUse"), "", "silent after");
+    assert_eq!(p.changed("s-1", &md, "add"), "", "silent");
     assert_eq!(
         draft::session_draft(&p.drafts(), "s-1").as_deref(),
         Some(LONG)
