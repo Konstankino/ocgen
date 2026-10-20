@@ -392,7 +392,8 @@ const CLAUDE_FIELDS: &[Field] = &[
                  to write (not its Claude settings, hooks, state file, .mcp.json or git hooks), \
                  and no network. Seatbelt on macOS; bubblewrap on Linux, or Landlock with seccomp \
                  where bwrap can't run; an AppContainer in a job object on native Windows (no WSL \
-                 needed; not with UAC off), each command checked to start in it at Low integrity; wasmtime for a WASI module (*.wasm) where none of those works. Never \
+                 needed; not with UAC off), each command checked to start in it at Low integrity, protected \
+                 paths cut off from the project's grant (`ocgen sandbox reset` undoes it); wasmtime for a WASI module (*.wasm) where none of those works. Never \
                  unsandboxed: with no sandbox here, or without the ocgen binary, the check isn't \
                  run and counts as failed. hook_network: true lets them reach the network; \
                  hook_read, hook_exec and hook_write add paths (~/… or absolute). `ocgen sandbox \

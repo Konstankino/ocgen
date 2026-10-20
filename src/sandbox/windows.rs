@@ -23,26 +23,27 @@ use windows_sys::Win32::Foundation::{
     INVALID_HANDLE_VALUE, WAIT_OBJECT_0,
 };
 use windows_sys::Win32::Security::Authorization::{
-    ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW,
-    GetNamedSecurityInfoW, SetEntriesInAclW, SetNamedSecurityInfoW, DENY_ACCESS, EXPLICIT_ACCESS_W,
-    GRANT_ACCESS, NO_MULTIPLE_TRUSTEE, SDDL_REVISION_1, SE_FILE_OBJECT, TRUSTEE_IS_SID,
-    TRUSTEE_IS_UNKNOWN, TRUSTEE_W,
+    ConvertSecurityDescriptorToStringSecurityDescriptorW, ConvertSidToStringSidW,
+    ConvertStringSecurityDescriptorToSecurityDescriptorW, GetNamedSecurityInfoW,
+    SetNamedSecurityInfoW, SDDL_REVISION_1, SE_FILE_OBJECT,
 };
 use windows_sys::Win32::Security::Isolation::{
     CreateAppContainerProfile, DeleteAppContainerProfile,
     DeriveAppContainerSidFromAppContainerName, GetAppContainerFolderPath,
 };
 use windows_sys::Win32::Security::{
-    AclSizeInformation, AddAce, CreateWellKnownSid, DeriveCapabilitySidsFromName, EqualSid,
-    FreeSid, GetAce, GetAclInformation, GetLengthSid, GetSecurityDescriptorSacl,
+    AclSizeInformation, AddAccessAllowedAceEx, AddAce, CreateWellKnownSid,
+    DeriveCapabilitySidsFromName, EqualSid, FreeSid, GetAce, GetAclInformation, GetLengthSid,
+    GetSecurityDescriptorControl, GetSecurityDescriptorDacl, GetSecurityDescriptorSacl,
     GetSidSubAuthority, GetSidSubAuthorityCount, GetTokenInformation, InitializeAcl,
-    TokenAppContainerSid, TokenIntegrityLevel, TokenIsAppContainer,
+    TokenAppContainerSid, TokenIntegrityLevel, TokenIsAppContainer, WinBuiltinAnyPackageSid,
     WinCapabilityInternetClientServerSid, WinCapabilityInternetClientSid,
     WinCapabilityPrivateNetworkClientServerSid, ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, ACL_REVISION,
     ACL_SIZE_INFORMATION, CONTAINER_INHERIT_ACE, DACL_SECURITY_INFORMATION, INHERITED_ACE,
-    LABEL_SECURITY_INFORMATION, NO_INHERITANCE, OBJECT_INHERIT_ACE, PSID, SECURITY_CAPABILITIES,
+    INHERIT_ONLY_ACE, LABEL_SECURITY_INFORMATION, OBJECT_INHERIT_ACE,
+    PROTECTED_DACL_SECURITY_INFORMATION, PSID, SECURITY_CAPABILITIES, SE_DACL_PROTECTED,
     SID_AND_ATTRIBUTES, TOKEN_APPCONTAINER_INFORMATION, TOKEN_INFORMATION_CLASS,
-    TOKEN_MANDATORY_LABEL, TOKEN_QUERY, WELL_KNOWN_SID_TYPE,
+    TOKEN_MANDATORY_LABEL, TOKEN_QUERY, UNPROTECTED_DACL_SECURITY_INFORMATION, WELL_KNOWN_SID_TYPE,
 };
 use windows_sys::Win32::System::Com::CoTaskMemFree;
 use windows_sys::Win32::System::JobObjects::{
@@ -64,7 +65,7 @@ use windows_sys::Win32::System::Threading::{
     STARTF_USESTDHANDLES, STARTUPINFOEXW,
 };
 
-use super::acl::{self, Ace, Level, Who};
+use super::acl::{self, Ace, Level, Reach, Who};
 use super::cmdline;
 use super::policy::{is_within, Policy};
 use super::shell::Shell;
@@ -230,15 +231,94 @@ unsafe fn explicit_aces(acl: *const ACL) -> Vec<(u8, u32, u8, Vec<u8>)> {
     out
 }
 
-/// Make sure `ace` is on its path for `sid`; true when it had to be added.
-fn ensure(ace: &Ace, sid: &Sid) -> Result<bool, String> {
-    let path = wide(&ace.path);
-    let inherit = ace.inherit && ace.path.is_dir();
-    // SAFETY: plain Win32 security calls; everything they allocate is freed.
+/// Free what Windows allocated with `LocalAlloc` when dropped.
+struct Local(*mut c_void);
+impl Drop for Local {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            // SAFETY: memory Windows handed over to be freed with LocalFree.
+            unsafe { LocalFree(self.0 as _) };
+        }
+    }
+}
+
+/// Every entry in a DACL, as its bytes, in order.
+///
+/// # Safety
+/// `acl` is null or a valid ACL.
+unsafe fn raw_aces(acl: *const ACL) -> Vec<Vec<u8>> {
+    let mut out = Vec::new();
+    if acl.is_null() {
+        return out;
+    }
+    let mut info: ACL_SIZE_INFORMATION = std::mem::zeroed();
+    if GetAclInformation(
+        acl,
+        &mut info as *mut _ as *mut c_void,
+        std::mem::size_of::<ACL_SIZE_INFORMATION>() as u32,
+        AclSizeInformation,
+    ) == 0
+    {
+        return out;
+    }
+    for i in 0..info.AceCount {
+        let mut p: *mut c_void = null_mut();
+        if GetAce(acl, i, &mut p) != 0 {
+            let size = (*(p as *const ACE_HEADER)).AceSize as usize;
+            out.push(std::slice::from_raw_parts(p as *const u8, size).to_vec());
+        }
+    }
+    out
+}
+
+/// An allow or deny entry's SID (none for other kinds).
+fn ace_sid(ace: &[u8]) -> Option<PSID> {
+    (matches!(ace[0], ALLOWED | DENIED) && ace.len() > 8).then(|| ace[8..].as_ptr() as PSID)
+}
+
+/// What tells two entries apart for ocgen: kind, flags that say where it
+/// applies, rights, SID.
+fn ace_key(ace: &[u8]) -> (u8, u8, u32, Vec<u8>) {
+    let mask = u32::from_le_bytes(ace[4..8].try_into().unwrap_or([0; 4]));
+    (ace[0], ace[1] & 0x0F, mask, ace[8..].to_vec())
+}
+
+/// The flags that make an entry apply where `reach` says, on a folder or not.
+fn reach_flags(reach: Reach, dir: bool) -> u8 {
+    let below = (OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE) as u8;
+    match (reach, dir) {
+        (_, false) | (Reach::Itself, true) => 0,
+        (Reach::Both, true) => below,
+        (Reach::Below, true) => below | INHERIT_ONLY_ACE as u8,
+    }
+}
+
+/// One entry ocgen wants on a path: for whom, what, and where it applies.
+type Want<'a> = (&'a Sid, u32, Reach);
+
+/// Give the container (`ours`: the project's package and the toolchain
+/// capability) the entries `want` on `path`; everyone else's stay. With
+/// `exact`, the container's own entries there become exactly those (else
+/// what is missing is added). With `cut`, the path first stops inheriting
+/// from its folder: what it inherited stays, as its own entries, except any
+/// for an AppContainer (`ours`, and every package's). The DACL it had
+/// before, as SDDL, when this call cut it — for `ocgen sandbox reset`.
+fn sync(
+    path: &Path,
+    want: &[Want],
+    exact: bool,
+    cut: bool,
+    ours: &[&Sid],
+    any_package: &Sid,
+) -> Result<Option<String>, String> {
+    let w = wide(path);
+    let dir = path.is_dir();
+    // SAFETY: plain Win32 security calls on buffers sized for them; what
+    // Windows allocates is freed by `Local`.
     unsafe {
         let (mut dacl, mut sd): (*mut ACL, *mut c_void) = (null_mut(), null_mut());
         let rc = GetNamedSecurityInfoW(
-            path.as_ptr(),
+            w.as_ptr(),
             SE_FILE_OBJECT,
             DACL_SECURITY_INFORMATION,
             null_mut(),
@@ -250,60 +330,203 @@ fn ensure(ace: &Ace, sid: &Sid) -> Result<bool, String> {
         if rc != 0 {
             return Err(format!(
                 "can't read the permissions of {}: error {rc}",
-                ace.path.display()
+                path.display()
             ));
         }
-        let kind = if ace.deny { DENIED } else { ALLOWED };
-        let has = explicit_aces(dacl).iter().any(|(t, m, _, s)| {
-            *t == kind && m & ace.mask == ace.mask && EqualSid(s.as_ptr() as PSID, sid.ptr()) != 0
-        });
-        if has {
-            LocalFree(sd);
-            return Ok(false);
-        }
-        let ea = EXPLICIT_ACCESS_W {
-            grfAccessPermissions: ace.mask,
-            grfAccessMode: if ace.deny { DENY_ACCESS } else { GRANT_ACCESS },
-            grfInheritance: if inherit {
-                OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE
-            } else {
-                NO_INHERITANCE
-            },
-            Trustee: TRUSTEE_W {
-                pMultipleTrustee: null_mut(),
-                MultipleTrusteeOperation: NO_MULTIPLE_TRUSTEE,
-                TrusteeForm: TRUSTEE_IS_SID,
-                TrusteeType: TRUSTEE_IS_UNKNOWN,
-                ptstrName: sid.ptr() as *mut u16,
-            },
+        let sd = Local(sd);
+        let (mut control, mut revision) = (0u16, 0u32);
+        GetSecurityDescriptorControl(sd.0, &mut control, &mut revision);
+        let protected = control & SE_DACL_PROTECTED != 0;
+        let needs_cut = cut && !protected;
+        let aces = raw_aces(dacl);
+        let inherited = |a: &[u8]| a[1] as u32 & INHERITED_ACE != 0;
+        let is = |a: &[u8], sids: &[&Sid]| {
+            ace_sid(a).is_some_and(|s| sids.iter().any(|o| EqualSid(s, o.ptr()) != 0))
         };
-        let mut new: *mut ACL = null_mut();
-        let rc = SetEntriesInAclW(1, &ea, dacl, &mut new);
-        LocalFree(sd);
-        if rc != 0 {
+        let wanted: Vec<(u8, u8, u32, Vec<u8>)> = want
+            .iter()
+            .map(|(sid, mask, reach)| (ALLOWED, reach_flags(*reach, dir), *mask, sid.0.clone()))
+            .collect();
+        let mut have: Vec<_> = aces
+            .iter()
+            .filter(|a| !inherited(a) && is(a, ours))
+            .map(|a| ace_key(a))
+            .collect();
+        let done = if exact {
+            let mut want_sorted = wanted.clone();
+            want_sorted.sort();
+            have.sort();
+            have == want_sorted
+        } else {
+            wanted.iter().all(|x| have.contains(x))
+        };
+        if done && !needs_cut {
+            return Ok(None);
+        }
+        let before = if needs_cut {
+            let mut text: *mut u16 = null_mut();
+            if ConvertSecurityDescriptorToStringSecurityDescriptorW(
+                sd.0,
+                SDDL_REVISION_1,
+                DACL_SECURITY_INFORMATION,
+                &mut text,
+                null_mut(),
+            ) == 0
+            {
+                return Err(format!(
+                    "can't record the permissions of {}: {}",
+                    path.display(),
+                    last_error()
+                ));
+            }
+            let text = Local(text as *mut c_void);
+            let p = text.0 as *const u16;
+            let n = (0..).take_while(|&i| *p.add(i) != 0).count();
+            Some(String::from_utf16_lossy(std::slice::from_raw_parts(p, n)))
+        } else {
+            None
+        };
+        // Explicit denies, then explicit allows (ours among them), then —
+        // unless cut — what is inherited: the order Windows keeps them in.
+        let mut denies: Vec<Vec<u8>> = Vec::new();
+        let mut allows: Vec<Vec<u8>> = Vec::new();
+        let mut rest: Vec<Vec<u8>> = Vec::new();
+        for a in aces {
+            let mine = is(&a, ours);
+            if inherited(&a) {
+                if !needs_cut {
+                    rest.push(a);
+                } else if !mine && !is(&a, &[any_package]) {
+                    let mut own = a;
+                    own[1] &= !(INHERITED_ACE as u8);
+                    if own[0] == DENIED {
+                        denies.push(own);
+                    } else {
+                        allows.push(own);
+                    }
+                }
+            } else if mine && (exact || wanted.contains(&ace_key(&a))) {
+                // Replaced by `want` below.
+            } else if a[0] == DENIED {
+                denies.push(a);
+            } else {
+                allows.push(a);
+            }
+        }
+        let size = 8
+            + denies
+                .iter()
+                .chain(&allows)
+                .chain(&rest)
+                .map(Vec::len)
+                .sum::<usize>()
+            + want.iter().map(|(sid, ..)| 8 + sid.0.len()).sum::<usize>();
+        let mut buf = vec![0u64; size.div_ceil(8) + 1];
+        let new = buf.as_mut_ptr() as *mut ACL;
+        InitializeAcl(new, (buf.len() * 8) as u32, ACL_REVISION);
+        let copy = |a: &Vec<u8>| {
+            AddAce(
+                new,
+                ACL_REVISION,
+                u32::MAX,
+                a.as_ptr() as *const c_void,
+                a.len() as u32,
+            ) != 0
+        };
+        let mut ok = denies.iter().all(copy) && allows.iter().all(copy);
+        for (sid, mask, reach) in want {
+            ok &= AddAccessAllowedAceEx(
+                new,
+                ACL_REVISION,
+                u32::from(reach_flags(*reach, dir)),
+                *mask,
+                sid.ptr(),
+            ) != 0;
+        }
+        ok &= rest.iter().all(copy);
+        if !ok {
             return Err(format!(
-                "can't build the permissions of {}: error {rc}",
-                ace.path.display()
+                "can't build the permissions of {}: {}",
+                path.display(),
+                last_error()
             ));
         }
+        let info = if protected || needs_cut {
+            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION
+        } else {
+            DACL_SECURITY_INFORMATION
+        };
         let rc = SetNamedSecurityInfoW(
-            path.as_ptr(),
+            w.as_ptr(),
             SE_FILE_OBJECT,
-            DACL_SECURITY_INFORMATION,
+            info,
             null_mut(),
             null_mut(),
             new,
             null(),
         );
-        LocalFree(new as _);
         if rc != 0 {
             return Err(format!(
                 "can't set the permissions of {}: error {rc}",
-                ace.path.display()
+                path.display()
+            ));
+        }
+        Ok(before)
+    }
+}
+
+/// Put back on `path` the DACL `sddl` describes, from before ocgen cut its
+/// inheritance: inheriting again, unless it didn't then.
+fn restore(path: &Path, sddl: &str) -> Result<(), String> {
+    if !path.exists() {
+        return Ok(());
+    }
+    let w = wide(path);
+    let text = wide(sddl);
+    // SAFETY: a NUL-terminated SDDL string; the descriptor it makes is freed
+    // by `Local`, and the DACL read from it lives as long.
+    unsafe {
+        let mut sd: *mut c_void = null_mut();
+        if ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            text.as_ptr(),
+            SDDL_REVISION_1,
+            &mut sd,
+            null_mut(),
+        ) == 0
+        {
+            return Err(format!(
+                "can't read the permissions recorded for {}: {}",
+                path.display(),
+                last_error()
+            ));
+        }
+        let sd = Local(sd);
+        let (mut control, mut revision) = (0u16, 0u32);
+        GetSecurityDescriptorControl(sd.0, &mut control, &mut revision);
+        let (mut present, mut defaulted, mut dacl) = (0, 0, null_mut());
+        GetSecurityDescriptorDacl(sd.0, &mut present, &mut dacl, &mut defaulted);
+        let inherit = if control & SE_DACL_PROTECTED != 0 {
+            PROTECTED_DACL_SECURITY_INFORMATION
+        } else {
+            UNPROTECTED_DACL_SECURITY_INFORMATION
+        };
+        let rc = SetNamedSecurityInfoW(
+            w.as_ptr(),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION | inherit,
+            null_mut(),
+            null_mut(),
+            dacl,
+            null(),
+        );
+        if rc != 0 {
+            return Err(format!(
+                "can't put back the permissions of {}: error {rc}",
+                path.display()
             ));
         }
     }
-    Ok(true)
+    Ok(())
 }
 
 /// Make sure `path` carries `level` as its own mandatory label.
@@ -470,6 +693,11 @@ pub struct Manifest {
     pub toolchain: Vec<PathBuf>,
     /// Paths labelled Low or Medium.
     pub labels: Vec<PathBuf>,
+    /// Paths ocgen cut off from what their folder passes down, with the
+    /// permissions they had before (SDDL), which `ocgen sandbox reset` puts
+    /// back.
+    #[serde(default)]
+    pub cuts: Vec<(PathBuf, String)>,
     /// Whether Git Bash's `sh` (path, modified time) starts in a container.
     pub shell: Option<(PathBuf, u64, bool)>,
     /// The same for Git Bash's `bash`, which runs the commands Claude runs.
@@ -533,31 +761,69 @@ fn lock() -> Option<std::fs::File> {
     Some(f)
 }
 
-/// Put `p`'s entries and labels on the files (what is there already stays).
+/// Put `p`'s entries, cuts and labels on the files: on each path the plan
+/// names, the container gets what it plans (and, where the plan keeps it
+/// from something, nothing else).
 pub fn grant(p: &Policy) -> Result<(Sid, Sid, Manifest), String> {
     let profile = profile_name(&p.project);
     let package = package_sid(&profile)?;
     let toolchain = toolchain_sid()?;
+    let any_package = well_known(WinBuiltinAnyPackageSid)?;
     let _lock = lock();
     let mut m = load(&profile);
     m.project = p.project.clone();
     m.profile = profile;
     let plan = acl::plan(p);
-    // Allows first: a deny on a folder must not stop the allow above it from
-    // reaching the rest of the folder.
-    let mut aces: Vec<&Ace> = plan.aces.iter().filter(|a| !a.deny).collect();
-    aces.extend(plan.aces.iter().filter(|a| a.deny));
-    for a in aces {
-        let sid = match a.who {
-            Who::Package => &package,
-            Who::Toolchain => &toolchain,
-        };
-        ensure(a, sid)?;
-        let list = match a.who {
-            Who::Package => &mut m.package,
-            Who::Toolchain => &mut m.toolchain,
-        };
-        super::policy::push_new(list, a.path.clone());
+    // Each path once, folders before what is in them.
+    let mut paths: Vec<&PathBuf> = Vec::new();
+    for path in plan.aces.iter().map(|a| &a.path).chain(&plan.cuts) {
+        if !paths.iter().any(|x| super::policy::same(x, path)) {
+            paths.push(path);
+        }
+    }
+    paths.sort_by_key(|x| x.components().count());
+    for path in paths {
+        let aces: Vec<&Ace> = plan
+            .aces
+            .iter()
+            .filter(|a| super::policy::same(&a.path, path))
+            .collect();
+        let want: Vec<Want> = aces
+            .iter()
+            .map(|a| {
+                let sid = match a.who {
+                    Who::Package => &package,
+                    Who::Toolchain => &toolchain,
+                };
+                (sid, a.mask, a.reach)
+            })
+            .collect();
+        let cut = plan.cuts.iter().any(|c| super::policy::same(c, path));
+        // Where the plan keeps the container from something, its entries are
+        // exactly the plan's; elsewhere (a toolchain folder every project's
+        // container shares) what another project granted stays.
+        let exact = cut || aces.iter().any(|a| a.reach == Reach::Below);
+        let before = sync(
+            path,
+            &want,
+            exact,
+            cut,
+            &[&package, &toolchain],
+            &any_package,
+        )?;
+        if let Some(before) = before {
+            if !m.cuts.iter().any(|(c, _)| super::policy::same(c, path)) {
+                m.cuts.push((path.clone(), before));
+            }
+        }
+        for a in aces {
+            let list = match a.who {
+                Who::Package => &mut m.package,
+                Who::Toolchain => &mut m.toolchain,
+            };
+            super::policy::push_new(list, a.path.clone());
+        }
+        save(&m);
     }
     for (path, level) in &plan.labels {
         ensure_label(path, *level)?;
@@ -587,6 +853,10 @@ pub fn reset(project: Option<&Path>) -> Result<Vec<String>, String> {
     let toolchain = toolchain_sid()?;
     for m in manifests.iter().filter(|m| !m.profile.is_empty()) {
         let package = package_sid(&m.profile)?;
+        // What ocgen cut off inherits again, as it did before (deepest first).
+        for (path, before) in m.cuts.iter().rev() {
+            restore(path, before)?;
+        }
         for path in &m.package {
             remove(path, &[&package])?;
         }
@@ -1034,10 +1304,12 @@ fn native(cmd: &str, dir: &Path) -> Result<Launch, String> {
                 cmdline::batch_safe(arg)?;
             }
             let comspec = std::env::var("ComSpec").unwrap_or_else(|_| r"C:\Windows\System32\cmd.exe".into());
-            let mut inner = vec![program.to_string_lossy().into_owned()];
+            let mut inner = vec![batch_path(&program, dir)];
             inner.extend(a.args[1..].iter().cloned());
+            // Extensions on, as batch files expect (`%~dp0`); delayed
+            // expansion off, so a `!` stays as written.
             let line = format!(
-                "{} /d /e:off /v:off /s /c \"{}\"",
+                "{} /d /e:on /v:off /s /c \"{}\"",
                 cmdline::quote(&comspec),
                 cmdline::command_line(&inner)
             );
@@ -1052,6 +1324,21 @@ fn native(cmd: &str, dir: &Path) -> Result<Launch, String> {
             program.display()
         )),
     }
+}
+
+/// How `cmd` is to name the batch file `program`: by its path from `dir`,
+/// the command's folder, when it is in there. Given a full path, `cmd` looks
+/// into every folder above the file, which the container may not read
+/// ("Access is denied"), and the batch file never runs.
+fn batch_path(program: &Path, dir: &Path) -> String {
+    if !is_within(program, dir) {
+        return program.to_string_lossy().into_owned();
+    }
+    let below: PathBuf = program
+        .components()
+        .skip(dir.components().count())
+        .collect();
+    format!(".\\{}", below.display()).replace('/', "\\")
 }
 
 /// Run `cmd` under `p` in the AppContainer; its exit code.
@@ -1220,7 +1507,9 @@ pub fn ready(p: &Policy, sh: Shell) -> Result<(), String> {
             Who::Package => &m.package,
             Who::Toolchain => &m.toolchain,
         };
-        a.inherit && a.path.is_dir() && !done.iter().any(|d| super::policy::same(d, &a.path))
+        a.reach != Reach::Itself
+            && a.path.is_dir()
+            && !done.iter().any(|d| super::policy::same(d, &a.path))
     });
     match missing {
         None => Ok(()),
@@ -1323,6 +1612,116 @@ mod tests {
         );
         assert_eq!(code, Ok(3));
         let _ = reset(Some(&dir));
+    }
+
+    /// Whether `path` stopped inheriting, and whether `sid` has an entry of
+    /// its own on it.
+    fn cut_and_entry(path: &Path, sid: &Sid) -> (bool, bool) {
+        let w = wide(path);
+        // SAFETY: plain Win32 security calls; the descriptor is freed by Local.
+        unsafe {
+            let (mut dacl, mut sd): (*mut ACL, *mut c_void) = (null_mut(), null_mut());
+            let rc = GetNamedSecurityInfoW(
+                w.as_ptr(),
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION,
+                null_mut(),
+                null_mut(),
+                &mut dacl,
+                null_mut(),
+                &mut sd,
+            );
+            assert_eq!(rc, 0, "{}", path.display());
+            let sd = Local(sd);
+            let (mut control, mut revision) = (0u16, 0u32);
+            GetSecurityDescriptorControl(sd.0, &mut control, &mut revision);
+            let entry = explicit_aces(dacl)
+                .iter()
+                .any(|(_, _, _, s)| EqualSid(s.as_ptr() as PSID, sid.ptr()) != 0);
+            (control & SE_DACL_PROTECTED != 0, entry)
+        }
+    }
+
+    /// In a granted project, the container does its own work but can't
+    /// write, rename or remove a protected file, nor move its folder; and
+    /// `reset` gives both their inheritance back.
+    #[test]
+    fn a_protected_file_is_kept_from_the_container_until_reset() {
+        if probe().is_err() {
+            eprintln!("skipped: {UAC_OFF}");
+            return;
+        }
+        let t = tempfile::tempdir().unwrap();
+        let dir = crate::paths::plain(&t.path().canonicalize().unwrap());
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::create_dir_all(dir.join(".claude")).unwrap();
+        let file = dir.join(r".claude\settings.json");
+        std::fs::write(&file, "{}").unwrap();
+        let p = Policy {
+            project: dir.clone(),
+            dir: dir.clone(),
+            write: vec![dir.clone()],
+            protect: vec![file.clone()],
+            ..Policy::default()
+        };
+        let (package, toolchain, _) = grant(&p).unwrap();
+        // Twice: what is there already isn't changed again.
+        grant(&p).unwrap();
+        let comspec = std::env::var("ComSpec").unwrap();
+        let env: Vec<(OsString, OsString)> = std::env::vars_os().collect();
+        let run = |line: &str| {
+            run_contained(
+                &package,
+                std::slice::from_ref(&toolchain),
+                Path::new(&comspec),
+                line,
+                &env,
+                &dir,
+                60_000,
+            )
+            .unwrap()
+        };
+        assert_eq!(run(r"cmd /d /c echo built> src\out.txt"), 0);
+        assert!(dir.join(r"src\out.txt").is_file());
+        for line in [
+            r"cmd /d /c echo x>> .claude\settings.json",
+            r"cmd /d /c echo x> .claude\settings.json",
+            r"cmd /d /c ren .claude\settings.json s2.json",
+            r"cmd /d /c del .claude\settings.json",
+            r"cmd /d /c move .claude c2",
+        ] {
+            run(line);
+            assert_eq!(std::fs::read_to_string(&file).unwrap(), "{}", "{line}");
+            assert!(!dir.join("c2").exists(), "{line}");
+        }
+        assert_eq!(cut_and_entry(&file, &package), (true, true));
+        assert_eq!(cut_and_entry(&dir.join(".claude"), &package), (true, true));
+        reset(Some(&dir)).unwrap();
+        for path in [&file, &dir.join(".claude"), &dir] {
+            assert_eq!(
+                cut_and_entry(path, &package),
+                (false, false),
+                "{}",
+                path.display()
+            );
+        }
+    }
+
+    #[test]
+    fn a_batch_file_in_the_commands_folder_is_named_from_there() {
+        let dir = Path::new(r"C:\Users\a\p");
+        assert_eq!(
+            batch_path(Path::new(r"C:\Users\a\p\ok.cmd"), dir),
+            r".\ok.cmd"
+        );
+        assert_eq!(
+            batch_path(Path::new(r"C:\Users\a\P\.\scripts/check.cmd"), dir),
+            r".\scripts\check.cmd"
+        );
+        assert_eq!(
+            batch_path(Path::new(r"C:\Program Files\nodejs\npm.cmd"), dir),
+            r"C:\Program Files\nodejs\npm.cmd"
+        );
     }
 
     #[test]

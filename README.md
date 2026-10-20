@@ -1727,7 +1727,11 @@ the gates stop taking the agent's word alone:
     project's top folder, `.git/` or `.claude/` (a check that creates `target/` there the first
     time fails, and `ocgen verify` warns). On native Windows (no WSL needed), an
     AppContainer in a job object: ocgen puts access entries on the granted folders the first time
-    (`ocgen sandbox grant` does it ahead, `ocgen sandbox reset` takes them off again), checks that
+    (`ocgen sandbox grant` does it ahead, `ocgen sandbox reset` takes them off again). Windows
+    doesn't hold an AppContainer to a deny entry or a higher integrity label inside a folder that
+    grants it, so a protected path, and each folder on the way to it, stops inheriting the
+    project's grant: the path gets only reading, and the folders can't be removed or renamed.
+    `ocgen sandbox reset` gives them their inheritance back. ocgen checks that
     each command starts in the project's container at Low integrity before it runs (and ends it if
     not), and runs the check as one program without a shell (`cargo test --locked`; a pipe or `&&` is refused):
     Git Bash can't run reliably in an AppContainer (its runtime needs a shared object folder a
