@@ -23,7 +23,7 @@ pub fn split(cmd: &str) -> Result<Argv, String> {
 }
 
 /// [`split`], with `windows` saying whether a backslash is a path's: then it
-/// is kept as written outside quotes (`.\scripts\check.cmd`, `C:\`), and in
+/// is kept as written outside quotes (`.\checks\check.wasm`, `C:\`), and in
 /// double quotes it only escapes a quote (`"\\server\share"` stays as is),
 /// as Windows programs read their command line.
 pub fn split_as(cmd: &str, windows: bool) -> Result<Argv, String> {
@@ -200,8 +200,8 @@ mod tests {
     fn on_windows_a_backslash_is_a_paths() {
         let win = |cmd: &str| split_as(cmd, true).unwrap().args;
         assert_eq!(
-            win(r".\scripts\check.cmd --fix"),
-            args(&[r".\scripts\check.cmd", "--fix"])
+            win(r".\checks\check.wasm --fix"),
+            args(&[r".\checks\check.wasm", "--fix"])
         );
         assert_eq!(
             win(r#""C:\Program Files\node\npm.cmd" test a\b"#),
