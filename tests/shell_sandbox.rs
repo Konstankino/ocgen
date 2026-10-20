@@ -1,7 +1,8 @@
 //! Native Windows: the commands Claude runs, in ocgen's sandbox — the
 //! `shell-sandbox` hook as Claude Code runs it, and the command it writes run
-//! the way Claude Code runs one (Git Bash `bash -c`, PowerShell), in the
-//! project's AppContainer. Only native Windows has it, and these start a real
+//! the way Claude Code's PowerShell tool runs one, in the project's
+//! AppContainer. Bash commands are refused there: Git Bash can't run reliably
+//! in an AppContainer. Only native Windows has it, and these start a real
 //! sandbox, so CI runs them on windows-latest. (The hook's decisions and the
 //! wrapper's text are tested on every OS in `sandbox::shell`.)
 #![cfg(windows)]
@@ -26,23 +27,11 @@ struct Fixture {
     home: PathBuf,
     /// The env Claude Code gives its shells: the settings env, and ours.
     env: Vec<(String, String)>,
-    bash: PathBuf,
 }
 
 fn write(path: &Path, body: &str) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(path, body).unwrap();
-}
-
-/// Git Bash's bash, as Claude Code finds it.
-fn git_bash() -> PathBuf {
-    if let Some(p) = std::env::var_os("CLAUDE_CODE_GIT_BASH_PATH").map(PathBuf::from) {
-        return p;
-    }
-    let pf = std::env::var("ProgramFiles").unwrap_or_else(|_| r"C:\Program Files".into());
-    let p = Path::new(&pf).join(r"Git\bin\bash.exe");
-    assert!(p.is_file(), "Git Bash not found at {}", p.display());
-    p
 }
 
 fn fixture() -> Fixture {
@@ -77,12 +66,10 @@ fn fixture() -> Fixture {
         .iter()
         .map(|(k, v)| (k.clone(), v.as_str().unwrap_or_default().to_string()))
         .collect();
-    let bash = git_bash();
     for (k, v) in [
         ("HOME", home.display().to_string()),
         ("USERPROFILE", home.display().to_string()),
         ("CLAUDE_PROJECT_DIR", p.display().to_string()),
-        ("CLAUDE_CODE_GIT_BASH_PATH", bash.display().to_string()),
         ("GH_TOKEN", "ghp_test".into()),
     ] {
         env.push((k.into(), v));
@@ -92,7 +79,6 @@ fn fixture() -> Fixture {
         p,
         home,
         env,
-        bash,
     }
 }
 
@@ -142,12 +128,14 @@ fn wrapped(f: &Fixture, tool: &str, cmd: &str) -> String {
     h["updatedInput"]["command"].as_str().unwrap().to_string()
 }
 
-/// Run `wrapper` the way Claude Code's Bash tool does: its exit code, stdout
-/// and stderr.
-fn run_bash(f: &Fixture, wrapper: &str) -> (i32, String, String) {
-    let out = Command::new(&f.bash)
-        .args(["-c", "eval \"$WRAP\" < /dev/null"])
-        .env("WRAP", wrapper)
+/// Run `wrapper` the way Claude Code's PowerShell tool does (its exit code
+/// read as `$LASTEXITCODE`): its exit code, stdout and stderr.
+fn run_ps(f: &Fixture, wrapper: &str) -> (i32, String, String) {
+    let root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
+    let ps = Path::new(&root).join(r"System32\WindowsPowerShell\v1.0\powershell.exe");
+    let out = Command::new(ps)
+        .args(["-NoProfile", "-NonInteractive", "-Command"])
+        .arg(format!("{wrapper}\nexit $LASTEXITCODE"))
         .current_dir(&f.p)
         .envs(f.env.iter().map(|(k, v)| (k, v)))
         .output()
@@ -166,31 +154,43 @@ fn granted() -> Fixture {
     f
 }
 
+fn reason(v: &serde_json::Value) -> String {
+    v["hookSpecificOutput"]["permissionDecisionReason"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string()
+}
+
 #[test]
-fn the_hook_refuses_until_the_project_is_granted_then_wraps() {
+fn bash_is_refused_and_powershell_waits_for_the_grant_then_is_wrapped() {
     let f = fixture();
+    // Bash: refused, saying why and what to use instead — never run as is.
     let v = hook(&f, "Bash", "echo hi");
     assert_eq!(v["hookSpecificOutput"]["permissionDecision"], "deny", "{v}");
     assert!(
-        v["hookSpecificOutput"]["permissionDecisionReason"]
-            .as_str()
-            .unwrap()
-            .contains("ocgen sandbox grant"),
+        reason(&v).contains("Git Bash") && reason(&v).contains("PowerShell tool"),
         "{v}"
     );
+    // PowerShell: refused until the project is granted.
+    let v = hook(&f, "PowerShell", "Write-Output hi");
+    assert_eq!(v["hookSpecificOutput"]["permissionDecision"], "deny", "{v}");
+    assert!(reason(&v).contains("ocgen sandbox grant"), "{v}");
     let out = ocgen(&f, &["sandbox", "grant", "-p", &f.p.display().to_string()]);
-    let said = String::from_utf8_lossy(&out.stdout);
+    let said = String::from_utf8_lossy(&out.stdout).to_lowercase();
     assert!(out.status.success(), "{out:?}");
-    assert!(said.contains("bash.exe starts in it"), "{said}");
-    let w = wrapped(&f, "Bash", "echo hi");
     assert!(
-        w.contains("__sandbox --bash") && w.contains("\necho hi\n"),
+        said.contains("powershell") && said.contains("starts in it"),
+        "{said}"
+    );
+    let w = wrapped(&f, "PowerShell", "Write-Output hi");
+    assert!(
+        w.contains("__sandbox --powershell") && w.contains("\nWrite-Output hi\n'@"),
         "{w}"
     );
     // The project's rules, against the command as written.
-    let v = hook(&f, "Bash", "git push origin main");
+    let v = hook(&f, "PowerShell", "git push origin main");
     assert_eq!(v["hookSpecificOutput"]["permissionDecision"], "ask", "{v}");
-    let v = hook(&f, "Bash", "ocgen approve");
+    let v = hook(&f, "PowerShell", "ocgen approve");
     assert_eq!(v["hookSpecificOutput"]["permissionDecision"], "deny", "{v}");
     let _ = ocgen(&f, &["sandbox", "reset", "-p", &f.p.display().to_string()]);
 }
@@ -198,13 +198,20 @@ fn the_hook_refuses_until_the_project_is_granted_then_wraps() {
 #[test]
 fn a_wrapped_command_prints_and_exits_as_it_would_unwrapped() {
     let f = granted();
-    let w = wrapped(&f, "Bash", "echo out; echo err >&2; exit 3");
-    let (code, out, err) = run_bash(&f, &w);
-    assert_eq!((code, out.as_str()), (3, "out\n"), "{err}");
-    assert!(err.contains("err"), "{err}");
-    // In a folder of the project, like Claude's shell.
-    let w = wrapped(&f, "Bash", "printf '%s' \"$(basename \"$PWD\")\"");
-    assert_eq!(run_bash(&f, &w).1, "p");
+    let w = wrapped(
+        &f,
+        "PowerShell",
+        "Write-Output 'it''s here'; [Console]::Error.WriteLine('err'); exit 3",
+    );
+    let (code, out, err) = run_ps(&f, &w);
+    assert_eq!(code, 3, "{out}{err}");
+    assert!(
+        out.contains("it's here") && err.contains("err"),
+        "{out}{err}"
+    );
+    // In the project's folder, like Claude's shell.
+    let w = wrapped(&f, "PowerShell", "Split-Path -Leaf (Get-Location).Path");
+    assert_eq!(run_ps(&f, &w).1.trim(), "p");
     let _ = ocgen(&f, &["sandbox", "reset", "-p", &f.p.display().to_string()]);
 }
 
@@ -212,22 +219,22 @@ fn a_wrapped_command_prints_and_exits_as_it_would_unwrapped() {
 fn a_wrapped_command_does_its_work_and_nothing_else() {
     let f = granted();
     let ok = |cmd: &str| {
-        let w = wrapped(&f, "Bash", cmd);
-        let o = run_bash(&f, &w);
+        let w = wrapped(&f, "PowerShell", cmd);
+        let o = run_ps(&f, &w);
         assert_eq!(o.0, 0, "{cmd}: {o:?}");
     };
     // Its own work, a commit included, without the withheld credentials.
-    ok("echo built > src.txt && test -f src.txt && test -z \"${GH_TOKEN+x}\"");
-    ok("git add -A && git -c user.name=t -c user.email=t@example.com commit -qm t");
+    ok("Set-Content -Path built.txt -Value built; if (-not (Test-Path built.txt)) { exit 1 }; if ($env:GH_TOKEN) { exit 2 }");
+    ok("git add -A; git -c user.name=t -c user.email=t@example.com commit -qm t; exit $LASTEXITCODE");
     for cmd in [
-        "echo 9999999999 > \"$HOME/.claude/ocgen/approvals/old\"",
-        "cat \"$HOME/.ssh/id_test\"",
-        "echo x >> .claude/settings.json",
-        "echo x > .git/hooks/pre-push",
-        "echo x > .git/config",
+        "Set-Content -Path \"$env:USERPROFILE\\.claude\\ocgen\\approvals\\old\" -Value 9999999999 -ErrorAction Stop",
+        "Get-Content -Path \"$env:USERPROFILE\\.ssh\\id_test\" -ErrorAction Stop",
+        "Add-Content -Path .claude\\settings.json -Value x -ErrorAction Stop",
+        "Set-Content -Path .git\\hooks\\pre-push -Value x -ErrorAction Stop",
+        "Set-Content -Path .git\\config -Value x -ErrorAction Stop",
     ] {
-        let w = wrapped(&f, "Bash", cmd);
-        let o = run_bash(&f, &w);
+        let w = wrapped(&f, "PowerShell", cmd);
+        let o = run_ps(&f, &w);
         assert_ne!(o.0, 0, "{cmd}: {o:?}");
     }
     assert_eq!(
@@ -236,25 +243,6 @@ fn a_wrapped_command_does_its_work_and_nothing_else() {
     );
     assert!(!f.p.join(".git/hooks/pre-push").exists());
     let settings = fs::read_to_string(f.p.join(".claude/settings.json")).unwrap();
-    assert!(!settings.ends_with("x\n"), "{settings}");
-    let _ = ocgen(&f, &["sandbox", "reset", "-p", &f.p.display().to_string()]);
-}
-
-#[test]
-fn a_wrapped_powershell_command_prints_and_exits_as_it_would_unwrapped() {
-    let f = granted();
-    let w = wrapped(&f, "PowerShell", "Write-Output 'it''s here'; exit 4");
-    let root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
-    let ps = Path::new(&root).join(r"System32\WindowsPowerShell\v1.0\powershell.exe");
-    let out = Command::new(ps)
-        .args(["-NoProfile", "-NonInteractive", "-Command"])
-        .arg(format!("{w}\nexit $LASTEXITCODE"))
-        .current_dir(&f.p)
-        .envs(f.env.iter().map(|(k, v)| (k, v)))
-        .output()
-        .unwrap();
-    let said = String::from_utf8_lossy(&out.stdout);
-    assert_eq!(out.status.code(), Some(4), "{out:?}");
-    assert!(said.contains("it's here"), "{out:?}");
+    assert!(!settings.trim_end().ends_with('x'), "{settings}");
     let _ = ocgen(&f, &["sandbox", "reset", "-p", &f.p.display().to_string()]);
 }

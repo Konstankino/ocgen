@@ -6,11 +6,10 @@
 //! to update), recorded in `%LOCALAPPDATA%\ocgen\sandbox\` so `ocgen sandbox
 //! reset` can take them off again.
 //!
-//! The command runs through Git Bash's `sh` when that starts in an
-//! AppContainer here (checked once, then remembered); otherwise as one program
-//! without a shell ([`cmdline::split`]). A command Claude runs ([`run_agent`])
-//! runs in the shell it was written for — Git Bash's `bash`, or PowerShell —
-//! and is refused when that shell can't start here.
+//! The command runs as one program, without a shell ([`cmdline::split`]): Git
+//! Bash can't be trusted in an AppContainer ([`NO_GIT_BASH`]). A command Claude
+//! runs in PowerShell ([`run_agent`]) runs in PowerShell, refused when that
+//! can't start here; one it runs in Bash is refused.
 
 use std::ffi::{c_void, OsStr, OsString};
 use std::os::windows::ffi::OsStrExt;
@@ -436,6 +435,13 @@ fn remove(path: &Path, sids: &[&Sid]) -> Result<(), String> {
 
 // ------------------------------------------------------------ manifest --
 
+/// Why nothing runs through Git Bash in an AppContainer: its runtime needs a
+/// shared object folder an AppContainer may not create (`0xC0000022`), and
+/// a command that dies of it may still end with 0 — run fine once, then not —
+/// so a check would pass without having run, and a command Claude runs would
+/// seem to have run.
+pub const NO_GIT_BASH: &str = "Git Bash can't run reliably in an AppContainer (its runtime needs a shared object folder a container may not create, and a command that dies of it can still end with 0), so ocgen can't sandbox Bash commands on native Windows, and it never runs them unsandboxed. Use the PowerShell tool (CLAUDE_CODE_USE_POWERSHELL_TOOL=1): ocgen sandboxes its commands";
+
 /// What a shell's start-up check runs (`exit 7`) must end with. A shell that
 /// dies while starting can still end with 0 (Git Bash's runtime can't start
 /// in an AppContainer, and its launcher reports success), so success alone
@@ -825,29 +831,6 @@ fn find_on_path(name: &str) -> Option<PathBuf> {
     crate::paths::find_in(&path, name, &exts)
 }
 
-/// Whether Git Bash's `sh` starts in the container here — checked once per
-/// `sh` (path and modified time), then remembered.
-fn shell_works(
-    m: &mut Manifest,
-    package: &Sid,
-    caps: &[Sid],
-    env: &[(OsString, OsString)],
-    dir: &Path,
-) -> Option<PathBuf> {
-    let sh = find_on_path("sh")?;
-    let ok = starts(
-        &mut m.shell,
-        &sh,
-        &["-c", "exit 7"],
-        package,
-        caps,
-        env,
-        dir,
-    );
-    save(m);
-    ok.then_some(sh)
-}
-
 /// Whether `prog` with `args` (`exit 7`) starts in the container and ends with
 /// [`PROBE_EXIT`]: remembered in `slot` per program (path and modified time).
 fn starts(
@@ -884,20 +867,6 @@ fn starts(
     ok
 }
 
-/// Git Bash's `bash`: the one Claude Code is told to use
-/// (`CLAUDE_CODE_GIT_BASH_PATH`), else the one beside Git's `sh` on PATH —
-/// never `System32\bash.exe`, which starts WSL.
-fn git_bash() -> Option<PathBuf> {
-    if let Some(p) = std::env::var_os("CLAUDE_CODE_GIT_BASH_PATH").map(PathBuf::from) {
-        if p.is_file() {
-            return Some(p);
-        }
-    }
-    let sh = find_on_path("sh")?;
-    let bash = sh.with_file_name("bash.exe");
-    bash.is_file().then_some(bash)
-}
-
 /// The PowerShell Claude Code runs commands with: `pwsh`, else Windows
 /// PowerShell.
 fn powershell() -> Option<PathBuf> {
@@ -919,7 +888,7 @@ struct Launch {
 /// How to start `cmd` without a shell — or why it needs one.
 fn native(cmd: &str, dir: &Path) -> Result<Launch, String> {
     let a = cmdline::split(cmd).map_err(|e| {
-        format!("{e} (Git Bash's sh can't start in an AppContainer here): use a script or a simpler command")
+        format!("{e} (on Windows ocgen runs it without a shell: Git Bash can't run reliably in an AppContainer): use a script or a simpler command")
     })?;
     let prog = &a.args[0];
     let exts = std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into());
@@ -977,7 +946,7 @@ fn native(cmd: &str, dir: &Path) -> Result<Launch, String> {
 
 /// Run `cmd` under `p` in the AppContainer; its exit code.
 pub fn run(p: &Policy, cmd: &str) -> Result<i32, String> {
-    let (package, toolchain, mut m) = grant(p)?;
+    let (package, toolchain, _) = grant(p)?;
     let mut caps = vec![toolchain];
     if p.network {
         for k in [
@@ -1010,22 +979,7 @@ pub fn run(p: &Policy, cmd: &str) -> Result<i32, String> {
         }
     }
     let result = (|| {
-        let Launch { app, line, assign } = match shell_works(&mut m, &package, &caps, &env, &p.dir)
-        {
-            Some(sh) => {
-                let line = cmdline::command_line(&[
-                    sh.to_string_lossy().into_owned(),
-                    "-c".into(),
-                    cmd.into(),
-                ]);
-                Launch {
-                    app: sh,
-                    line,
-                    assign: Vec::new(),
-                }
-            }
-            None => native(cmd, &p.dir)?,
-        };
+        let Launch { app, line, assign } = native(cmd, &p.dir)?;
         let mut env = env.clone();
         for (k, v) in assign {
             env.retain(|(x, _)| !x.eq_ignore_ascii_case(OsStr::new(&k)));
@@ -1039,26 +993,13 @@ pub fn run(p: &Policy, cmd: &str) -> Result<i32, String> {
     result
 }
 
-/// Check again whether Git Bash's bash and PowerShell start in the project's
-/// container (granting `p` first): each one found, and whether it does.
+/// Check again whether PowerShell starts in the project's container (granting
+/// `p` first): each one found, and whether it does.
 pub fn check_shells(p: &Policy) -> Result<Vec<(PathBuf, bool)>, String> {
     let (package, toolchain, mut m) = grant(p)?;
     let caps = vec![toolchain];
     let env: Vec<(OsString, OsString)> = std::env::vars_os().collect();
     let mut out = Vec::new();
-    if let Some(bash) = git_bash() {
-        m.bash = None;
-        let ok = starts(
-            &mut m.bash,
-            &bash,
-            &["-c", "exit 7"],
-            &package,
-            &caps,
-            &env,
-            &p.dir,
-        );
-        out.push((bash, ok));
-    }
     if let Some(ps) = powershell() {
         m.powershell = None;
         let args = ["-NoProfile", "-NonInteractive", "-Command", "exit 7"];
@@ -1105,30 +1046,7 @@ pub fn run_agent(p: &Policy, sh: Shell, cmd: &str) -> Result<i32, String> {
     }
     let never = "and ocgen never runs it unsandboxed";
     let (app, line) = match sh {
-        Shell::Bash => {
-            let bash = git_bash().ok_or(format!("Git Bash's bash isn't found, {never}"))?;
-            if !starts(
-                &mut m.bash,
-                &bash,
-                &["-c", "exit 7"],
-                &package,
-                &caps,
-                &env,
-                &p.dir,
-            ) {
-                save(&m);
-                return Err(format!(
-                    "{} can't start in an AppContainer here, so ocgen can't sandbox the command, {never}",
-                    bash.display()
-                ));
-            }
-            let line = cmdline::command_line(&[
-                bash.to_string_lossy().into_owned(),
-                "-c".into(),
-                cmd.into(),
-            ]);
-            (bash, line)
-        }
+        Shell::Bash => return Err(NO_GIT_BASH.to_string()),
         Shell::PowerShell => {
             let ps = powershell().ok_or(format!("PowerShell isn't found, {never}"))?;
             let args = [
@@ -1171,14 +1089,15 @@ pub fn run_agent(p: &Policy, sh: Shell, cmd: &str) -> Result<i32, String> {
 /// Whether every folder `p` grants or protects has had its entry put on once
 /// (the project's own, and the toolchains' shared ones) — taking care of
 /// what is missing could take minutes, too long for one command — and `sh`
-/// hasn't been found unable to start in the container; if not, why.
+/// can run in it (PowerShell, unless found unable to start; never Git Bash);
+/// if not, why.
 pub fn ready(p: &Policy, sh: Shell) -> Result<(), String> {
+    if sh == Shell::Bash {
+        return Err(NO_GIT_BASH.to_string());
+    }
     let m = load(&profile_name(&p.project));
-    let (slot, name) = match sh {
-        Shell::Bash => (&m.bash, "Git Bash's bash"),
-        Shell::PowerShell => (&m.powershell, "PowerShell"),
-    };
-    if let Some((prog, _, false)) = slot {
+    let name = "PowerShell";
+    if let Some((prog, _, false)) = &m.powershell {
         if prog.is_file() {
             return Err(format!(
                 "{name} ({}) can't start in an AppContainer on this machine, so ocgen can't sandbox the command, and it never runs it unsandboxed. `ocgen sandbox status` shows the sandbox; after a {name} update, `ocgen sandbox grant` checks again.",
@@ -1211,12 +1130,13 @@ pub fn describe(p: &Policy) -> String {
     } else {
         "the project isn't granted yet (the first run, or `ocgen sandbox grant`, does it)"
     };
-    let shell = match &m.shell {
-        Some((sh, _, true)) => format!("runs commands through {}", sh.display()),
-        Some((_, _, false)) => {
-            "Git Bash's sh can't start in it: commands run without a shell".into()
-        }
-        None => "not run yet".into(),
+    let shell = match &m.powershell {
+        Some((ps, _, true)) => format!(
+            "runs the hooks' commands without a shell, Claude's PowerShell commands through {}, and refuses its Bash commands",
+            ps.display()
+        ),
+        Some((_, _, false)) => "runs the hooks' commands without a shell; PowerShell can't start in it, so Claude's commands are refused".into(),
+        None => "runs the hooks' commands without a shell; Claude's PowerShell commands not run yet; its Bash commands are refused".into(),
     };
     let job = if in_job() {
         "; hooks run inside a job already"

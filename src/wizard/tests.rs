@@ -737,7 +737,9 @@ fn the_sandbox_help_names_the_gate_only_when_it_is_on() {
     // command as written.
     let win = sandbox_help_for(Sandboxer::Ocgen, true);
     assert!(
-        win.contains("ocgen runs the Bash and PowerShell commands") && win.contains("AppContainer"),
+        win.contains("ocgen runs the PowerShell commands")
+            && win.contains("refuses its Bash commands")
+            && win.contains("AppContainer"),
         "{win}"
     );
     assert!(win.contains("permission rules"), "{win}");

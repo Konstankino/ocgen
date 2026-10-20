@@ -488,8 +488,8 @@ impl PermissionRules {
 /// the sandbox. Claude Code runs hooks outside its sandbox, so the hooks run
 /// the project code they start themselves (the check, the formatter) in an OS
 /// sandbox of their own ([`HOOK_DENY_WRITE`]). On native Windows, where Claude
-/// Code has no sandbox, a hook runs the Bash and PowerShell commands Claude
-/// runs in that same sandbox ([`crate::sandbox::shell`]).
+/// Code has no sandbox, a hook runs the PowerShell commands Claude runs in
+/// that same sandbox and refuses its Bash commands ([`crate::sandbox::shell`]).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SandboxProfile {

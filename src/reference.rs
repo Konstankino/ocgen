@@ -369,9 +369,11 @@ const CLAUDE_FIELDS: &[Field] = &[
     },
     Field {
         label: "sandbox on native Windows",
-        detail: "Claude Code has no sandbox on native Windows, so there ocgen runs the Bash and \
+        detail: "Claude Code has no sandbox on native Windows, so there ocgen runs the \
                  PowerShell commands Claude runs in its own (the AppContainer of the hooks' \
-                 sandbox): a PreToolUse hook rewrites each command to run through `ocgen \
+                 sandbox) and refuses its Bash commands, which Git Bash can't run reliably in an \
+                 AppContainer (use Claude Code's PowerShell tool, \
+                 CLAUDE_CODE_USE_POWERSHELL_TOOL=1): a PreToolUse hook rewrites each command to run through `ocgen \
                  __sandbox`, leaving the command readable in the middle, and checks the project's \
                  deny and ask rules against the command as written — deny denies, ask asks, the \
                  rest runs sandboxed without a prompt. Inside, it writes the project, its git \

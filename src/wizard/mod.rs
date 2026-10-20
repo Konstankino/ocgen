@@ -1011,7 +1011,7 @@ fn sandbox_help(gate: bool) -> String {
 /// [`sandbox_help`] where `by` sandboxes the commands Claude runs.
 fn sandbox_help_for(by: Sandboxer, gate: bool) -> String {
     let what = match by {
-        Sandboxer::Ocgen => "Claude Code has no sandbox on native Windows, so ocgen runs the Bash and PowerShell commands Claude runs in its own (an AppContainer): they write only the project and the dependency caches, read only those and the toolchains, and ocgen checks your permission rules against each command as written.",
+        Sandboxer::Ocgen => "Claude Code has no sandbox on native Windows, so ocgen runs the PowerShell commands Claude runs in its own (an AppContainer) and refuses its Bash commands, which Git Bash can't run reliably there (use Claude Code's PowerShell tool): they write only the project and the dependency caches, read only those and the toolchains, and ocgen checks your permission rules against each command as written.",
         _ => "Bash runs with limited file and network access (Seatbelt on macOS, bubblewrap on Linux/WSL2); new network hosts prompt until allowed.",
     };
     match (by, gate) {

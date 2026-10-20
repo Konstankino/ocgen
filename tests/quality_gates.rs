@@ -2240,7 +2240,10 @@ fn run_bin(hook: &str, env: &[(&str, &str)], payload: &str) -> Out {
 /// writable), with an approval and a credential in it.
 #[cfg(unix)]
 fn sandbox_home() -> TempDir {
-    let home = tempfile::tempdir().unwrap();
+    // Outside /tmp, as a real home folder is: bubblewrap gives the command a
+    // private /tmp of its own, where a home folder's paths would be writable
+    // (and the real ones untouched) — not what the gate is tested against.
+    let home = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
     write(home.path(), ".claude/ocgen/approvals/old", "1\n");
     write(home.path(), ".ssh/id_test", "secret\n");
     home

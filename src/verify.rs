@@ -820,12 +820,12 @@ pub fn sandbox_check(
             (Ok(()), true) => check(
                 name,
                 Status::Pass,
-                "on — Claude Code has no sandbox on native Windows, so ocgen runs the Bash and PowerShell commands Claude runs in its own: they, and the check and formatter the hooks run, can't write the approval store",
+                "on — Claude Code has no sandbox on native Windows, so ocgen runs the PowerShell commands Claude runs in its own (and refuses its Bash commands): they, and the check and formatter the hooks run, can't write the approval store",
             ),
             (Ok(()), false) => check(
                 name,
                 Status::Pass,
-                "on — ocgen runs the Bash and PowerShell commands Claude runs in its own sandbox here",
+                "on — ocgen runs the PowerShell commands Claude runs in its own sandbox here, and refuses its Bash commands",
             ),
             (Err(why), true) => check(
                 name,
