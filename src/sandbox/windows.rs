@@ -724,8 +724,16 @@ impl Manifest {
     }
 }
 
+/// Where ocgen records what it put on the files: `%LOCALAPPDATA%\ocgen\sandbox`.
+/// From the variable first: the known-folder lookup follows `USERPROFILE`, and
+/// with that pointed elsewhere (a test's home folder) finds nothing, and the
+/// grant would go unrecorded.
 pub fn manifest_dir() -> Option<PathBuf> {
-    dirs::data_local_dir().map(|d| d.join("ocgen").join("sandbox"))
+    std::env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .filter(|d| d.is_absolute() && d.is_dir())
+        .or_else(dirs::data_local_dir)
+        .map(|d| d.join("ocgen").join("sandbox"))
 }
 
 fn manifest_path(profile: &str) -> Option<PathBuf> {
@@ -765,6 +773,13 @@ fn lock() -> Option<std::fs::File> {
 /// names, the container gets what it plans (and, where the plan keeps it
 /// from something, nothing else).
 pub fn grant(p: &Policy) -> Result<(Sid, Sid, Manifest), String> {
+    // Unrecorded, the grant couldn't be checked or taken off again.
+    if manifest_dir().is_none() {
+        return Err(
+            "can't find %LOCALAPPDATA% to record the sandbox's permissions in, so ocgen gives none"
+                .into(),
+        );
+    }
     let profile = profile_name(&p.project);
     let package = package_sid(&profile)?;
     let toolchain = toolchain_sid()?;
