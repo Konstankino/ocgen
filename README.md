@@ -1733,7 +1733,8 @@ the gates stop taking the agent's word alone:
     project's grant: the path gets only reading, and the folders can't be removed or renamed.
     `ocgen sandbox reset` gives them their inheritance back. ocgen checks that
     each command starts in the project's container at Low integrity before it runs (and ends it if
-    not), and runs the check as one program without a shell (`cargo test --locked`; a pipe or `&&` is refused):
+    not), and runs the check as one program without a shell (`cargo test --locked`; a pipe or `&&` is refused,
+    and a backslash is part of a path, as in `.\scripts\check.cmd`):
     Git Bash can't run reliably in an AppContainer (its runtime needs a shared object folder a
     container may not create, and a command that dies of it can still end with 0). Loopback stays closed
     there even with the network on. With UAC off (`EnableLUA` 0) ocgen doesn't use an AppContainer. Where none of these works, a command that is a WASI module

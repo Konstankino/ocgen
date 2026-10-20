@@ -1329,16 +1329,19 @@ fn native(cmd: &str, dir: &Path) -> Result<Launch, String> {
 /// How `cmd` is to name the batch file `program`: by its path from `dir`,
 /// the command's folder, when it is in there. Given a full path, `cmd` looks
 /// into every folder above the file, which the container may not read
-/// ("Access is denied"), and the batch file never runs.
+/// ("Access is denied"), and the batch file never runs. Backslashes only:
+/// `cmd` ends a command's name at a `/`.
 fn batch_path(program: &Path, dir: &Path) -> String {
-    if !is_within(program, dir) {
-        return program.to_string_lossy().into_owned();
-    }
-    let below: PathBuf = program
-        .components()
-        .skip(dir.components().count())
-        .collect();
-    format!(".\\{}", below.display()).replace('/', "\\")
+    let named = if is_within(program, dir) {
+        let below: PathBuf = program
+            .components()
+            .skip(dir.components().count())
+            .collect();
+        format!(".\\{}", below.display())
+    } else {
+        program.to_string_lossy().into_owned()
+    };
+    named.replace('/', "\\")
 }
 
 /// Run `cmd` under `p` in the AppContainer; its exit code.
@@ -1721,6 +1724,10 @@ mod tests {
         assert_eq!(
             batch_path(Path::new(r"C:\Program Files\nodejs\npm.cmd"), dir),
             r"C:\Program Files\nodejs\npm.cmd"
+        );
+        assert_eq!(
+            batch_path(Path::new("C:/tools/x.cmd"), dir),
+            r"C:\tools\x.cmd"
         );
     }
 
