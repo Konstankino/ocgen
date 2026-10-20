@@ -56,7 +56,8 @@ from the improved prompt.
 ## 2. Investigate — exhaustively
 Be aggressive and complete: the plan is only as good as this analysis. Everything here is
 read-only; the git, gh and docs reads listed in this skill's `allowed-tools` run without prompts.
-Number every finding **F1, F2, …** and tag it **Verified** (with `file:line`, a commit, or a link)
+Name every finding with a kebab-case slug that says what it is about (`cache-cold-after-deploy`),
+cite it by that slug from then on, and tag it **Verified** (with `file:line`, a commit, or a link)
 or **Inferred** (with `Confidence: NN%` and what would verify it).
 
 **Pass 1 — Map (breadth).** Find the entry points, modules and data flow around the subject. Derive
@@ -64,9 +65,9 @@ the search terms — symbols, types, error messages, config keys, CLI flags, env
 and show me the list; every later pass searches for all of them.
 
 **Pass 2 — Deep dive, in parallel.** Launch several {% if prefer_explorer %}`explorer` subagents in one message, one per
-area, each returning numbered findings with evidence. The `explorer` has no shell: run the git and gh
+area, each returning findings, named by slug, with evidence. The `explorer` has no shell: run the git and gh
 reads below yourself (they're pre-approved) and give it their output.{% else %}built-in `Explore` subagents in one message
-(thoroughness "very thorough"), one per area, each returning numbered findings with evidence:{% endif %}
+(thoroughness "very thorough"), one per area, each returning findings, named by slug, with evidence:{% endif %}
 - **Code:** every code path involved and every call site / reference of each symbol you might touch
   (`Grep` and `git grep` for all the search terms — not just the first hit).
 - **Tests:** which tests and fixtures cover it, what they assert, and what is not covered.
@@ -98,14 +99,14 @@ Docs · History · Related issues and PRs · Existing intents.
 **Pass 3 — Close the gaps, in parallel.** List what is still unexplored or unanswered — unticked
 checklist items, Inferred findings, open leads — and investigate them all at once: launch {% if prefer_explorer %}`explorer`{% else %}built-in
 `Explore`{% endif %} subagents in one message, one per gap (group small related gaps), each given the search
-terms and the findings it builds on, and each returning numbered findings with evidence. Only a gap
+terms and the findings it builds on, and each returning findings, named by slug, with evidence. Only a gap
 that needs another's answer waits for the next round. Repeat until a pass finds nothing new (at most
 3 extra passes). Only then ask me what the code can't answer — one question at a time, 2–4 options
 with the recommended one first.
 
 **Pass 4 — Challenge.** Give a fresh {% if adversary %}`{{ adversary }}`{% elif prefer_explorer %}`explorer`{% else %}`Explore`{% endif %} subagent the findings' claims (not your conclusion)
 and ask it to find evidence that would contradict them. Reconcile, and record what changed.{% if adversary %} Its
-Critical and High findings that hold up become numbered findings (F#) like yours; say which you rejected and why.{% endif %}
+Critical and High findings that hold up become findings like yours, each with its slug; say which you rejected and why.{% endif %}
 
 **Analysis report** — show it before any plan:
 - **Current behaviour** (Verified findings)
@@ -125,7 +126,7 @@ Before you present the plan{% if adversary %}, and before `{{ adversary }}` chec
 and ask it to check the plan in both directions, once:
 - **Gaps:** every acceptance criterion and every risk needs a task. Add the missing tasks, or show me what the plan
   can't cover as a gap.
-- **Excess:** a task that traces to no finding (F#), risk or criterion goes under **Deferred by the scope check**,
+- **Excess:** a task that traces to no finding, risk or criterion (by its slug) goes under **Deferred by the scope check**,
   with its reason, in the plan you show me, so I can push back. Never defer a risk's mitigation.
 - Its predicted **blast radius** — files, public surface, dependencies, stable files, rollback — comes with the plan.
 
@@ -137,9 +138,9 @@ findings and have it check again — at most {{ rounds }} rounds. A Critical or 
 **UNRESOLVED**: show it to me with the plan.
 
 {% endif -%}
-Present: the problem, the options considered with a recommendation, scope and out-of-scope, risks
-each with a mitigation, and acceptance criteria. Every statement cites the findings it rests on
-(F#); anything that doesn't is labelled **Assumption**. **Invite push-back** and iterate until I approve.
+Present: the problem, the options considered (each named by a slug) with a recommendation, scope and
+out-of-scope, risks each with a mitigation, and acceptance criteria. Every statement cites the
+findings it rests on, by slug; anything that doesn't is labelled **Assumption**. **Invite push-back** and iterate until I approve.
 My approval makes the plan **approved for drafting**, not accepted: {% if approvers %}the approvers decide (step 6){% else %}with no approvers, my confirmation in step 6 decides{% endif %}.
 Do not write anything yet. Once I approve, ask whether to write an intent file (optional) — if not,
 go to step 5: the issue draft is then the intent's only record (step 6).

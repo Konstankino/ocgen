@@ -282,9 +282,10 @@ fn without_the_explorer_preferred_it_uses_the_built_in_explore() {
 fn findings_follow_the_agreed_format() {
     let md = skill(&claude());
     for must in [
-        "**R1, R2, …**",
-        "**C1, C2, …**",
-        "**R3 · High · Possible · Verified** (cross-platform)",
+        // Named by a slug from candidate to finding, never numbered.
+        "a kebab-case slug that says what the\nflaw is",
+        "keeps its slug as a finding",
+        "**`target-path-split-on-spaces` · High · Possible · Verified** (cross-platform)",
         "(provisional)",
         "To verify:",
         "**Not confirmed**",
@@ -338,9 +339,8 @@ fn an_adr_is_written_only_when_asked_and_linked_both_ways() {
 fn it_reuses_intents_text_instead_of_copying_it() {
     let files = rendered(&claude());
     let (intent, review) = (&files[INTENT], &files[SKILL]);
-    // The writing standard: the same text, findings numbered R# instead of F#.
-    let standard =
-        |md: &str, heading: &str, next: &str| between(md, heading, next).replace("R#", "F#");
+    // The writing standard: the same text.
+    let standard = |md: &str, heading: &str, next: &str| between(md, heading, next).to_string();
     assert_eq!(
         standard(intent, "## Writing standard (steps 4 and 5)\n", "\n\n## 4."),
         standard(review, "## Writing standard (steps 5 and 6)\n", "\n\n## 5.")

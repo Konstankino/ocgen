@@ -3645,6 +3645,56 @@ fn optional_hooks_are_wired_with_their_scripts() {
     assert!(!dir2.path().join(".claude/hooks/notify.sh").exists());
 }
 
+/// What a document refers back to — findings, options, risks, criteria — is
+/// named by a slug that says what it is about, never a code a reader has to
+/// look up (R1, A1, F2): the rules say so, and no generated skill, agent or
+/// template teaches a code.
+#[test]
+fn documents_name_what_they_refer_back_to_by_slug() {
+    fn md_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
+        for e in fs::read_dir(dir).into_iter().flatten().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                md_files(&p, out);
+            } else if p.extension().is_some_and(|x| x == "md") {
+                out.push(p);
+            }
+        }
+    }
+    let dir = tempdir().unwrap();
+    claude_default("slugs").scaffold(dir.path(), false).unwrap();
+    let rules = read(dir.path(), ".claude/rules/ocgen-workflow.md");
+    assert!(
+        rules.contains("kebab-case slug") && rules.contains("R1"),
+        "{rules}"
+    );
+    // A code: a capital and a number (F1, R12) or `#` (F#), a range of them
+    // (R1–Rn), or a lettered option (**A.**, Option B).
+    let code = regex::Regex::new(
+        r"\b[A-Z][0-9]{1,2}\b|\b[A-Z]#|\b[A-Z][0-9]–[A-Z]n\b|\*\*[A-Z]\.\*\*|\bOption [A-Z]\b",
+    )
+    .unwrap();
+    let mut files = Vec::new();
+    md_files(&dir.path().join(".claude"), &mut files);
+    let rule = dir.path().join(".claude/rules/ocgen-workflow.md");
+    for must in [
+        "skills/intent/SKILL.md",
+        "skills/review-intent/SKILL.md",
+        "intent/issue-template.md",
+        "intent/intent-template.md",
+    ] {
+        assert!(
+            files.contains(&dir.path().join(".claude").join(must)),
+            "{must} not generated"
+        );
+    }
+    for file in files.iter().filter(|f| **f != rule) {
+        let text = fs::read_to_string(file).unwrap();
+        let found: Vec<&str> = code.find_iter(&text).map(|m| m.as_str()).collect();
+        assert!(found.is_empty(), "{}: {found:?}", file.display());
+    }
+}
+
 /// The Claude Code hook fields ocgen sets on its own hooks.
 #[test]
 fn hooks_carry_their_claude_code_fields() {
@@ -5048,7 +5098,8 @@ fn intent_skill_demands_an_exhaustive_evidence_based_analysis() {
     ] {
         assert!(md.contains(section), "report missing {section}");
     }
-    assert!(md.contains("F1") && md.contains("Assumption"));
+    // Findings are cited by a slug that says what they are about, not a number.
+    assert!(md.contains("kebab-case slug") && md.contains("Assumption"));
     assert!(md.contains("Verified") && md.contains("Inferred"));
 
     // Web docs only from trusted domains; gh failures, a missing gh included,
@@ -5121,7 +5172,7 @@ fn intent_drafts_are_blameless_but_honest() {
         "soften the framing, never the facts",
         "System, not people",
         "Context before the flaw",
-        "When [trigger], [behavior], which means [impact] (evidence: F#, `file:line`)",
+        "When [trigger], [behavior], which means [impact] (evidence: the finding's slug, `file:line`)",
         "Severity",
         "Likelihood",
         "Balanced",

@@ -11,7 +11,9 @@ structure freely — it's yours.
 House style — /intent reads this block and follows it in every draft. Tune it for your team.
 
 Soften the framing, never the facts. Every flaw, in this order: when [trigger],
-[behavior], which means [impact] (evidence: F#, file:line); then the proposed fix.
+[behavior], which means [impact] (evidence: the finding's slug, file:line); then the
+proposed fix. Name each finding, option and risk by a short kebab-case slug that says what
+it is about (`cache-cold-after-deploy`), never a code such as a letter or a number.
 
 Severity — each label cites the Verified findings it rests on; an Inferred finding
 alone can't set one (say what evidence would confirm it):
@@ -36,20 +38,20 @@ cosmetic for a security, correctness or data-loss problem.
 ## Intent
 <!-- 2-3 sentences, in one paragraph. What should be true afterwards, and why it matters. No solution yet.
 Link the intent file when there is one. A flaw behind it (Medium or higher) goes here or in
-an option's "what can go wrong": when [trigger], [impact] — severity, and its evidence (F#)
-or a link to it in the intent file. -->
+an option's "what can go wrong": when [trigger], [impact] — severity, and its evidence (the
+finding's slug) or a link to it in the intent file. -->
 
 **Blocks prod?** Yes / No
 **Depends on the platform view** (what we need to protect)? Yes / No
 
 ## Options and trade-offs
-<!-- The main contribution. 2-3 options, one line each: what it costs, what it protects, what can go wrong. Include "do nothing". -->
-- **A.** …
-- **B.** …
+<!-- The main contribution. 2-3 options, one line each, each named by its slug: what it costs, what it protects, what can go wrong. Include "do nothing". -->
+- **`<option-slug>`** — …
+- **`<option-slug>`** — …
 - **Do nothing.** …
 
 ## Proposed call
-<!-- Which option and why, in 1-2 lines. -->
+<!-- Which option (by its slug) and why, in 1-2 lines. -->
 
 ## Needs from <approvers>
 <!-- A decision, an IT ask, or nothing. Name the approvers in the heading; one pending

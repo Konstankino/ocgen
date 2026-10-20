@@ -106,7 +106,9 @@ commits.
 {% endif %}
 ## 3. Merge into candidates
 Put the reports together. Merge candidates that describe the same flaw — the same cause in the same
-place — and keep every area that found it; number the rest **C1, C2, …**. {% if scope_guard %}Each of
+place — and keep every area that found it; give each of the rest a kebab-case slug that says what the
+flaw is (`target-path-split-on-spaces`). A candidate keeps its slug as a finding, in the drafts and in
+later sessions. {% if scope_guard %}Each of
 `{{ scope_guard }}`'s Missing or Partial items becomes a candidate in the **scope** area; its Cut and
 Defer items and the blast radius go to the draft's Scope section, not the findings, unless a reviewer
 found a flaw in that code.{% else %}Each gap your scope check found becomes a candidate in the
@@ -143,8 +145,8 @@ the consumers, but **not** the reviewer's reasoning or confidence. It returns **
 with `Confidence: NN%`, **Rejected** with the reason, or **Unsettled** with what would settle it. So
 every surviving finding is **Inferred**: say in the draft that no agent tried to reproduce them.
 {% endif %}
-Only confirmed candidates become findings. Number them **R1, R2, …** by severity (Critical first), then
-likelihood. Where the check gives evidence for another severity, use that. An Inferred finding's
+Only confirmed candidates become findings, each under its candidate's slug. Order them by severity
+(Critical first), then likelihood. Where the check gives evidence for another severity, use that. An Inferred finding's
 severity is **(provisional)** — the house style lets only Verified findings set one — and comes with
 **To verify:** what would confirm it. Rejected and unsettled candidates never become findings and are
 never dropped: they go in the draft's last block.
@@ -164,7 +166,7 @@ their reasons, and ask whether I want a draft anyway.
   approvers, and the Plan in a collapsed `<details>` block).
   - **Intent:** what was reviewed — the target, `<base>..<head>` as short commits, and "plus
     uncommitted changes" when there were any — what should be true before it merges, and one line for
-    each finding of Medium or higher: its ID, severity, trigger and impact.
+    each finding of Medium or higher: its slug, severity, trigger and impact.
   - **Blocks prod?** Yes when a finding is Critical or High. **Depends on the platform view**: as the
     template asks.
   - **Options and trade-offs:** fix every finding before merging; fix the Critical and High ones now
@@ -174,18 +176,18 @@ their reasons, and ask whether I want a draft anyway.
     the issue{% else %}"No approvers configured"{% endif %}.
   - Then three collapsed blocks, each `<details><summary>…</summary>`, a blank line, the content and
     `</details>`:
-    1. **Findings (R1–Rn)**, one line each, like this:
+    1. **Findings**, one line each, like this:
        ```
-       - **R3 · High · Possible · Verified** (cross-platform) — When `--target` is a Windows path with spaces, `resolve_target` (`src/review.rs:88`) splits it, so the review silently skips the change, which means the report is clean for code nobody checked. Evidence: test `target_with_spaces` fails. Fix: pass the path through `paths::for_shell`. {% if adversary %}{{ adversary }}: confirmed (reproduced: `cargo test target_with_spaces`){% else %}{{ review_agent }}: confirmed (by reading){% endif %}.
+       - **`target-path-split-on-spaces` · High · Possible · Verified** (cross-platform) — When `--target` is a Windows path with spaces, `resolve_target` (`src/review.rs:88`) splits it, so the review silently skips the change, which means the report is clean for code nobody checked. Evidence: test `target_with_spaces` fails. Fix: pass the path through `paths::for_shell`. {% if adversary %}{{ adversary }}: confirmed (reproduced: `cargo test target_with_spaces`){% else %}{{ review_agent }}: confirmed (by reading){% endif %}.
        ```
-       An Inferred one reads `**R5 · Medium (provisional) · Inferred, Confidence 70%**` and ends with
+       An Inferred one reads `**<slug> · Medium (provisional) · Inferred, Confidence 70%**` and ends with
        `To verify: …`. After the findings: **What works** — what the review found correct, in a line or
        two; **Scope** — {% if scope_guard %}`{{ scope_guard }}`'s Missing, Partial, Cut and Defer items that aren't findings,
        and its{% else %}what your scope check found that isn't a finding, and the{% endif %} blast radius; and which agents ran.
     2. **Rejected and not confirmed** — each rejected candidate with its reason
-       (`- C7 (security) "<the claim>" — rejected: <reason> (file:line)`), then each **Not confirmed**
-       one with what would settle it. Not confirmed is not a finding — no ID, no severity, not in the
-       Intent — but it is listed, never dropped.
+       (`- <slug> (security) "<the claim>" — rejected: <reason> (file:line)`), then each **Not
+       confirmed** one with what would settle it. Not confirmed is not a finding — no severity, not in
+       the Intent — but it is listed under its slug, never dropped.
     3. **Plan** — the template's outline, left as it is until the intent is agreed.
   - **Words:** the visible text — everything outside the `<details>` blocks — is at most {{ max_words }} words;
     the blocks don't count. State both counts.
