@@ -505,6 +505,17 @@ fn doctor_cancel_writes_nothing() {
 use crate::cli::{OutputArg, TeamCli};
 use ocgen::claude::sandbox_supported;
 
+/// Enter on the sandbox question and its follow-ups: extra domains,
+/// credentials and — where ocgen sandboxes the commands Claude runs (native
+/// Windows) — their network.
+fn sandbox_yes() -> Vec<&'static str> {
+    let mut a = vec!["", "", ""];
+    if ocgen::claude::ocgen_sandboxes_shell() {
+        a.push("");
+    }
+    a
+}
+
 /// Answers for `new` on a Claude project up to the sandbox question, keeping
 /// every default, then `sandbox`.
 fn new_claude_answers<'a>(sandbox: &[&'a str]) -> Vec<&'a str> {
@@ -544,9 +555,9 @@ fn build_new(team: bool, approval_gate: bool) -> Project {
 
 #[test]
 fn new_with_the_gate_on_sandboxes_by_default() {
-    // Enter on the sandbox question, its extra domains and the credentials one.
+    // Enter on the sandbox question and its follow-ups.
     let answers = if sandbox_supported() {
-        new_claude_answers(&["", "", ""])
+        new_claude_answers(&sandbox_yes())
     } else {
         new_claude_answers(&[""])
     };
@@ -607,8 +618,8 @@ fn new_declining_the_sandbox_is_remembered() {
     let p = build_new(true, true);
     assert_eq!(script_remaining(), 0);
     assert!(!p.claude.sandbox.enabled);
-    // Only a no to the recommended yes is an opt-out (native Windows asks with
-    // no as the default).
+    // Only a no to the recommended yes is an opt-out (a platform with no
+    // sandbox asks with no as the default).
     assert_eq!(
         p.claude.sandbox.declined,
         sandbox_supported(),
@@ -641,7 +652,7 @@ fn keeping_the_sandbox_off_without_the_gate_is_no_opt_out() {
     let mut answers = team_with_gate();
     answers[0] = ""; // Agent Teams is on already: Enter keeps it
     if sandbox_supported() {
-        answers.extend(["", "", ""]); // Enter on the sandbox: yes
+        answers.extend(sandbox_yes()); // Enter on the sandbox: yes
     }
     script(&answers);
     super::run_edit_team(path).unwrap();
@@ -670,7 +681,7 @@ fn edit_team_turning_the_gate_on_offers_the_sandbox() {
     let path = claude_project(tmp.path());
     let mut answers = team_with_gate();
     if sandbox_supported() {
-        answers.extend(["", "", ""]); // Enter = yes, extra domains, credentials
+        answers.extend(sandbox_yes()); // Enter = yes, and its follow-ups
     }
     script(&answers);
     super::run_edit_team(path).unwrap();
@@ -713,22 +724,27 @@ fn edit_team_without_the_gate_does_not_ask_about_the_sandbox() {
 
 #[test]
 fn the_sandbox_help_names_the_gate_only_when_it_is_on() {
-    use super::sandbox_help_for;
-    // Supported: with the gate it says what the gate is without the sandbox.
-    assert!(sandbox_help_for(true, true).contains("approval gate is advisory only"));
-    // …and claims no more than it keeps away.
-    assert!(sandbox_help_for(true, true).contains("the credentials ocgen knows about"));
-    assert!(!sandbox_help_for(true, true).contains("however"));
-    assert!(!sandbox_help_for(true, false).contains("approval gate"));
-    // Native Windows: the sandbox isn't there, and the gate is advisory only
-    // when there is a gate.
-    assert!(sandbox_help_for(false, true).contains("isn't available on native Windows"));
-    assert!(sandbox_help_for(false, true).contains("approval gate is advisory"));
-    // …but the hooks' check and formatter still get ocgen's own.
-    assert!(sandbox_help_for(false, true).contains("ocgen's own sandbox"));
-    let off = sandbox_help_for(false, false);
-    assert!(off.contains("isn't available on native Windows"), "{off}");
-    assert!(off.contains("ocgen's own sandbox"), "{off}");
+    use super::{sandbox_help_for, Sandboxer};
+    for by in [Sandboxer::ClaudeCode, Sandboxer::Ocgen] {
+        // Supported: with the gate it says what the gate is without the sandbox.
+        assert!(sandbox_help_for(by, true).contains("approval gate is advisory only"));
+        // …and claims no more than it keeps away.
+        assert!(sandbox_help_for(by, true).contains("the credentials ocgen knows about"));
+        assert!(!sandbox_help_for(by, true).contains("however"));
+        assert!(!sandbox_help_for(by, false).contains("approval gate"));
+    }
+    // Native Windows: ocgen's own sandbox, and the rules checked against the
+    // command as written.
+    let win = sandbox_help_for(Sandboxer::Ocgen, true);
+    assert!(
+        win.contains("ocgen runs the Bash and PowerShell commands") && win.contains("AppContainer"),
+        "{win}"
+    );
+    assert!(win.contains("permission rules"), "{win}");
+    // A platform with none: the gate is advisory there, when there is one.
+    assert!(sandbox_help_for(Sandboxer::None, true).contains("approval gate is advisory"));
+    let off = sandbox_help_for(Sandboxer::None, false);
+    assert!(off.contains("isn't available on this platform"), "{off}");
     assert!(!off.contains("approval gate"), "{off}");
 }
 

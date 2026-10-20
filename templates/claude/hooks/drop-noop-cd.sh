@@ -20,6 +20,9 @@ win=
 case "$(uname -s 2>/dev/null)" in MINGW* | MSYS* | CYGWIN*) win=1 ;; esac
 [ -z "${MSYSTEM:-}" ] || win=1
 [ "${OS:-}" != Windows_NT ] || win=1
+# There the shell-sandbox hook rewrites the command, and of two hooks that
+# rewrite it, Claude Code keeps the one that ends last: stand down.
+[ -n "$win" ] && [ "${OCGEN_SANDBOX:-}" = 1 ] && exit 0
 
 # Same pattern as the Rust hook (hooks::NOOP_CD_RE): one plain or simply quoted
 # target, then && or ;, then the rest.

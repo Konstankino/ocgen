@@ -17,6 +17,7 @@ pub mod cmdline;
 pub mod landlock;
 pub mod policy;
 pub mod seatbelt;
+pub mod shell;
 pub mod wasm;
 #[cfg(windows)]
 pub mod windows;
@@ -148,6 +149,7 @@ pub fn command(
         project,
         dir,
         git: &git,
+        agent: false,
     })
     .map_err(|e| format!("the project's sandbox is on, but {e}"))?;
     let kind = select(chain(), &|k| probe(k, env), &p, cmd)?;
@@ -265,7 +267,7 @@ pub fn helper_main(args: &[OsString]) -> ! {
 fn helper(args: &[OsString]) -> Result<Exit, String> {
     let cmd = match args {
         [flag, cmd] if flag == "-c" => cmd.to_string_lossy().into_owned(),
-        _ => return Err("usage: ocgen __sandbox -c <command> (run by ocgen's hooks)".into()),
+        _ => return agent_helper(args),
     };
     let raw = std::env::var(POLICY_VAR)
         .map_err(|_| format!("no {POLICY_VAR}: this is run by ocgen's hooks"))?;
@@ -315,6 +317,175 @@ fn helper(args: &[OsString]) -> Result<Exit, String> {
         Exit::Code(0) if caught => Exit::Code(1),
         e => e,
     })
+}
+
+/// `ocgen __sandbox --bash|--powershell [--base64] --project <dir>`: run a
+/// command Claude runs (native Windows), which the `shell-sandbox` hook
+/// wrapped ([`shell::wrap`]): read it — from stdin for Bash, from
+/// [`shell::COMMAND_VAR`] for PowerShell — and run it in the project's
+/// AppContainer, under the policy for a command Claude runs, compiled here
+/// from the settings env the shell has.
+fn agent_helper(args: &[OsString]) -> Result<Exit, String> {
+    use std::io::Read;
+    let usage = "usage: ocgen __sandbox -c <command> (run by ocgen's hooks), or --bash|--powershell [--base64] --project <dir> (written by its shell-sandbox hook)";
+    let (mut sh, mut b64, mut project) = (None, false, None);
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.to_str() {
+            Some("--bash") => sh = Some(shell::Shell::Bash),
+            Some("--powershell") => sh = Some(shell::Shell::PowerShell),
+            Some("--base64") => b64 = true,
+            Some("--project") => project = it.next().map(PathBuf::from),
+            _ => return Err(usage.into()),
+        }
+    }
+    let (sh, project) = sh.zip(project).ok_or(usage)?;
+    let cmd = match sh {
+        shell::Shell::Bash => {
+            let mut s = String::new();
+            std::io::stdin()
+                .read_to_string(&mut s)
+                .map_err(|e| format!("can't read the command: {e}"))?;
+            // The heredoc ends it with a newline of its own.
+            let s = s.strip_suffix('\n').unwrap_or(&s);
+            s.strip_suffix('\r').unwrap_or(s).to_string()
+        }
+        shell::Shell::PowerShell => {
+            let v = std::env::var(shell::COMMAND_VAR)
+                .map_err(|_| format!("no {}: it holds the command", shell::COMMAND_VAR))?;
+            if b64 {
+                shell::unbase64(&v)
+                    .and_then(|b| String::from_utf8(b).ok())
+                    .ok_or("the command isn't base64 of UTF-8 text")?
+            } else {
+                v
+            }
+        }
+    };
+    std::env::remove_var(shell::COMMAND_VAR);
+    let env: HashMap<String, String> = std::env::vars().collect();
+    if env.get(policy::ON).map(String::as_str) != Some("1") {
+        return Err(format!(
+            "{} isn't 1 in this shell, so its sandbox settings are missing, and ocgen never runs the command unsandboxed",
+            policy::ON
+        ));
+    }
+    let dir = std::env::current_dir().map_err(|e| format!("no current folder: {e}"))?;
+    let git = git_dirs(&dir);
+    let mut p = policy::compile(&policy::Request {
+        env: &env,
+        project: &project,
+        dir: &dir,
+        git: &git,
+        agent: true,
+    })?;
+    agent_run(&mut p, sh, &cmd, &env)
+}
+
+#[cfg(windows)]
+fn agent_run(
+    p: &mut Policy,
+    sh: shell::Shell,
+    cmd: &str,
+    env: &HashMap<String, String>,
+) -> Result<Exit, String> {
+    probe(Kind::AppContainer, env)?;
+    p.backend = Some(Kind::AppContainer);
+    let tripwires = p.tripwires();
+    let code = windows::run_agent(p, sh, cmd)?;
+    let caught = tripwire(&tripwires);
+    Ok(Exit::Code(if code == 0 && caught { 1 } else { code }))
+}
+
+#[cfg(not(windows))]
+fn agent_run(
+    _: &mut Policy,
+    _: shell::Shell,
+    _: &str,
+    _: &HashMap<String, String>,
+) -> Result<Exit, String> {
+    Err("ocgen sandboxes the commands Claude runs only on native Windows; elsewhere Claude Code's own sandbox does".into())
+}
+
+/// Whether the project's sandbox can run a command Claude runs in `dir` now,
+/// and if not, why (the hook says so instead of wrapping it). On native
+/// Windows the project's container needs its permissions first: `ocgen
+/// sandbox grant` puts them on the files, which a large project takes a
+/// while for — too long for one command.
+pub fn agent_ready(
+    env: &HashMap<String, String>,
+    project: &Path,
+    dir: &Path,
+    sh: shell::Shell,
+) -> Result<(), String> {
+    let git = git_dirs(dir);
+    let p = policy::compile(&policy::Request {
+        env,
+        project,
+        dir,
+        git: &git,
+        agent: true,
+    })
+    .map_err(|e| format!("ocgen can't sandbox this command: {e}"))?;
+    #[cfg(windows)]
+    {
+        probe(Kind::AppContainer, env)?;
+        windows::ready(&p, sh)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (p, sh);
+        Ok(())
+    }
+}
+
+/// Give the project's sandbox its permissions now (native Windows): for the
+/// check and the formatter the hooks run, and for the commands Claude runs —
+/// and check again which shells start in it. What was done, a line each.
+pub fn grant_project(env: &HashMap<String, String>, project: &Path) -> Result<Vec<String>, String> {
+    #[cfg(windows)]
+    {
+        let git = git_dirs(project);
+        let compile = |agent| {
+            policy::compile(&policy::Request {
+                env,
+                project,
+                dir: project,
+                git: &git,
+                agent,
+            })
+        };
+        windows::grant(&compile(false)?)?;
+        let agent = compile(true)?;
+        let (_, _, m) = windows::grant(&agent)?;
+        let mut out = vec![format!(
+            "{} can run sandboxed commands ({}: {} paths for it, {} shared)",
+            project.display(),
+            m.profile,
+            m.package.len(),
+            m.toolchain.len()
+        )];
+        for (prog, ok) in windows::check_shells(&agent)? {
+            out.push(if ok {
+                format!("{} starts in it", prog.display())
+            } else {
+                format!(
+                    "{} can't start in it: the commands Claude runs in it are refused",
+                    prog.display()
+                )
+            });
+        }
+        Ok(out)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = env;
+        Ok(vec![format!(
+            "nothing to grant: the sandbox needs no setup on {} ({})",
+            std::env::consts::OS,
+            project.display()
+        )])
+    }
 }
 
 /// Remove the temporary folders of helpers that never got to (a check killed
@@ -483,6 +654,7 @@ pub fn report(env: &HashMap<String, String>, project: &Path) -> Report {
         project,
         dir: project,
         git: &git,
+        agent: false,
     });
     // Works here, and can enforce this project's policy (wasmtime: for a WASI
     // module, which no ordinary check is).

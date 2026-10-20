@@ -362,10 +362,25 @@ const CLAUDE_FIELDS: &[Field] = &[
                  warns while one is configured). It contains shell \
                  commands only, not the file tools, hooks or MCP servers (the hooks run the \
                  check and formatter in ocgen's own sandbox: see hooks' sandbox). The wizard asks after the \
-                 Agent Teams questions and defaults to yes when the approval gate is on and the \
-                 platform has a sandbox; without it the gate is advisory. claude.sandbox.declined \
-                 records a no to that default, so `ocgen edit team` keeps your no as its default.",
+                 Agent Teams questions and defaults to yes when the approval gate is on; without \
+                 it the gate is advisory. claude.sandbox.declined records a no to that default, \
+                 so `ocgen edit team` keeps your no as its default.",
         example: "sandbox.enabled: true   extra_domains: [registry.example.com]",
+    },
+    Field {
+        label: "sandbox on native Windows",
+        detail: "Claude Code has no sandbox on native Windows, so there ocgen runs the Bash and \
+                 PowerShell commands Claude runs in its own (the AppContainer of the hooks' \
+                 sandbox): a PreToolUse hook rewrites each command to run through `ocgen \
+                 __sandbox`, leaving the command readable in the middle, and checks the project's \
+                 deny and ask rules against the command as written — deny denies, ask asks, the \
+                 rest runs sandboxed without a prompt. Inside, it writes the project, its git \
+                 folders (not their hooks or config) and the caches, and runs without the \
+                 credentials ocgen knows about. `ocgen sandbox grant` gives the container its \
+                 permissions (the wizard does it when you turn the sandbox on); until then the \
+                 hook refuses commands. agent_network (default true) lets them reach the network \
+                 — all of it or none. A `cd` inside a command doesn't carry over to the next.",
+        example: "sandbox.agent_network: false",
     },
     Field {
         label: "hooks' sandbox",

@@ -27,6 +27,8 @@ pub const ALLOW_READ: &str = "OCGEN_SANDBOX_ALLOW_READ";
 pub const ALLOW_EXEC: &str = "OCGEN_SANDBOX_ALLOW_EXEC";
 pub const ALLOW_WRITE: &str = "OCGEN_SANDBOX_ALLOW_WRITE";
 pub const NETWORK: &str = "OCGEN_SANDBOX_NETWORK";
+/// Whether the commands Claude runs (native Windows) may reach the network.
+pub const AGENT_NETWORK: &str = "OCGEN_SANDBOX_AGENT_NETWORK";
 
 /// The system's folders a command may read and run from, on this OS. Windows
 /// needs none: its own folders and Program Files are readable by every
@@ -161,8 +163,13 @@ pub struct Request<'a> {
     pub env: &'a HashMap<String, String>,
     pub project: &'a Path,
     pub dir: &'a Path,
-    /// The repository's git folders (they may lie above the project): readable.
+    /// The repository's git folders (they may lie above the project): readable
+    /// — for an agent, writable but for their hooks and config.
     pub git: &'a [PathBuf],
+    /// A command Claude runs (the shell sandbox on native Windows), not the
+    /// check or the formatter a hook runs: it runs only in the project, may
+    /// commit, and reaches the network by its own switch ([`AGENT_NETWORK`]).
+    pub agent: bool,
 }
 
 impl Policy {
@@ -213,10 +220,17 @@ pub fn compile(req: &Request) -> Result<Policy, String> {
     let home = home(req.env);
     let project = real_path(req.project);
     let dir = real_path(req.dir);
+    if req.agent && !is_within(&dir, &project) {
+        return Err(format!(
+            "{} lies outside the project ({}), and the sandbox runs commands only in the project",
+            dir.display(),
+            project.display()
+        ));
+    }
     let mut p = Policy {
         project: project.clone(),
         dir: dir.clone(),
-        network: get(NETWORK) == "1",
+        network: get(if req.agent { AGENT_NETWORK } else { NETWORK }) == "1",
         ..Policy::default()
     };
 
@@ -252,7 +266,12 @@ pub fn compile(req: &Request) -> Result<Policy, String> {
     }
     for g in req.git {
         if g.exists() && !p.write.iter().any(|w| is_within(g, w)) {
-            push_new(&mut p.read, real_path(g));
+            if req.agent {
+                p.read.retain(|r| !is_within(r, g));
+                push_new(&mut p.write, real_path(g));
+            } else {
+                push_new(&mut p.read, real_path(g));
+            }
         }
     }
 
@@ -262,7 +281,16 @@ pub fn compile(req: &Request) -> Result<Policy, String> {
     } else {
         vec![&project, &dir]
     };
-    for t in entries(get(DENY_WRITE), home.as_deref(), &bases) {
+    let mut deny_write = entries(get(DENY_WRITE), home.as_deref(), &bases);
+    if req.agent {
+        // What git runs or reads its settings from, in each of its folders.
+        for g in req.git {
+            for x in ["hooks", "config"] {
+                push_new(&mut deny_write, real_path(&g.join(x)));
+            }
+        }
+    }
+    for t in deny_write {
         if p.write.iter().any(|w| is_within(&t, w)) {
             push_new(&mut p.protect, t);
         }
@@ -664,6 +692,7 @@ mod tests {
             project: &p,
             dir: &p,
             git: &[],
+            agent: false,
         })
         .unwrap();
         assert_eq!(pol.project, p);
@@ -716,6 +745,7 @@ mod tests {
             project: &p,
             dir: &d,
             git: &[root.join("p/.git"), root.join("elsewhere")],
+            agent: false,
         })
         .unwrap();
         assert_eq!(pol.write[..2], [p.clone(), d.clone()]);
@@ -730,6 +760,52 @@ mod tests {
         assert!(pol.network);
     }
 
+    /// The policy for a command Claude runs (native Windows): it commits, so
+    /// the repository's git folders are writable — even a shared one outside
+    /// the project, for a worktree — but not their hooks or config; it reaches
+    /// the network by its own switch; and it runs only in the project.
+    #[cfg(unix)]
+    #[test]
+    fn an_agent_policy_writes_git_but_not_its_hooks_and_has_its_own_network() {
+        let (_t, root, home, p) = fixture();
+        let common = root.join("main/.git");
+        let own = common.join("worktrees/w1");
+        fs::create_dir_all(common.join("hooks")).unwrap();
+        fs::create_dir_all(&own).unwrap();
+        fs::write(common.join("config"), "").unwrap();
+        let git = [own.clone(), common.clone()];
+        let compile_with = |extra: &[(&str, &str)], dir: &Path, agent: bool| {
+            compile(&Request {
+                env: &hook_env(&home, extra),
+                project: &p,
+                dir,
+                git: &git,
+                agent,
+            })
+        };
+        let pol = compile_with(&[(NETWORK, "1")], &p.join("src"), true).unwrap();
+        assert!(pol.write.contains(&common), "{:?}", pol.write);
+        assert!(!pol.read.contains(&common));
+        for x in ["hooks", "config"] {
+            assert!(
+                pol.protect.contains(&common.join(x)),
+                "{x}: {:?}",
+                pol.protect
+            );
+        }
+        assert!(!pol.network, "the hooks' switch isn't the agent's");
+        let pol = compile_with(&[(AGENT_NETWORK, "1")], &p, true).unwrap();
+        assert!(pol.network);
+        // Outside the project: refused.
+        let err = compile_with(&[], &root, true).unwrap_err();
+        assert!(err.contains("outside the project"), "{err}");
+        // The hooks' own policy reads git and keeps its switch.
+        let pol = compile_with(&[(NETWORK, "1"), (AGENT_NETWORK, "0")], &p, false).unwrap();
+        assert!(pol.read.contains(&common) && !pol.write.contains(&common));
+        assert!(!pol.protect.contains(&common.join("hooks")));
+        assert!(pol.network);
+    }
+
     #[cfg(unix)]
     #[test]
     fn compile_refuses_a_writable_root_inside_a_protected_path() {
@@ -741,6 +817,7 @@ mod tests {
             project: &inside,
             dir: &inside,
             git: &[],
+            agent: false,
         })
         .unwrap_err();
         assert!(err.contains("write-protects"), "{err}");

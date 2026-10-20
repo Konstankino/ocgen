@@ -358,8 +358,121 @@ fn a_user_allow_of_a_gate_ask_rule_has_no_effect() {
 
 #[test]
 fn sandbox_support_follows_the_platform() {
-    let expected = cfg!(any(target_os = "macos", target_os = "linux"));
+    // Claude Code's sandbox on macOS and Linux (WSL2 included), ocgen's own
+    // for the commands Claude runs on native Windows.
+    let expected = cfg!(any(target_os = "macos", target_os = "linux", windows));
     assert_eq!(ocgen::claude::sandbox_supported(), expected);
+}
+
+#[test]
+fn the_agents_network_is_on_unless_turned_off_and_old_states_load_it_on() {
+    assert!(SandboxProfile::default().agent_network);
+    let old: SandboxProfile = serde_json::from_str(r#"{"enabled": true}"#).unwrap();
+    assert!(old.agent_network, "a state written before the switch");
+    let off: SandboxProfile =
+        serde_json::from_str(r#"{"enabled": true, "agent_network": false}"#).unwrap();
+    assert!(!off.agent_network);
+}
+
+/// Native Windows has no Claude Code sandbox: with the project's on, a hook
+/// runs every Bash and PowerShell command Claude runs in ocgen's. The
+/// settings run on every OS, so the hook comes with the sandbox, and does
+/// nothing at all where Claude Code's own sandbox works.
+#[test]
+fn the_shell_sandbox_hook_comes_with_the_sandbox() {
+    let dir = tempdir().unwrap();
+    let mut p = sandboxed("sb-shell");
+    p.claude.workflow.check_cmd.clear();
+    p.claude.hooks_extra.format_cmd.clear();
+    p.scaffold(dir.path(), false).unwrap();
+    let s = settings_of(dir.path());
+    let g = s["hooks"]["PreToolUse"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|g| g.to_string().contains("shell-sandbox.sh"))
+        .expect("a shell-sandbox group")
+        .clone();
+    assert_eq!(g["matcher"], "Bash|PowerShell");
+    let h = &g["hooks"][0];
+    assert!(h.get("if").is_none(), "a safety hook is never filtered");
+    let cmd = h["command"].as_str().unwrap();
+    assert!(
+        cmd.starts_with("[ \"${OS:-}\" != Windows_NT ] || {"),
+        "{cmd}"
+    );
+    assert!(
+        cmd.contains("ocgen hook shell-sandbox") && cmd.contains(ocgen::hooks::PROTOCOL),
+        "{cmd}"
+    );
+    let script = dir.path().join(".claude/hooks/shell-sandbox.sh");
+    assert!(std::process::Command::new("sh")
+        .arg("-n")
+        .arg(&script)
+        .status()
+        .unwrap()
+        .success());
+    // The settings env carries the sandbox, even with nothing for a hook to
+    // run; the commands Claude runs reach the network unless turned off.
+    let env = hook_env(dir.path());
+    assert_eq!(env["OCGEN_SANDBOX"], "1");
+    assert!(env.contains_key("OCGEN_SANDBOX_DENY_WRITE"));
+    assert_eq!(env["OCGEN_SANDBOX_AGENT_NETWORK"], "1");
+    assert!(!env.contains_key("OCGEN_SANDBOX_NETWORK"), "the hooks' own");
+
+    // Outside native Windows the command runs nothing — not even ocgen.
+    #[cfg(unix)]
+    {
+        let run = |os: Option<&str>| {
+            let mut c = std::process::Command::new("bash");
+            c.arg("-c")
+                .arg(cmd)
+                .env("PATH", "/usr/bin:/bin")
+                .env("CLAUDE_PROJECT_DIR", dir.path())
+                .env("OCGEN_SANDBOX", "1")
+                .env_remove("OS")
+                .env_remove("MSYSTEM")
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped());
+            if let Some(os) = os {
+                c.env("OS", os);
+            }
+            let mut child = c.spawn().unwrap();
+            use std::io::Write as _;
+            let _ = child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(br#"{"tool_name":"Bash","tool_input":{"command":"ls"}}"#);
+            child.wait_with_output().unwrap()
+        };
+        let o = run(None);
+        assert_eq!(o.status.code(), Some(0), "{o:?}");
+        assert!(o.stdout.is_empty() && o.stderr.is_empty(), "{o:?}");
+        // Where it would run (Windows) without the binary: refused, never run as is.
+        let o = run(Some("Windows_NT"));
+        assert_eq!(o.status.code(), Some(2), "{o:?}");
+        assert!(
+            String::from_utf8_lossy(&o.stderr).contains("never runs the command unsandboxed"),
+            "{o:?}"
+        );
+    }
+
+    // The agents' network off.
+    let dir = tempdir().unwrap();
+    let mut p = sandboxed("sb-shell-offline");
+    p.claude.sandbox.agent_network = false;
+    p.scaffold(dir.path(), false).unwrap();
+    assert!(!hook_env(dir.path()).contains_key("OCGEN_SANDBOX_AGENT_NETWORK"));
+
+    // No sandbox: no hook, no script.
+    let dir = tempdir().unwrap();
+    gated("sb-shell-off").scaffold(dir.path(), false).unwrap();
+    assert!(!settings_of(dir.path())
+        .to_string()
+        .contains("shell-sandbox"));
+    assert!(!dir.path().join(".claude/hooks/shell-sandbox.sh").exists());
 }
 
 #[test]
@@ -822,16 +935,11 @@ fn hooks_learn_the_sandbox_from_the_settings_env() {
     assert!(!env.contains_key("OCGEN_SANDBOX_DENY_READ"));
     assert!(!env.contains_key("OCGEN_SANDBOX_DENY_ENV"));
 
-    // No sandbox, or nothing for a hook to run: no sandbox env.
+    // No sandbox: no sandbox env. (With nothing for a hook to run it is
+    // there all the same: the commands Claude runs on Windows need it.)
     let dir = tempdir().unwrap();
     let mut p = gated("sb-env-off");
     p.claude.workflow.check_cmd = "cargo test".into();
-    p.scaffold(dir.path(), false).unwrap();
-    assert!(!hook_env(dir.path()).contains_key("OCGEN_SANDBOX"));
-    let dir = tempdir().unwrap();
-    let mut p = sandboxed("sb-env-idle");
-    p.claude.workflow.check_cmd.clear();
-    p.claude.hooks_extra.format_cmd.clear();
     p.scaffold(dir.path(), false).unwrap();
     assert!(!hook_env(dir.path()).contains_key("OCGEN_SANDBOX"));
 }
