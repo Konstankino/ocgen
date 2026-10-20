@@ -508,28 +508,6 @@ pub fn remember(root: &Path, session: &str, stem: &str) -> bool {
     session::remember(&root.join(VIEWER_DIR), session, stem, is_name)
 }
 
-/// Before Bash call `call`: keep the intent files' state (see
-/// [`session::before_bash`]). Nothing when there is no intent directory.
-pub fn before_bash(root: &Path, call: &str) -> bool {
-    let s = settings(root);
-    let dir = dir(root, &s);
-    dir.is_dir() && session::before_bash(&root.join(VIEWER_DIR), call, &files(&dir, &s))
-}
-
-/// After Bash call `call`: the intent file it added or changed becomes
-/// `session`'s (see [`session::after_bash`]).
-pub fn after_bash(root: &Path, call: &str, session_id: &str) -> Option<String> {
-    let s = settings(root);
-    let dir = dir(root, &s);
-    session::after_bash(
-        &root.join(VIEWER_DIR),
-        call,
-        session_id,
-        &files(&dir, &s),
-        is_name,
-    )
-}
-
 /// The intent file `session` wrote last, while it still exists.
 pub fn session_file(root: &Path, s: &IntentSettings, session_id: &str) -> Option<String> {
     session::recall(&root.join(VIEWER_DIR), &dir(root, s), session_id, is_name)

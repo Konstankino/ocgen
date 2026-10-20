@@ -1457,6 +1457,11 @@ fn hook_commands(p: &Probe) -> Check {
         // Notification/format/audit hooks have real side effects; skip them here.
         let (payload, expect) = match event.as_str() {
             "SessionStart" => ("{}".to_string(), 0),
+            // A probe: the session's loop guard state stays.
+            "SessionEnd" => (
+                r#"{"session_id":"ocgen-verify","reason":"other"}"#.to_string(),
+                0,
+            ),
             "SubagentStop" => (
                 serde_json::json!({ "session_id": "ocgen-verify", "cwd": crate::paths::for_shell(&not_git) }).to_string(),
                 0,
@@ -1890,8 +1895,8 @@ fn doc_versions(p: &Probe, project: &crate::render::Project) -> Check {
     }
 }
 
-/// The /inquire notes word: `note` gets a note for Claude about opening the
-/// ledgers, and any other prompt passes untouched. Probed with the browser
+/// The /inquire notes word: `note` gets an answer for the user about opening
+/// the ledgers, and any other prompt passes untouched. Probed with the browser
 /// switched off, in the project itself (it writes nothing then).
 fn notes_word(p: &Probe) -> Check {
     let name = "/inquire notes word";
@@ -1938,7 +1943,7 @@ fn notes_word(p: &Probe) -> Check {
             "the hook answered a prompt other than `note` — run `ocgen doctor`",
         );
     }
-    if word.1.contains("additionalContext") {
+    if answers_prompt(&word.1) {
         check(
             name,
             Status::Pass,
@@ -1994,10 +1999,12 @@ fn intent_approvers(project: &Project, root: &Path) -> Check {
     check(name, Status::Warn, format!("{}{more}", list.join("; ")))
 }
 
-/// The /intent draft review: the word `draft` gets a note for Claude about
+/// The /intent draft review: the word `draft` gets an answer for the user about
 /// opening the issue draft, and any other prompt passes untouched; a write to a
-/// draft passes silently (the hook remembers it as the session's). Probed with
-/// the browser switched off, in the project itself (it writes nothing then).
+/// draft, or a change the file watcher sees, passes silently (the hook remembers
+/// it as the session's), and the session's start names the folders to watch.
+/// Probed with the browser switched off, in the project itself (it writes
+/// nothing then).
 fn draft_review(p: &Probe) -> Check {
     let name = "/intent draft review";
     let Some((event, group, cmd)) = p.find("UserPromptSubmit", "intent-draft") else {
@@ -2006,10 +2013,11 @@ fn draft_review(p: &Probe) -> Check {
     if let Some(what) = p.hand_edited(&event, &group, &cmd) {
         return check(name, Status::Warn, not_run(&what));
     }
-    // Without the write hooks (after a write, around a Bash call), `draft`
-    // can't select the session's draft.
+    // Without the hooks that remember the session's draft — after a write, and
+    // on each change the file watcher sees in the folders the hook names —
+    // `draft` can't select it.
     let mut hooks = Vec::new();
-    for event in ["PreToolUse", "PostToolUse"] {
+    for event in ["PostToolUse", "SessionStart", "CwdChanged", "FileChanged"] {
         let Some((event, group, cmd)) = p.find(event, "intent-draft") else {
             return check(
                 name,
@@ -2022,7 +2030,7 @@ fn draft_review(p: &Probe) -> Check {
         }
         hooks.push(cmd);
     }
-    let (before_cmd, w_cmd) = (hooks.remove(0), hooks.remove(0));
+    let (w_cmd, start_cmd, changed_cmd) = (hooks[0].clone(), hooks[1].clone(), hooks[3].clone());
     let mut env = p.env.clone();
     env.insert("OCGEN_NOTES_OPEN".into(), "0".into());
     let run = |cmd: &str, ev: serde_json::Value| {
@@ -2043,35 +2051,40 @@ fn draft_review(p: &Probe) -> Check {
             }),
         )
     };
+    let draft = format!("{}/ocgen-verify.md", crate::notes::draft::DIR);
     let wrote = run(
         &w_cmd,
         serde_json::json!({
             "session_id": "ocgen-verify", "hook_event_name": "PostToolUse", "tool_name": "Write",
-            "tool_input": { "file_path": format!("{}/ocgen-verify.md", crate::notes::draft::DIR) }
+            "tool_input": { "file_path": draft }
         }),
     );
-    let bash = |cmd: &str, event: &str| {
-        run(
-            cmd,
-            serde_json::json!({
-                "session_id": "ocgen-verify", "hook_event_name": event, "tool_name": "Bash",
-                "tool_use_id": "ocgen-verify", "tool_input": { "command": "true" }
-            }),
-        )
-    };
+    let changed = run(
+        &changed_cmd,
+        serde_json::json!({
+            "session_id": "ocgen-verify", "hook_event_name": "FileChanged",
+            "file_path": crate::paths::for_shell(&p.root.join(&draft)), "event": "change"
+        }),
+    );
+    let start = run(
+        &start_cmd,
+        serde_json::json!({
+            "session_id": "ocgen-verify", "hook_event_name": "SessionStart", "source": "startup"
+        }),
+    );
     // The intent files' word: the project's prefix in lowercase, unless taken.
     let intent_word = crate::notes::intents::word(&crate::notes::intents::settings(p.root).prefix);
     let intents = match &intent_word {
         Some(w) => prompt(w).map(Some),
         None => Some(None),
     };
-    let (Some(other), Some(word), Some(intents), Some(wrote), Some(before), Some(after)) = (
+    let (Some(other), Some(word), Some(intents), Some(wrote), Some(changed), Some(start)) = (
         prompt("ocgen verify"),
         prompt(crate::notes::draft::WORD),
         intents,
         wrote,
-        bash(&before_cmd, "PreToolUse"),
-        bash(&w_cmd, "PostToolUse"),
+        changed,
+        start,
     ) else {
         return check(name, Status::Fail, "the hook did not finish");
     };
@@ -2080,8 +2093,8 @@ fn draft_review(p: &Probe) -> Check {
         Some(&word),
         intents.as_ref(),
         Some(&wrote),
-        Some(&before),
-        Some(&after),
+        Some(&changed),
+        Some(&start),
     ]
     .into_iter()
     .flatten()
@@ -2103,20 +2116,23 @@ fn draft_review(p: &Probe) -> Check {
             "the hook answered a prompt other than `draft` — run `ocgen doctor`",
         );
     }
-    if [&wrote, &before, &after]
-        .iter()
-        .any(|o| !o.1.trim().is_empty())
-    {
+    if [&wrote, &changed].iter().any(|o| !o.1.trim().is_empty()) {
         return check(
             name,
             Status::Fail,
-            "the hook answered a write or a Bash call — run `ocgen doctor`",
+            "the hook answered a write or a file change — run `ocgen doctor`",
         );
     }
-    let silent = intents
-        .as_ref()
-        .is_some_and(|o| !o.1.contains("additionalContext"));
-    if word.1.contains("additionalContext") && silent {
+    let answered = answers_prompt(&word.1);
+    let silent = intents.as_ref().is_some_and(|o| !answers_prompt(&o.1));
+    if answered && !names_watch_paths(&start.1) {
+        check(
+            name,
+            Status::Fail,
+            "the hook names no folders to watch when a session starts, so a draft a Bash command \
+             writes isn't the session's — run `ocgen doctor`",
+        )
+    } else if answered && silent {
         check(
             name,
             Status::Warn,
@@ -2125,7 +2141,7 @@ fn draft_review(p: &Probe) -> Check {
                 intent_word.unwrap_or_default()
             ),
         )
-    } else if word.1.contains("additionalContext") {
+    } else if answered {
         check(
             name,
             Status::Pass,
@@ -2156,6 +2172,23 @@ fn draft_review(p: &Probe) -> Check {
             "the hook ran but said nothing about the draft — run `ocgen doctor`",
         )
     }
+}
+
+/// Whether a UserPromptSubmit hook's output answers the prompt for the user,
+/// which stops it there.
+fn answers_prompt(out: &str) -> bool {
+    serde_json::from_str::<Value>(out.trim()).is_ok_and(|v| {
+        v["decision"] == "block" && v["reason"].as_str().is_some_and(|r| !r.is_empty())
+    })
+}
+
+/// Whether a hook's output names folders for Claude Code's file watcher.
+fn names_watch_paths(out: &str) -> bool {
+    serde_json::from_str::<Value>(out.trim()).is_ok_and(|v| {
+        v.pointer("/hookSpecificOutput/watchPaths")
+            .and_then(Value::as_array)
+            .is_some_and(|w| !w.is_empty())
+    })
 }
 
 /// /recap's GitHub fetch: a write of its request gets a note for Claude, and any
