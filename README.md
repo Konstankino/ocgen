@@ -1731,7 +1731,11 @@ the gates stop taking the agent's word alone:
     doesn't hold an AppContainer to a deny entry or a higher integrity label inside a folder that
     grants it, so a protected path, and each folder on the way to it, stops inheriting the
     project's grant: the path gets only reading, and the folders can't be removed or renamed.
-    `ocgen sandbox reset` gives them their inheritance back. ocgen checks that
+    `ocgen sandbox reset` gives them their inheritance back. The writable folders are labelled Low
+    integrity, without which the container can't create or delete anything there; in a folder your
+    account can't relabel (one made right on `C:\`, such as `C:\dev\…`), ocgen gives your account
+    that right for as long as it labels, as the folder's owner. A batch file (`.cmd`, `.bat`,
+    `npm.cmd`) runs through `cmd /c call`. ocgen checks that
     each command starts in the project's container at Low integrity before it runs (and ends it if
     not), and runs the check as one program without a shell (`cargo test --locked`; a pipe or `&&` is refused,
     and a backslash is part of a path, as in `.\scripts\check.cmd`):

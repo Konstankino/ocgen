@@ -66,14 +66,14 @@ pub struct Ace {
     pub reach: Reach,
 }
 
-/// The mandatory label a path gets: an AppContainer runs at Low integrity,
-/// so its writable roots are labelled Low, and protected paths inside them
-/// Medium again (not relied on: see the module's note).
+/// The mandatory label a writable root gets. An AppContainer runs at Low
+/// integrity, and where a folder isn't labelled Low it can't create or
+/// delete anything (it can still write a file it is granted: the label is no
+/// protection, only a way in).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Level {
     Low,
-    Medium,
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -187,9 +187,6 @@ pub fn plan(p: &Policy) -> Plan {
         add(&mut out, d, *w, *mask, Reach::Itself);
         add(&mut out, d, *w, MODIFY, Reach::Below);
     }
-    for t in &protect {
-        push_new(&mut labels, (t.to_path_buf(), Level::Medium));
-    }
     // A hidden path: cut off, with nothing for the container.
     for h in p.hide.iter().filter(|h| h.exists()) {
         push_new(&mut out.cuts, h.clone());
@@ -302,8 +299,6 @@ mod tests {
             [
                 (p.clone(), Level::Low),
                 (root.join("h/.cargo/registry"), Level::Low),
-                (p.join(".claude/hooks"), Level::Medium),
-                (p.join(".claude/settings.json"), Level::Medium),
             ]
         );
     }

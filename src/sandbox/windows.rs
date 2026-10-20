@@ -19,8 +19,8 @@ use std::ptr::{null, null_mut};
 
 use serde::{Deserialize, Serialize};
 use windows_sys::Win32::Foundation::{
-    CloseHandle, LocalFree, SetHandleInformation, HANDLE, HANDLE_FLAG_INHERIT,
-    INVALID_HANDLE_VALUE, WAIT_OBJECT_0,
+    CloseHandle, GetLastError, LocalFree, SetHandleInformation, ERROR_ACCESS_DENIED, HANDLE,
+    HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE, WAIT_OBJECT_0,
 };
 use windows_sys::Win32::Security::Authorization::{
     ConvertSecurityDescriptorToStringSecurityDescriptorW, ConvertSidToStringSidW,
@@ -36,15 +36,17 @@ use windows_sys::Win32::Security::{
     DeriveCapabilitySidsFromName, EqualSid, FreeSid, GetAce, GetAclInformation, GetLengthSid,
     GetSecurityDescriptorControl, GetSecurityDescriptorDacl, GetSecurityDescriptorSacl,
     GetSidSubAuthority, GetSidSubAuthorityCount, GetTokenInformation, InitializeAcl,
-    TokenAppContainerSid, TokenIntegrityLevel, TokenIsAppContainer, WinBuiltinAnyPackageSid,
-    WinCapabilityInternetClientServerSid, WinCapabilityInternetClientSid,
+    TokenAppContainerSid, TokenIntegrityLevel, TokenIsAppContainer, TokenUser,
+    WinBuiltinAnyPackageSid, WinCapabilityInternetClientServerSid, WinCapabilityInternetClientSid,
     WinCapabilityPrivateNetworkClientServerSid, ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, ACL_REVISION,
     ACL_SIZE_INFORMATION, CONTAINER_INHERIT_ACE, DACL_SECURITY_INFORMATION, INHERITED_ACE,
     INHERIT_ONLY_ACE, LABEL_SECURITY_INFORMATION, OBJECT_INHERIT_ACE,
     PROTECTED_DACL_SECURITY_INFORMATION, PSID, SECURITY_CAPABILITIES, SE_DACL_PROTECTED,
     SID_AND_ATTRIBUTES, TOKEN_APPCONTAINER_INFORMATION, TOKEN_INFORMATION_CLASS,
-    TOKEN_MANDATORY_LABEL, TOKEN_QUERY, UNPROTECTED_DACL_SECURITY_INFORMATION, WELL_KNOWN_SID_TYPE,
+    TOKEN_MANDATORY_LABEL, TOKEN_QUERY, TOKEN_USER, UNPROTECTED_DACL_SECURITY_INFORMATION,
+    WELL_KNOWN_SID_TYPE,
 };
+use windows_sys::Win32::Storage::FileSystem::{READ_CONTROL, WRITE_OWNER};
 use windows_sys::Win32::System::Com::CoTaskMemFree;
 use windows_sys::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, IsProcessInJob, JobObjectBasicUIRestrictions,
@@ -364,25 +366,7 @@ fn sync(
             return Ok(None);
         }
         let before = if needs_cut {
-            let mut text: *mut u16 = null_mut();
-            if ConvertSecurityDescriptorToStringSecurityDescriptorW(
-                sd.0,
-                SDDL_REVISION_1,
-                DACL_SECURITY_INFORMATION,
-                &mut text,
-                null_mut(),
-            ) == 0
-            {
-                return Err(format!(
-                    "can't record the permissions of {}: {}",
-                    path.display(),
-                    last_error()
-                ));
-            }
-            let text = Local(text as *mut c_void);
-            let p = text.0 as *const u16;
-            let n = (0..).take_while(|&i| *p.add(i) != 0).count();
-            Some(String::from_utf16_lossy(std::slice::from_raw_parts(p, n)))
+            Some(sddl_of(sd.0, path)?)
         } else {
             None
         };
@@ -529,14 +513,10 @@ fn restore(path: &Path, sddl: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Make sure `path` carries `level` as its own mandatory label.
-fn ensure_label(path: &Path, level: Level) -> Result<bool, String> {
-    let rid: u32 = match level {
-        Level::Low => 0x1000,
-        Level::Medium => 0x2000,
-    };
+/// Whether `path` carries the label `rid` as its own.
+fn has_label(path: &Path, rid: u32) -> bool {
     let w = wide(path);
-    // SAFETY: plain Win32 security calls; everything they allocate is freed.
+    // SAFETY: plain Win32 security calls; the descriptor is freed by `Local`.
     unsafe {
         let (mut sacl, mut sd): (*mut ACL, *mut c_void) = (null_mut(), null_mut());
         if GetNamedSecurityInfoW(
@@ -548,34 +528,42 @@ fn ensure_label(path: &Path, level: Level) -> Result<bool, String> {
             null_mut(),
             &mut sacl,
             &mut sd,
-        ) == 0
+        ) != 0
         {
-            let has = explicit_aces(sacl).iter().any(|(t, _, _, s)| {
-                *t == MANDATORY_LABEL
-                    && s.len() >= 4
-                    && u32::from_le_bytes(s[s.len() - 4..].try_into().unwrap_or([0; 4])) == rid
-            });
-            LocalFree(sd);
-            if has {
-                return Ok(false);
-            }
+            return false;
         }
-        let flags = if path.is_dir() { "OICI" } else { "" };
-        let who = if level == Level::Low { "LW" } else { "ME" };
-        let sddl = wide(format!("S:(ML;{flags};NW;;;{who})"));
-        let mut label_sd: *mut c_void = null_mut();
+        let _sd = Local(sd);
+        explicit_aces(sacl).iter().any(|(t, _, _, s)| {
+            *t == MANDATORY_LABEL
+                && s.len() >= 4
+                && u32::from_le_bytes(s[s.len() - 4..].try_into().unwrap_or([0; 4])) == rid
+        })
+    }
+}
+
+/// Label `path` Low, passed down to what is below a folder: Windows' error
+/// code when it can't.
+fn set_label(path: &Path) -> u32 {
+    let w = wide(path);
+    let flags = if path.is_dir() { "OICI" } else { "" };
+    let sddl = wide(format!("S:(ML;{flags};NW;;;LW)"));
+    // SAFETY: a NUL-terminated SDDL string; the descriptor it makes is freed
+    // by `Local`, and the SACL read from it lives as long.
+    unsafe {
+        let mut sd: *mut c_void = null_mut();
         if ConvertStringSecurityDescriptorToSecurityDescriptorW(
             sddl.as_ptr(),
             SDDL_REVISION_1,
-            &mut label_sd,
+            &mut sd,
             null_mut(),
         ) == 0
         {
-            return Err(format!("can't make a label: {}", last_error()));
+            return GetLastError();
         }
+        let sd = Local(sd);
         let (mut present, mut defaulted, mut label): (i32, i32, *mut ACL) = (0, 0, null_mut());
-        GetSecurityDescriptorSacl(label_sd, &mut present, &mut label, &mut defaulted);
-        let rc = SetNamedSecurityInfoW(
+        GetSecurityDescriptorSacl(sd.0, &mut present, &mut label, &mut defaulted);
+        SetNamedSecurityInfoW(
             w.as_ptr(),
             SE_FILE_OBJECT,
             LABEL_SECURITY_INFORMATION,
@@ -583,13 +571,113 @@ fn ensure_label(path: &Path, level: Level) -> Result<bool, String> {
             null_mut(),
             null(),
             label,
-        );
-        LocalFree(label_sd);
-        if rc != 0 {
-            return Err(format!("can't label {}: error {rc}", path.display()));
-        }
+        )
     }
-    Ok(true)
+}
+
+/// Make sure `path` carries `level` as its own mandatory label. Labelling
+/// takes the right to change the owner, which Modify alone doesn't carry (a
+/// folder made right on a drive's root, `C:\dev\…`, gives no more): then
+/// ocgen, as the folder's owner, gives the account that right while it
+/// labels, and puts the permissions back.
+fn ensure_label(path: &Path, level: Level) -> Result<bool, String> {
+    let Level::Low = level;
+    if has_label(path, LOW_RID) {
+        return Ok(false);
+    }
+    let mut rc = set_label(path);
+    if rc == ERROR_ACCESS_DENIED {
+        let me = token_user()?;
+        let before = dacl_sddl(path)?;
+        let added = sync(
+            path,
+            &[(&me, WRITE_OWNER | READ_CONTROL, Reach::Both)],
+            false,
+            false,
+            &[&me],
+            &me,
+        );
+        if added.is_ok() {
+            rc = set_label(path);
+        }
+        restore(path, &before)?;
+    }
+    match rc {
+        0 => Ok(true),
+        ERROR_ACCESS_DENIED => Err(format!(
+            "can't label {p} Low (Windows: access denied), which the sandbox needs to create and delete files there, and your account can't change its owner. Once, in a terminal opened as administrator: icacls \"{p}\" /setintegritylevel (OI)(CI)L",
+            p = path.display()
+        )),
+        rc => Err(format!("can't label {}: error {rc}", path.display())),
+    }
+}
+
+/// The account this process runs as.
+fn token_user() -> Result<Sid, String> {
+    // SAFETY: this process's own token, queried into a buffer sized for it.
+    unsafe {
+        let mut token: HANDLE = null_mut();
+        if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) == 0 {
+            return Err(format!("can't read this process's token: {}", last_error()));
+        }
+        let token = Owned(token);
+        let buf = token_info(token.0, TokenUser)
+            .ok_or_else(|| format!("can't read this process's account: {}", last_error()))?;
+        Ok(Sid::copy((*(buf.as_ptr() as *const TOKEN_USER)).User.Sid))
+    }
+}
+
+/// `path`'s DACL as SDDL, for [`restore`].
+fn dacl_sddl(path: &Path) -> Result<String, String> {
+    let w = wide(path);
+    // SAFETY: plain Win32 security calls; what they allocate is freed by `Local`.
+    unsafe {
+        let (mut dacl, mut sd): (*mut ACL, *mut c_void) = (null_mut(), null_mut());
+        let rc = GetNamedSecurityInfoW(
+            w.as_ptr(),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION,
+            null_mut(),
+            null_mut(),
+            &mut dacl,
+            null_mut(),
+            &mut sd,
+        );
+        if rc != 0 {
+            return Err(format!(
+                "can't read the permissions of {}: error {rc}",
+                path.display()
+            ));
+        }
+        let sd = Local(sd);
+        sddl_of(sd.0, path)
+    }
+}
+
+/// The DACL in the security descriptor `sd` (of `path`) as SDDL.
+///
+/// # Safety
+/// `sd` is a valid security descriptor.
+unsafe fn sddl_of(sd: *mut c_void, path: &Path) -> Result<String, String> {
+    let mut text: *mut u16 = null_mut();
+    if ConvertSecurityDescriptorToStringSecurityDescriptorW(
+        sd,
+        SDDL_REVISION_1,
+        DACL_SECURITY_INFORMATION,
+        &mut text,
+        null_mut(),
+    ) == 0
+    {
+        return Err(format!(
+            "can't record the permissions of {}: {}",
+            path.display(),
+            last_error()
+        ));
+    }
+    let text = Local(text as *mut c_void);
+    let p = text.0 as *const u16;
+    let n = (0..).take_while(|&i| *p.add(i) != 0).count();
+    Ok(String::from_utf16_lossy(std::slice::from_raw_parts(p, n)))
 }
 
 /// Take every explicit entry for `sids` off `path`.
@@ -789,6 +877,13 @@ pub fn grant(p: &Policy) -> Result<(Sid, Sid, Manifest), String> {
     m.project = p.project.clone();
     m.profile = profile;
     let plan = acl::plan(p);
+    // Labels first, while what a folder passes down still reaches everything
+    // in it.
+    for (path, level) in &plan.labels {
+        ensure_label(path, *level)?;
+        super::policy::push_new(&mut m.labels, path.clone());
+    }
+    save(&m);
     // Each path once, folders before what is in them.
     let mut paths: Vec<&PathBuf> = Vec::new();
     for path in plan.aces.iter().map(|a| &a.path).chain(&plan.cuts) {
@@ -840,11 +935,6 @@ pub fn grant(p: &Policy) -> Result<(Sid, Sid, Manifest), String> {
         }
         save(&m);
     }
-    for (path, level) in &plan.labels {
-        ensure_label(path, *level)?;
-        super::policy::push_new(&mut m.labels, path.clone());
-    }
-    save(&m);
     Ok((package, toolchain, m))
 }
 
@@ -1322,9 +1412,11 @@ fn native(cmd: &str, dir: &Path) -> Result<Launch, String> {
             let mut inner = vec![batch_path(&program, dir)];
             inner.extend(a.args[1..].iter().cloned());
             // Extensions on, as batch files expect (`%~dp0`); delayed
-            // expansion off, so a `!` stays as written.
+            // expansion off, so a `!` stays as written. Through `call`: given
+            // a batch file's full path itself, cmd looks into every folder
+            // above it, which the container can't, and refuses to run it.
             let line = format!(
-                "{} /d /e:on /v:off /s /c \"{}\"",
+                "{} /d /e:on /v:off /s /c \"call {}\"",
                 cmdline::quote(&comspec),
                 cmdline::command_line(&inner)
             );
@@ -1342,10 +1434,8 @@ fn native(cmd: &str, dir: &Path) -> Result<Launch, String> {
 }
 
 /// How `cmd` is to name the batch file `program`: by its path from `dir`,
-/// the command's folder, when it is in there. Given a full path, `cmd` looks
-/// into every folder above the file, which the container may not read
-/// ("Access is denied"), and the batch file never runs. Backslashes only:
-/// `cmd` ends a command's name at a `/`.
+/// the command's folder, when it is in there, else by its full path.
+/// Backslashes only: `cmd` ends a command's name at a `/`.
 fn batch_path(program: &Path, dir: &Path) -> String {
     let named = if is_within(program, dir) {
         let below: PathBuf = program
@@ -1723,6 +1813,80 @@ mod tests {
                 path.display()
             );
         }
+    }
+
+    /// A batch file in a granted tools folder outside the project runs, as
+    /// one in the project does (by its path from there).
+    #[test]
+    fn batch_files_in_and_outside_the_project_run() {
+        if probe().is_err() {
+            eprintln!("skipped: {UAC_OFF}");
+            return;
+        }
+        let t = tempfile::tempdir().unwrap();
+        let root = crate::paths::plain(&t.path().canonicalize().unwrap());
+        let (dir, tools) = (root.join("p"), root.join("tools"));
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::create_dir_all(&tools).unwrap();
+        std::fs::write(tools.join("b.cmd"), "@echo tool> src\\tool.txt\r\n").unwrap();
+        std::fs::write(dir.join("ok.cmd"), "@echo built> src\\out.txt\r\n").unwrap();
+        let p = Policy {
+            project: dir.clone(),
+            dir: dir.clone(),
+            exec: vec![tools.clone()],
+            write: vec![dir.clone()],
+            ..Policy::default()
+        };
+        let (package, toolchain, _) = grant(&p).unwrap();
+        let env: Vec<(OsString, OsString)> = std::env::vars_os().collect();
+        for (cmd, made) in [
+            (tools.join("b.cmd").display().to_string(), r"src\tool.txt"),
+            (r".\ok.cmd".to_string(), r"src\out.txt"),
+        ] {
+            let l = native(&cmd, &dir).unwrap();
+            let code = run_contained(
+                &package,
+                std::slice::from_ref(&toolchain),
+                &l.app,
+                &l.line,
+                &env,
+                &dir,
+                60_000,
+            );
+            assert_eq!(code, Ok(0), "{cmd}: {}", l.line);
+            assert!(dir.join(made).is_file(), "{cmd}: {}", l.line);
+        }
+        reset(Some(&dir)).unwrap();
+    }
+
+    /// A folder whose permissions don't let its account change its label
+    /// (Modify only, as in a folder made right on `C:\`) is labelled all the
+    /// same, through its owner's right to its permissions — which are back as
+    /// they were afterwards.
+    #[test]
+    fn a_folder_its_account_may_not_relabel_is_labelled_through_its_owner() {
+        let t = tempfile::tempdir().unwrap();
+        let d = crate::paths::plain(&t.path().canonicalize().unwrap()).join("d");
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("f.txt"), "x").unwrap();
+        // Authenticated Users: Modify, and nothing else.
+        let ok = std::process::Command::new("icacls")
+            .arg(&d)
+            .args(["/inheritance:r", "/grant:r", "*S-1-5-11:(OI)(CI)M"])
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok);
+        let before = dacl_sddl(&d).unwrap();
+        let direct = set_label(&d);
+        if direct == 0 {
+            eprintln!("skipped: this account may relabel the folder itself");
+            return;
+        }
+        assert_eq!(direct, ERROR_ACCESS_DENIED);
+        assert_eq!(ensure_label(&d, Level::Low), Ok(true));
+        assert!(has_label(&d, LOW_RID));
+        assert_eq!(dacl_sddl(&d).unwrap(), before);
     }
 
     #[test]
