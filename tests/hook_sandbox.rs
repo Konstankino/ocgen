@@ -114,9 +114,15 @@ impl Cmd {
     }
 }
 
+/// What `ocgen sandbox run` says when it finds the hooks' sandbox off for the
+/// project: it ran nothing.
+const OFF: &str = "the hooks' sandbox is off";
+
 /// On Windows, what a refused command that ended with 0 ran into: the
-/// permissions on the protected file and the folders above it, what the file
-/// holds, and whom the sandbox ran the command as. Nothing elsewhere.
+/// permissions on the protected file and the folders above it, whether UAC is
+/// on, and what PowerShell says when it writes the file (cmd's exit code
+/// doesn't tell a write that went through from one that was refused).
+/// Nothing elsewhere.
 fn windows_state(f: &Fixture) -> String {
     if !cfg!(windows) {
         return String::new();
@@ -127,20 +133,33 @@ fn windows_state(f: &Fixture) -> String {
         let o = Command::new("icacls").arg(&path).output().unwrap();
         s.push_str(&String::from_utf8_lossy(&o.stdout));
     }
-    s.push_str(&format!(
-        "{} holds: {:?}\n",
-        file.display(),
-        fs::read_to_string(&file).unwrap_or_default()
-    ));
-    let who = run(f, "whoami /groups /fo list");
-    s.push_str(&format!("whoami in the sandbox: {who:?}\n"));
-    // PowerShell says why a write fails, whatever cmd's exit code was.
+    s.push_str(&uac());
+    let was = fs::read_to_string(&file).unwrap();
     let ps = run(
         f,
         r#"powershell -NoProfile -NonInteractive -Command "Add-Content -LiteralPath .claude\settings.json -Value x -ErrorAction Stop""#,
     );
-    s.push_str(&format!("PowerShell's write in the sandbox: {ps:?}"));
+    let wrote = fs::read_to_string(&file).unwrap() != was;
+    fs::write(&file, was).unwrap();
+    s.push_str(&format!(
+        "PowerShell's write in the sandbox: {ps:?}, went through: {wrote}"
+    ));
     s
+}
+
+/// Whether UAC is on (`EnableLUA`), as the registry says: what Windows' own
+/// checks on an AppContainer may depend on.
+fn uac() -> String {
+    let o = Command::new("reg")
+        .args([
+            "query",
+            r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System",
+            "/v",
+            "EnableLUA",
+        ])
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&o.stdout).trim().to_string() + "\n"
 }
 
 /// The sandbox the machine must be using, when the environment says.
@@ -170,6 +189,8 @@ fn a_sandboxed_command_does_its_work_and_nothing_else() {
     assert_eq!(o.0, 0, "{o:?}");
     assert!(f.p.join("src/out.txt").exists());
 
+    let settings_path = f.p.join(".claude/settings.json");
+    let settings_was = fs::read_to_string(&settings_path).unwrap();
     let mut ran = Vec::new();
     for c in [
         // What Claude Code and git run unsandboxed: written, created, renamed.
@@ -214,8 +235,15 @@ fn a_sandboxed_command_does_its_work_and_nothing_else() {
     ] {
         let cmd = c.text(&f);
         let o = run(&f, &cmd);
+        assert!(!o.1.contains(OFF), "{cmd}: ocgen didn't run it: {o:?}");
         if o.0 == 0 {
             ran.push(format!("{cmd}: {o:?}"));
+        }
+        // A write that went through is put back, or ocgen would find the
+        // sandbox off and refuse every command after it.
+        if fs::read_to_string(&settings_path).unwrap() != settings_was {
+            ran.push(format!("{cmd}: changed settings.json"));
+            fs::write(&settings_path, &settings_was).unwrap();
         }
     }
     assert!(
@@ -236,6 +264,19 @@ fn a_sandboxed_command_does_its_work_and_nothing_else() {
     let old = f.home.join(".claude/ocgen/approvals/old");
     assert_eq!(fs::read_to_string(old).unwrap(), "1\n");
     assert!(!f.p.join(".mcp.json").exists());
+}
+
+/// The command runs at Low integrity in its AppContainer, which keeps it from
+/// writing what isn't labelled for it.
+#[cfg(windows)]
+#[test]
+fn the_container_runs_its_command_at_low_integrity() {
+    let f = fixture(false);
+    expect_backend(&f);
+    let o = run(&f, "whoami /groups /fo csv /nh");
+    assert_eq!(o.0, 0, "{o:?}");
+    // S-1-16-4096: Mandatory Label\Low Mandatory Level.
+    assert!(o.1.contains("S-1-16-4096"), "{o:?}\n{}", uac());
 }
 
 /// A worker's worktree inside the project's `.claude/` (as Claude Code makes
