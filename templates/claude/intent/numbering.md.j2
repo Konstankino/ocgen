@@ -13,15 +13,15 @@
    Context, Evidence, Decision, Options considered, Consequences, Risks, Sign-off) {% if review %}from the
    review: **Severity** — the highest finding's severity and likelihood; **Context** — what the change
    is for (its stated purpose) and what the review covered (the target and its commits); **Evidence** —
-   the findings R1, R2, … in full; **Decision** — the proposed call, and the decision requested from the
+   the findings in full, each under its slug; **Decision** — the proposed call, and the decision requested from the
    approvers; **Options considered** — the draft's options; **Consequences** — the blast radius, each
-   line citing its finding (R#) or labelled **Assumption**; **Risks** — every Not confirmed candidate,
+   line citing a finding's slug or labelled **Assumption**; **Risks** — every Not confirmed candidate,
    marked **NOT CONFIRMED**, with what would settle it; **Acceptance criteria** — one per finding: it is
    fixed, and the test that shows it. Set `Status: Proposed`, `Approvers: {% if approvers %}{{ approvers }}{% else %}No approvers configured{% endif %}`,
    and every approver pending in Sign-off.{% else %}from the analysis
    and the approved plan, with `Status: Proposed`, `Approvers: {% if approvers %}{{ approvers }}{% else %}No approvers configured{% endif %}`, and every
    approver pending in Sign-off.{% if adversary %} List every UNRESOLVED adversary finding
    under **Risks**, marked **UNRESOLVED**, with its evidence.{% endif %}{% if scope_guard %} Put the predicted blast radius under **Consequences**,
-   each line citing its F# or labelled **Assumption**.{% endif %}{% endif %}
+   each line citing a finding's slug or labelled **Assumption**.{% endif %}{% endif %}
 3. Right before writing, re-check the local directory for the number; if it is taken, take the next.
    Show me the path.

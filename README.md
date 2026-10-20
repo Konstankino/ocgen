@@ -572,6 +572,12 @@ repo used for a plugin's marketplace and release workflow; `--team` enables
 CLAUDE.md                      # project instructions + the roster; the coordinator lives here
 ```
 
+**Slugs, not codes.** The workflow rule has agents name what a plan, report, note or draft refers
+back to — findings, options, risks, success criteria, open questions — by a short kebab-case slug
+that says what it is about (`cache-cold-after-deploy`), never a code such as R1, A1 or "option B",
+and cite it by that slug in later documents and sessions: a reader knows what each one is without a
+lookup.
+
 The **coordinator** (an agent whose mode is `primary`) is not written as an agent file —
 it becomes `CLAUDE.md` plus the `/multi` command, because Claude Code's main session *is*
 the coordinator. Every other agent becomes a subagent file. The wizard opens `CLAUDE.md`
@@ -1043,15 +1049,16 @@ GitHub issue (wizard: "Include the /intent command…"; on by default). You star
 
    It shows an analysis report — current behaviour, root cause, impact, constraints, related work,
    risks, open questions, a coverage checklist (entry points to platforms, security and
-   performance) and what would make it wrong — with numbered findings (F1, F2…), each Verified
-   (`file:line`) or Inferred (`Confidence: NN%`).
+   performance) and what would make it wrong — with findings each named by a slug that says what
+   it is about (`cache-cold-after-deploy`), each Verified (`file:line`) or Inferred
+   (`Confidence: NN%`).
    The read-only git and `gh` commands it needs, and `WebFetch` for the project's **trusted
    documentation sites**, are pre-approved while `/intent` runs (the skill's `allowed-tools`);
    other tools still ask. If `gh` isn't installed (https://cli.github.com), isn't logged in or
    can't reach GitHub, the analysis says so and continues without it. Docs come only from those sites — see
    [Trusted documentation sites](#trusted-documentation-sites-ocgen-edit-docs).
 3. **Plan and approve** — options with a recommendation, scope, risks with mitigations, acceptance
-   criteria. Every statement cites its findings (F#) or is labelled an Assumption; it iterates on
+   criteria. Every statement cites its findings by slug or is labelled an Assumption; it iterates on
    your push-back until you approve. Your approval makes the plan **approved for drafting**, not
    accepted: the **approvers** decide (below).
 4. **Intent file** (optional: `/intent` asks once you approve the plan) — e.g.
@@ -1201,7 +1208,9 @@ opens its files.
 follow a writing standard: **soften the framing, never the facts**. The code, design or behaviour
 is the subject of every sentence, never a person; git history explains *why*, never *who*; context
 comes before the flaw; every flaw reads *when [trigger], [behavior], which means [impact]
-(evidence: F#, `file:line`)*, then the proposed fix; severity (Critical, High, Medium, Low, plus a
+(evidence: the finding's slug, `file:line`)*, then the proposed fix; findings, options and risks
+are named by a short slug that says what they are about, never a code such as F1 or "option B", so
+a reader and a later session know what each one is without looking it up; severity (Critical, High, Medium, Low, plus a
 likelihood) rests on the Verified findings, not on adjectives; what works is said too; and the
 drafts make the decision requested explicit. The **tone check** — a fresh `reviewer`
 subagent (or the research agent, if there's no reviewer) — reads both drafts against the findings
@@ -1328,15 +1337,15 @@ offers that you check it out (`gh pr checkout`), and you run that.
 | Find, in one wave | `scope-guard` | the purpose and the commits | what the purpose asks that the change lacks, what the change adds that it doesn't need, the blast radius |
 | | `reviewer` × 4 | the pack and one area: correctness, security, tests, cross-platform | candidates: severity, `file:line`, trigger → behavior → impact, evidence, fix |
 | | `explorer` | the changed symbols | every call site, test and doc that uses them |
-| Merge | the session | the reports | candidates C1, C2, … (duplicates merged, the scope gaps included) |
+| Merge | the session | the reports | candidates, each named by a slug it keeps as a finding (duplicates merged, the scope gaps included) |
 | Verify, in one wave (≤ 8 at a time) | the adversary, one run per candidate (the Low ones together) | one claim, its evidence and fix, the pack — **not** the reviewer's reasoning or confidence | Confirmed (reproduced), Confirmed (by reading), Rejected or Unsettled, plus a severity and a fix check |
 | Draft | the session, then a fresh `reviewer` for `/intent`'s tone check | the confirmed findings | the issue draft |
 
 **Trustworthy: nothing unchecked reaches the draft.** Only candidates the adversary confirms become
-findings, numbered **R1, R2, …** by severity, one line each:
+findings, ordered by severity, one line each, under the slug the candidate got:
 
 ```
-- **R3 · High · Possible · Verified** (cross-platform) — When `--target` is a Windows path with spaces, `resolve_target` (`src/review.rs:88`) splits it, so the review silently skips the change, which means the report is clean for code nobody checked. Evidence: test `target_with_spaces` fails. Fix: pass the path through `paths::for_shell`. red-team: confirmed (reproduced: `cargo test target_with_spaces`).
+- **`target-path-split-on-spaces` · High · Possible · Verified** (cross-platform) — When `--target` is a Windows path with spaces, `resolve_target` (`src/review.rs:88`) splits it, so the review silently skips the change, which means the report is clean for code nobody checked. Evidence: test `target_with_spaces` fails. Fix: pass the path through `paths::for_shell`. red-team: confirmed (reproduced: `cargo test target_with_spaces`).
 ```
 
 A reproduced finding is **Verified**. One confirmed by reading is **Inferred**, with a confidence;

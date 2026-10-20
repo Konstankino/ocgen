@@ -63,11 +63,11 @@ fn section<'a>(text: &'a str, from: &str, to: &str) -> &'a str {
 // ------------------------------------------------------------- /deliver --
 
 #[test]
-fn deliver_plans_a_scope_and_numbered_criteria() {
+fn deliver_plans_a_scope_and_named_criteria() {
     let f = files(&project(true, false));
     let plan = section(&f[DELIVER], "## 3. Plan", "## 4. Research");
     for must in [
-        "Number the success criteria too",
+        "Give each success criterion a slug too",
         "a **Scope** line",
         "what is out of scope",
         "`scope-guard` checks the change against",

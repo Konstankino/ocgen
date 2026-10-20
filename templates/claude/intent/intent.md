@@ -6,7 +6,9 @@ Intent file template for /intent (ADR style). Written by /intent as
 House style — /intent reads this block and follows it in every draft. Tune it for your team.
 
 Soften the framing, never the facts. Every flaw, in this order: when [trigger],
-[behavior], which means [impact] (evidence: F#, file:line); then the proposed fix.
+[behavior], which means [impact] (evidence: the finding's slug, file:line); then the
+proposed fix. Name each finding, option and risk by a short kebab-case slug that says what
+it is about (`cache-cold-after-deploy`), never a code such as a letter or a number.
 
 Severity — each label cites the Verified findings it rests on; an Inferred finding
 alone can't set one (say what evidence would confirm it):
@@ -41,20 +43,20 @@ The problem and the forces at play: what the design was meant to achieve, and th
 constraints and decisions at the time (cite the commits), with evidence from the investigation.
 
 ## Evidence
-Key findings from the analysis (F1, F2, …), each with `file:line` or a link.
+Key findings from the analysis, each under its slug, with `file:line` or a link.
 
 ## Decision
 What we will do, stated plainly, and the decision requested from the approvers.
 
 ## Options considered
-1. **Option A** (chosen) — why.
-2. **Option B** — why not.
+- **`<option-slug>`** (chosen) — why.
+- **`<option-slug>`** — why not.
 
 ## Consequences
 What becomes easier or harder; follow-up work.
 
 ## Risks
-- Risk — mitigation.
+- **`<risk-slug>`** — the risk, and its mitigation.
 
 ## Acceptance criteria
 - [ ] …
