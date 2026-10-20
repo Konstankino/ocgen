@@ -34,8 +34,9 @@ fn namespaces(network: bool) -> Vec<&'static str> {
 /// path bound onto itself (a mount point can't be renamed away), the protected
 /// paths read-only — a missing one through its nearest existing folder, unless
 /// that is a writable root (see [`Policy::tripwires`]) — and a writable root
-/// inside one (a worker's worktree in `.claude/`) writable again; last, an
-/// empty folder over each hidden folder and /dev/null over each hidden file.
+/// inside one (a worker's worktree in `.claude/`) writable again; then an
+/// empty folder over each hidden folder and /dev/null over each hidden file;
+/// last, the new root read-only.
 pub fn args(p: &Policy, cmd: &str) -> Vec<String> {
     let mut a: Vec<String> = namespaces(p.network)
         .into_iter()
@@ -118,6 +119,10 @@ pub fn args(p: &Policy, cmd: &str) -> Vec<String> {
             a.extend(["--ro-bind".into(), "/dev/null".into(), s(h)]);
         }
     }
+    // The new root itself (the folders bwrap made for the mounts) read-only:
+    // a write anywhere not granted fails, as it does under Seatbelt and
+    // Landlock, instead of landing in the root's memory and vanishing.
+    a.extend(["--remount-ro".into(), "/".into()]);
     a.extend(["--chdir".into(), s(&p.dir)]);
     for v in ["TMPDIR", "TMP", "TEMP"] {
         a.extend(["--setenv".into(), v.into(), "/tmp".into()]);
@@ -245,7 +250,16 @@ mod tests {
             .any(|w| w == ["--ro-bind", "/dev/null", &st(&root.join("h/.npmrc"))]));
         assert!(!a.iter().any(|x| x.ends_with(".aws")));
         assert_eq!(a[a.len() - 4..], ["--", "/bin/sh", "-c", "cargo test"]);
-        pos(&a, "--chdir", &st(&d));
+        // The new root is read-only once everything is mounted in it: a write
+        // anywhere not granted fails, as under Seatbelt and Landlock, instead of
+        // landing in the root's own memory (an approval store "written" there
+        // would let a check pass).
+        let ro = pos(&a, "--remount-ro", "/");
+        let last_mount = a
+            .iter()
+            .rposition(|x| matches!(x.as_str(), "--bind" | "--ro-bind" | "--tmpfs" | "--symlink"))
+            .unwrap();
+        assert!(last_mount < ro && ro < pos(&a, "--chdir", &st(&d)), "{a:?}");
     }
 
     #[cfg(unix)]
