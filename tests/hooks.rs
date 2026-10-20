@@ -36,6 +36,7 @@ fn project() -> TempDir {
     p.claude.hooks_extra.format_cmd = "true".into();
     p.claude.hooks_extra.config_audit = true;
     p.claude.hooks_extra.notify = true;
+    p.claude.sandbox.enabled = true;
     p.scaffold(dir.path(), false).unwrap();
     // A git repository, like a real project: the approval key then comes from git
     // in both implementations (a bare directory would depend on how each resolves
@@ -77,6 +78,7 @@ fn sh(
         "OCGEN_NOTES_BROWSER",
         "OCGEN_RECAP_GH",
         "OCGEN_RECAP_GH_TIMEOUT",
+        "OCGEN_SANDBOX",
     ] {
         cmd.env_remove(k);
     }
@@ -1082,7 +1084,7 @@ fn inquire_notes_renders_the_view_and_the_script_is_a_no_op() {
     assert_eq!(o.code, 0);
     assert!(o.stderr.starts_with("inquire-notes:"), "{o:?}");
     assert!(ocgen::hooks::NAMES.contains(&"inquire-notes"));
-    assert_eq!(ocgen::hooks::PROTOCOL, "ocgen-hooks 16");
+    assert_eq!(ocgen::hooks::PROTOCOL, "ocgen-hooks 18");
 }
 
 // ---------------------------------------------------------- intent-draft --
@@ -1589,6 +1591,39 @@ fn drop_noop_cd_script_uses_the_rust_regex() {
     );
 }
 
+/// On native Windows with the project's sandbox on, the shell-sandbox hook
+/// rewrites every Bash command, and of two hooks that rewrite one Claude Code
+/// keeps whichever ends last: the no-op `cd` stands down there.
+#[test]
+fn drop_noop_cd_stands_down_for_the_windows_shell_sandbox() {
+    let dir = project();
+    let d = ocgen::paths::for_shell(dir.path());
+    let payload = serde_json::json!({
+        "tool_name": "Bash", "tool_input": { "command": format!("cd {d} && ls") }, "cwd": d
+    })
+    .to_string();
+    for (sandbox, rewrites) in [("1", false), ("0", true)] {
+        let env: HashMap<String, String> = [("OS", "Windows_NT"), ("OCGEN_SANDBOX", sandbox)]
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        let o = ocgen::hooks::run("drop-noop-cd", &payload, &env);
+        assert_eq!(
+            (o.code, !o.stdout.is_empty()),
+            (0, rewrites),
+            "rust, {sandbox}"
+        );
+        if has_jq() {
+            let (code, out, _) = sh(dir.path(), "drop-noop-cd", &env, &payload);
+            assert_eq!(
+                (code, !out.is_empty()),
+                (0, rewrites),
+                "sh, {sandbox}: {out}"
+            );
+        }
+    }
+}
+
 // ---------------------------------------------------------------- notify --
 
 /// A folder of programs for `PATH`: the tools the scripts use, linked from the
@@ -1660,6 +1695,45 @@ fn notify_shows_a_notification_or_has_claude_code_ring_the_bell() {
             assert!(log.contains("Claude needs your permission"), "{who}: {log}");
         }
     }
+}
+
+/// The shell-sandbox hook acts on native Windows only: Claude Code's own
+/// sandbox covers macOS, Linux and WSL2. The script can't wrap a command, so
+/// where the hook would, it refuses it — never lets it run unsandboxed.
+#[cfg(unix)]
+#[test]
+fn shell_sandbox_acts_only_on_native_windows() {
+    let dir = project();
+    let payload = r#"{"tool_name":"Bash","tool_input":{"command":"ls"},"cwd":"."}"#;
+    let env = |pairs: &[(&str, &str)]| -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    };
+    let on = env(&[("OCGEN_SANDBOX", "1")]);
+    let o = ocgen::hooks::run("shell-sandbox", payload, &on);
+    assert_eq!(
+        (o.code, o.stdout.as_str(), o.stderr.as_str()),
+        (0, "", ""),
+        "{o:?}"
+    );
+    assert_eq!(
+        sh(dir.path(), "shell-sandbox", &on, payload),
+        (0, String::new(), String::new())
+    );
+    let (code, _, err) = sh(
+        dir.path(),
+        "shell-sandbox",
+        &env(&[("OCGEN_SANDBOX", "1"), ("OS", "Windows_NT")]),
+        payload,
+    );
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("never runs the command unsandboxed"), "{err}");
+    // The sandbox off: nothing to do, anywhere.
+    let off = env(&[("OS", "Windows_NT")]);
+    assert_eq!(sh(dir.path(), "shell-sandbox", &off, payload).0, 0);
+    assert!(ocgen::hooks::NAMES.contains(&"shell-sandbox"));
 }
 
 // ----------------------------------------------------------- session-end --

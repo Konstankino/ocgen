@@ -487,8 +487,10 @@ impl PermissionRules {
 /// without it. Secret read-denies need no repeat here — permission rules feed
 /// the sandbox. Claude Code runs hooks outside its sandbox, so the hooks run
 /// the project code they start themselves (the check, the formatter) in an OS
-/// sandbox of their own ([`HOOK_DENY_WRITE`]).
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// sandbox of their own ([`HOOK_DENY_WRITE`]). On native Windows, where Claude
+/// Code has no sandbox, a hook runs the Bash and PowerShell commands Claude
+/// runs in that same sandbox ([`crate::sandbox::shell`]).
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SandboxProfile {
     pub enabled: bool,
@@ -504,13 +506,52 @@ pub struct SandboxProfile {
     /// The user was asked and said no, so "chose off" reads apart from "never
     /// asked" (states written before ocgen asked load as `false`).
     pub declined: bool,
+    /// Let the check and the formatter the hooks run reach the network. Off by
+    /// default: the hooks' own sandbox denies it (all of it — it can't limit it
+    /// to some hosts the way Claude Code's can).
+    pub hook_network: bool,
+    /// More paths the hooks' sandbox lets the check and the formatter read,
+    /// on top of [`HOOK_ALLOW_READ`]: `~/…` or absolute. A credential inside
+    /// one stays hidden where the sandbox can hide it, else the command is
+    /// refused.
+    pub hook_read: Vec<String>,
+    /// More paths they may read and run programs from ([`HOOK_ALLOW_EXEC`]).
+    pub hook_exec: Vec<String>,
+    /// More paths they may write ([`HOOK_ALLOW_WRITE`]).
+    pub hook_write: Vec<String>,
+    /// Native Windows: let the commands Claude runs, which ocgen sandboxes
+    /// there, reach the network. On by default: that sandbox can only allow
+    /// all of it or none (Claude Code's limits it to the allowed domains).
+    pub agent_network: bool,
 }
 
-/// Whether Claude Code can sandbox shell commands here: macOS (Seatbelt) and
-/// Linux/WSL2 (bubblewrap). Native Windows has no sandbox, so there the approval
-/// gate is advisory.
+impl Default for SandboxProfile {
+    fn default() -> Self {
+        SandboxProfile {
+            enabled: false,
+            extra_domains: Vec::new(),
+            allow_credentials: false,
+            declined: false,
+            hook_network: false,
+            hook_read: Vec::new(),
+            hook_exec: Vec::new(),
+            hook_write: Vec::new(),
+            agent_network: true,
+        }
+    }
+}
+
+/// Whether the commands Claude runs can be sandboxed here: by Claude Code on
+/// macOS (Seatbelt) and Linux/WSL2 (bubblewrap), by ocgen on native Windows
+/// (an AppContainer, see [`crate::sandbox::shell`]).
 pub fn sandbox_supported() -> bool {
-    cfg!(any(target_os = "macos", target_os = "linux"))
+    cfg!(any(target_os = "macos", target_os = "linux", windows))
+}
+
+/// Whether the commands Claude runs here are sandboxed by ocgen (native
+/// Windows) rather than by Claude Code.
+pub fn ocgen_sandboxes_shell() -> bool {
+    cfg!(windows)
 }
 
 /// Credential files withheld from sandboxed commands: SSH keys, cloud and
@@ -612,6 +653,74 @@ pub const HOOK_DENY_WRITE: [&str; 24] = [
     "./.mcp.json",
     "./.git/hooks",
     "./.git/config",
+];
+
+/// What the hooks' sandbox lets the check and the formatter read and run, on
+/// top of the system's own folders (built into ocgen, per OS): the toolchains.
+/// Never writable. Only the ones that exist count; written like
+/// [`HOOK_DENY_WRITE`]. Everything not granted here, in [`HOOK_ALLOW_READ`] or
+/// [`HOOK_ALLOW_WRITE`] — or by the project's own folder — is denied.
+pub const HOOK_ALLOW_EXEC: [&str; 18] = [
+    "~/.cargo/bin",
+    "~/.rustup",
+    "~/.nvm",
+    "~/.volta",
+    "~/.bun/bin",
+    "~/.deno/bin",
+    "~/.pyenv",
+    "~/.local/bin",
+    "~/.local/share/uv",
+    "~/.local/share/fnm",
+    "~/.local/share/mise",
+    "~/go/bin",
+    "~/.sdkman",
+    "~/AppData/Roaming/npm",
+    "~/AppData/Local/Programs/Python",
+    "~/AppData/Local/Programs/Git",
+    "~/scoop/shims",
+    "~/scoop/apps",
+];
+
+/// What the hooks' sandbox lets them read (not run): cargo's and git's own
+/// configuration (a build fails on one it can see but not read), and packages
+/// installed for the user.
+pub const HOOK_ALLOW_READ: [&str; 8] = [
+    "~/.cargo/config.toml",
+    "~/.cargo/config",
+    "~/.gitconfig",
+    "~/.config/git/config",
+    "~/.config/git/ignore",
+    "~/.local/lib",
+    "~/Library/Python",
+    "~/AppData/Roaming/Python",
+];
+
+/// What the hooks' sandbox lets them write: the dependency caches (and
+/// cargo's lock files beside them). None holds a credential: those live next
+/// to them (`~/.cargo/credentials.toml`, `~/.npmrc`), never inside.
+pub const HOOK_ALLOW_WRITE: [&str; 22] = [
+    "~/.cargo/registry",
+    "~/.cargo/git",
+    "~/.cargo/.package-cache",
+    "~/.cargo/.package-cache-mutate",
+    "~/.cargo/.global-cache",
+    "~/.npm",
+    "~/.cache/pip",
+    "~/.cache/uv",
+    "~/.cache/go-build",
+    "~/.cache/yarn",
+    "~/.cache/pre-commit",
+    "~/go/pkg/mod",
+    "~/.m2/repository",
+    "~/.gradle/caches",
+    "~/Library/Caches/go-build",
+    "~/Library/Caches/pip",
+    "~/Library/Caches/Yarn",
+    "~/AppData/Local/npm-cache",
+    "~/AppData/Local/pip",
+    "~/AppData/Local/uv",
+    "~/AppData/Local/go-build",
+    "~/AppData/Local/Yarn",
 ];
 
 /// Denied everywhere (with the power-user permissions): reading credentials, and

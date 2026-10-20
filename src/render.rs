@@ -1687,6 +1687,11 @@ impl Project {
             let body = templates::load_embedded("claude/hooks/recap-github.sh")?;
             components.push(("hooks/recap-github.sh".to_string(), body));
         }
+        // Native Windows: the commands Claude runs go in ocgen's sandbox.
+        if self.claude.sandbox.enabled {
+            let body = templates::load_embedded("claude/hooks/shell-sandbox.sh")?;
+            components.push(("hooks/shell-sandbox.sh".to_string(), body));
+        }
         // Shared loop guard, sourced by every blocking hook so no gate can hold an
         // agent forever.
         if self.has_blocking_hooks() {
@@ -2144,11 +2149,14 @@ impl Project {
         if !check.is_empty() {
             env.insert("OCGEN_CHECK_CMD".into(), json!(check));
         }
-        let format = self.claude.hooks_extra.format_cmd.trim();
-        if self.claude.sandbox.enabled && !(check.is_empty() && format.is_empty()) {
+        if self.claude.sandbox.enabled {
             // Claude Code doesn't sandbox hooks: the hooks run the check and the
-            // formatter in an OS sandbox of their own, from these lists.
-            use crate::claude::{CREDENTIAL_ENV, CREDENTIAL_PATHS, HOOK_DENY_WRITE};
+            // formatter in an OS sandbox of their own, from these lists — and on
+            // native Windows, the commands Claude runs too.
+            use crate::claude::{
+                CREDENTIAL_ENV, CREDENTIAL_PATHS, HOOK_ALLOW_EXEC, HOOK_ALLOW_READ,
+                HOOK_ALLOW_WRITE, HOOK_DENY_WRITE,
+            };
             env.insert("OCGEN_SANDBOX".into(), json!("1"));
             env.insert(
                 "OCGEN_SANDBOX_DENY_WRITE".into(),
@@ -2163,6 +2171,40 @@ impl Project {
                     "OCGEN_SANDBOX_DENY_ENV".into(),
                     json!(CREDENTIAL_ENV.join(" ")),
                 );
+            }
+            // Everything else is denied: what the sandbox grants on top of the
+            // system's folders and the project.
+            let sb = &self.claude.sandbox;
+            for (key, base, extra) in [
+                (
+                    "OCGEN_SANDBOX_ALLOW_READ",
+                    &HOOK_ALLOW_READ[..],
+                    &sb.hook_read,
+                ),
+                (
+                    "OCGEN_SANDBOX_ALLOW_EXEC",
+                    &HOOK_ALLOW_EXEC[..],
+                    &sb.hook_exec,
+                ),
+                (
+                    "OCGEN_SANDBOX_ALLOW_WRITE",
+                    &HOOK_ALLOW_WRITE[..],
+                    &sb.hook_write,
+                ),
+            ] {
+                let mut list: Vec<String> = base.iter().map(|s| s.to_string()).collect();
+                for e in extra.iter().map(|e| e.trim()).filter(|e| !e.is_empty()) {
+                    if !list.iter().any(|x| x == e) {
+                        list.push(e.to_string());
+                    }
+                }
+                env.insert(key.into(), json!(list.join(" ")));
+            }
+            if sb.hook_network {
+                env.insert("OCGEN_SANDBOX_NETWORK".into(), json!("1"));
+            }
+            if sb.agent_network {
+                env.insert("OCGEN_SANDBOX_AGENT_NETWORK".into(), json!("1"));
             }
         }
         if self.claude.sandbox.enabled && !self.claude.sandbox.allow_credentials {
@@ -2554,6 +2596,18 @@ impl Project {
             push(
                 "ConfigChange",
                 json!({ "hooks": [ command_hook(hook_cmd(prefix, dir, "config-audit.sh")) ] }),
+            );
+        }
+        if self.claude.sandbox.enabled {
+            // Native Windows has no Claude Code sandbox: ocgen runs each command
+            // Claude runs in its own. Anywhere else the command stops at the
+            // test, without starting ocgen.
+            push(
+                "PreToolUse",
+                json!({ "matcher": "Bash|PowerShell", "hooks": [ command_hook(format!(
+                    "[ \"${{OS:-}}\" != Windows_NT ] || {{ {}; }}",
+                    hook_cmd(prefix, dir, "shell-sandbox.sh")
+                )) ] }),
             );
         }
         if self.has_blocking_hooks() {

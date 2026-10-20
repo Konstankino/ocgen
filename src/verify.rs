@@ -11,7 +11,6 @@
 //! own check command, on request.
 
 use std::collections::{BTreeMap, HashMap};
-use std::ffi::OsStr;
 use std::io::{Read, Write as _};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -222,7 +221,8 @@ pub fn verify(project: &Project, root: &Path, opts: &Options) -> Vec<Check> {
             out.push(draft_review(&probe));
             out.push(recap_github(&probe));
         }
-        out.push(sandbox(project, &layers));
+        out.push(sandbox(project, &layers, root));
+        out.push(hook_sandbox(root, &layers));
         out.push(git_credentials(project, root, &layers));
         out.push(pre_push(shell_ok.then_some(sh.as_path()), project, root));
         if shell_ok {
@@ -235,7 +235,10 @@ pub fn verify(project: &Project, root: &Path, opts: &Options) -> Vec<Check> {
     out.push(mcp_json(root));
     out.push(codeowners(project, root));
     out.push(intent_approvers(project, root));
-    out.push(ocgen_on_path());
+    let hooks_sandboxed = layers
+        .get("/env/OCGEN_SANDBOX")
+        .is_some_and(|(v, _)| text(v) == "1");
+    out.push(ocgen_on_path(hooks_sandboxed));
     out.extend(ignored_overrides());
     out.push(git_tracking(root));
     if opts.run_claude {
@@ -408,7 +411,7 @@ fn text(v: &Value) -> String {
 
 /// The user's own settings file — `$CLAUDE_CONFIG_DIR/settings.json`, else
 /// `~/.claude/settings.json` — and the name to report it by.
-fn user_settings() -> Option<(PathBuf, String)> {
+pub(crate) fn user_settings() -> Option<(PathBuf, String)> {
     if let Some(dir) = std::env::var_os("CLAUDE_CONFIG_DIR").filter(|d| !d.is_empty()) {
         let path = PathBuf::from(dir).join("settings.json");
         let label = crate::paths::for_shell(&path);
@@ -427,7 +430,7 @@ fn user_settings() -> Option<(PathBuf, String)> {
 }
 
 /// Where Claude Code reads an organisation's managed policy.
-fn managed_settings() -> PathBuf {
+pub(crate) fn managed_settings() -> PathBuf {
     if cfg!(windows) {
         std::env::var_os("ProgramFiles")
             .map_or_else(|| PathBuf::from(r"C:\Program Files"), PathBuf::from)
@@ -801,22 +804,36 @@ pub fn hook_shell(settings: &Value, windows: bool, bash: Option<&Path>) -> Check
 /// the approval store or (by default) push and deploy credentials. `on` is
 /// whether it is on in the settings Claude Code merges, `off_by` the file that
 /// turns it off, `os` is `std::env::consts::OS` and `bwrap` whether bubblewrap
-/// is on PATH.
-pub fn sandbox_check(gate: bool, on: bool, off_by: Option<&str>, os: &str, bwrap: bool) -> Check {
+/// is on PATH. On native Windows, where ocgen sandboxes the commands Claude
+/// runs itself, `shell` says whether that is in place, or why not.
+pub fn sandbox_check(
+    gate: bool,
+    on: bool,
+    off_by: Option<&str>,
+    os: &str,
+    bwrap: bool,
+    shell: Result<(), String>,
+) -> Check {
     let name = "sandbox";
-    if os == "windows" && gate {
-        return check(
-            name,
-            Status::Warn,
-            "Claude Code's sandbox isn't available on native Windows, so the approval gate is advisory here — a guard-rail, not a boundary (WSL2 has the sandbox)",
-        );
-    }
     if os == "windows" && on {
-        return check(
-            name,
-            Status::Warn,
-            "on, but Claude Code's sandbox isn't available on native Windows — commands run unsandboxed here (WSL2 has it)",
-        );
+        return match (shell, gate) {
+            (Ok(()), true) => check(
+                name,
+                Status::Pass,
+                "on — Claude Code has no sandbox on native Windows, so ocgen runs the Bash and PowerShell commands Claude runs in its own: they, and the check and formatter the hooks run, can't write the approval store",
+            ),
+            (Ok(()), false) => check(
+                name,
+                Status::Pass,
+                "on — ocgen runs the Bash and PowerShell commands Claude runs in its own sandbox here",
+            ),
+            (Err(why), true) => check(
+                name,
+                Status::Warn,
+                format!("on, but {why} — until then the approval gate is advisory here"),
+            ),
+            (Err(why), false) => check(name, Status::Warn, format!("on, but {why}")),
+        };
     }
     if on && os == "linux" && !bwrap {
         return check(
@@ -847,7 +864,7 @@ pub fn sandbox_check(gate: bool, on: bool, off_by: Option<&str>, os: &str, bwrap
 }
 
 /// [`sandbox_check`] for this project, on this machine.
-fn sandbox(project: &Project, layers: &Layers) -> Check {
+fn sandbox(project: &Project, layers: &Layers, root: &Path) -> Check {
     let gate = project.claude.team.enabled && project.claude.team.approval_gate;
     let (on, off_by) = match layers.get("/sandbox/enabled") {
         Some((v, from)) => {
@@ -856,13 +873,138 @@ fn sandbox(project: &Project, layers: &Layers) -> Check {
         }
         None => (false, None),
     };
+    let shell = if cfg!(windows) && on {
+        shell_sandbox_ready(layers, root)
+    } else {
+        Ok(())
+    };
     sandbox_check(
         gate,
         on,
         off_by,
         std::env::consts::OS,
         find_on_path("bwrap").is_some(),
+        shell,
     )
+}
+
+/// Native Windows: whether ocgen runs the commands Claude runs in the
+/// project's sandbox — its hook in place and running, the binary that wraps
+/// them on PATH, the container given its permissions — and if not, why.
+fn shell_sandbox_ready(layers: &Layers, root: &Path) -> Result<(), String> {
+    if let Some((why, _)) = layers.hooks_off() {
+        return Err(format!(
+            "{why}, so the commands Claude runs aren't sandboxed"
+        ));
+    }
+    let wired = layers
+        .of(Scope::Project)
+        .and_then(|s| s.pointer("/hooks/PreToolUse"))
+        .and_then(Value::as_array)
+        .is_some_and(|groups| {
+            groups.iter().any(|g| {
+                g["matcher"] == "Bash|PowerShell" && g.to_string().contains("shell-sandbox")
+            })
+        });
+    if !wired {
+        return Err(format!(
+            "{SETTINGS} lacks the shell-sandbox hook, so the commands Claude runs aren't sandboxed — run `ocgen doctor`"
+        ));
+    }
+    if !ocgen_hook_ok() {
+        return Err(format!(
+            "ocgen ({}) isn't on PATH, and without it the hook refuses every command Claude runs",
+            crate::hooks::PROTOCOL
+        ));
+    }
+    crate::sandbox::agent_ready(
+        &sandbox_env(root),
+        root,
+        root,
+        crate::sandbox::shell::Shell::Bash,
+    )
+}
+
+/// The hooks' own sandbox on this machine (`r`): which sandbox runs the check
+/// and the formatter, or why none can — then they never run.
+pub fn hook_sandbox_check(r: &crate::sandbox::Report) -> Check {
+    let name = "hooks' sandbox";
+    if !r.on {
+        return check(name, Status::Skip, "off");
+    }
+    if let Err(e) = &r.policy {
+        return check(
+            name,
+            Status::Fail,
+            format!("on, but {e} — the check and the formatter never run"),
+        );
+    }
+    // Why the better sandboxes in the chain don't work here.
+    let skipped: Vec<String> = r
+        .backends
+        .iter()
+        .take_while(|(k, ok)| ok.is_err() && Some(*k) != r.native())
+        .filter_map(|(k, ok)| ok.as_ref().err().map(|e| format!("{}: {e}", k.name())))
+        .collect();
+    match r.native() {
+        Some(k) => {
+            let mut msg = format!("{} — {}", k.name(), r.detail());
+            if !skipped.is_empty() {
+                msg.push_str(&format!(" (not {})", skipped.join("; ")));
+            }
+            // Landlock can't keep a path read-only in a writable folder, so a
+            // check that creates files at the top (cargo's target/) fails.
+            let status = if k == crate::sandbox::Kind::Landlock {
+                Status::Warn
+            } else {
+                Status::Pass
+            };
+            check(name, status, msg)
+        }
+        None => check(
+            name,
+            Status::Fail,
+            format!(
+                "on, but no sandbox here can run the check or the formatter (only a WASI module would run), so they never run — {}",
+                skipped.join("; ")
+            ),
+        ),
+    }
+}
+
+/// The env the hooks' sandbox sees for the project at `root`: this
+/// process's, with the `OCGEN_SANDBOX*` settings from the settings files
+/// (the most specific winning).
+pub fn sandbox_env(root: &Path) -> HashMap<String, String> {
+    sandbox_env_of(&Layers::load(root, user_settings()))
+}
+
+fn sandbox_env_of(layers: &Layers) -> HashMap<String, String> {
+    let mut env: HashMap<String, String> = std::env::vars()
+        .filter(|(k, _)| !k.starts_with("OCGEN_SANDBOX"))
+        .collect();
+    for (_, _, v) in &layers.0 {
+        for (k, val) in v
+            .get("env")
+            .and_then(Value::as_object)
+            .into_iter()
+            .flatten()
+        {
+            if k.starts_with("OCGEN_SANDBOX")
+                && k != crate::sandbox::POLICY_VAR
+                && k != crate::sandbox::HELPER_VAR
+            {
+                env.insert(k.clone(), text(val));
+            }
+        }
+    }
+    env
+}
+
+/// [`hook_sandbox_check`] for the project at `root`, on this machine.
+fn hook_sandbox(root: &Path, layers: &Layers) -> Check {
+    let env = sandbox_env_of(layers);
+    hook_sandbox_check(&crate::sandbox::report(&env, root))
 }
 
 /// The credential helpers in `entries` that ask an OS keychain or a login
@@ -1117,6 +1259,15 @@ fn weakens(key: &str, want: Option<&str>, got: Option<&str>, ocgen: &Value) -> b
             let have: Vec<&str> = got.unwrap_or_default().split_whitespace().collect();
             want.is_some_and(|w| w.split_whitespace().any(|x| !have.contains(&x)))
         }
+        // The hooks' sandbox grants only what these name.
+        "OCGEN_SANDBOX_ALLOW_READ" | "OCGEN_SANDBOX_ALLOW_EXEC" | "OCGEN_SANDBOX_ALLOW_WRITE" => {
+            got.is_some() && adds()
+        }
+        "OCGEN_SANDBOX_NETWORK" | "OCGEN_SANDBOX_AGENT_NETWORK" => {
+            got == Some("1") && want != Some("1")
+        }
+        // The helper's input and the binary it runs: ocgen never sets them.
+        "OCGEN_SANDBOX_POLICY" | "OCGEN_SANDBOX_HELPER" | "OCGEN_SANDBOX_COMMAND" => got.is_some(),
         "TEAM_CONFIDENCE_THRESHOLD" | "SUBAGENT_CONFIDENCE_THRESHOLD" => {
             let w = reads(want)[0];
             w > 0 && reads(got).iter().any(|&g| g < w)
@@ -2671,14 +2822,23 @@ fn ocgen_hook_ok() -> bool {
     })
 }
 
-fn ocgen_on_path() -> Check {
+/// Whether the hooks can use the ocgen binary. `sandboxed`: the project's
+/// sandbox is on, and the bundled sh scripts can't apply it, so without the
+/// binary the check and the formatter never run.
+fn ocgen_on_path(sandboxed: bool) -> Check {
     let name = "ocgen on PATH";
+    let missing = if sandboxed {
+        Status::Fail
+    } else {
+        Status::Warn
+    };
     match which_ocgen() {
+        None if sandboxed => check(name, missing, "not found — the hooks fall back to the bundled sh scripts, which never run the check or the formatter with the project's sandbox on: install ocgen"),
         None => check(name, Status::Warn, "not found — hooks use the bundled sh scripts (install ocgen for the Rust hooks and Windows support)"),
         Some(p) if ocgen_hook_ok() => check(name, Status::Pass, format!("{} (hooks run in Rust)", p.display())),
         Some(p) => check(
             name,
-            Status::Warn,
+            missing,
             format!(
                 "{} is too old for `ocgen hook` — hooks fall back to the sh scripts. Reinstall ocgen so this path has a current build",
                 p.display()
@@ -2771,27 +2931,7 @@ fn find_on_path(name: &str) -> Option<PathBuf> {
     } else {
         String::new()
     };
-    find_in(&std::env::var_os("PATH")?, name, &exts)
-}
-
-/// [`find_on_path`] with PATH and PATHEXT given; empty `exts` means the bare
-/// name. Only extensions `Command` can start (batch files via cmd) count.
-fn find_in(path: &OsStr, name: &str, exts: &str) -> Option<PathBuf> {
-    let exts: Vec<String> = if exts.is_empty() {
-        vec![String::new()]
-    } else {
-        exts.split(';')
-            .map(|e| e.trim().to_ascii_lowercase())
-            .filter(|e| [".com", ".exe", ".bat", ".cmd"].contains(&e.as_str()))
-            .collect()
-    };
-    std::env::split_paths(path)
-        .flat_map(|d| {
-            exts.iter()
-                .map(|e| d.join(format!("{name}{e}")))
-                .collect::<Vec<_>>()
-        })
-        .find(|p| p.is_file())
+    crate::paths::find_in(&std::env::var_os("PATH")?, name, &exts)
 }
 
 fn claude_validate(project: &Project, root: &Path) -> Check {
@@ -2850,6 +2990,49 @@ fn claude_validate(project: &Project, root: &Path) -> Check {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_hooks_sandbox_check_names_the_sandbox_or_fails() {
+        use crate::sandbox::{Kind, Policy, Report};
+        let r = |on, backends: Vec<(Kind, Result<(), String>)>, policy| Report {
+            on,
+            backends,
+            policy,
+        };
+        let ok = || Ok(Policy::default());
+        let off = hook_sandbox_check(&r(false, vec![], ok()));
+        assert_eq!(off.status, Status::Skip);
+        let c = hook_sandbox_check(&r(
+            true,
+            vec![(Kind::Seatbelt, Ok(())), (Kind::Wasm, Ok(()))],
+            ok(),
+        ));
+        assert_eq!(c.status, Status::Pass, "{c:?}");
+        assert!(c.detail.starts_with("Seatbelt — "), "{c:?}");
+        // Landlock works, but a check creating files at the top fails: warn,
+        // with why bubblewrap doesn't.
+        let c = hook_sandbox_check(&r(
+            true,
+            vec![
+                (Kind::Bwrap, Err("no bwrap".into())),
+                (Kind::Landlock, Ok(())),
+                (Kind::Wasm, Ok(())),
+            ],
+            ok(),
+        ));
+        assert_eq!(c.status, Status::Warn, "{c:?}");
+        assert!(c.detail.contains("(not bubblewrap: no bwrap)"), "{c:?}");
+        // Only wasmtime: an ordinary check never runs.
+        let c = hook_sandbox_check(&r(
+            true,
+            vec![(Kind::AppContainer, Err("x".into())), (Kind::Wasm, Ok(()))],
+            ok(),
+        ));
+        assert_eq!(c.status, Status::Fail, "{c:?}");
+        assert!(c.detail.contains("never run"), "{c:?}");
+        let c = hook_sandbox_check(&r(true, vec![], Err("p lies in q".into())));
+        assert_eq!(c.status, Status::Fail, "{c:?}");
+    }
+
     use super::*;
 
     /// A probe of `settings` as both what ocgen generates and what is on disk,
@@ -2968,16 +3151,16 @@ mod tests {
         let path = std::env::join_paths([dir.path()]).unwrap();
         std::fs::write(dir.path().join("claude.cmd"), "@echo off\n").unwrap();
         assert_eq!(
-            find_in(&path, "claude", ".COM;.EXE;.BAT;.CMD;.VBS"),
+            crate::paths::find_in(&path, "claude", ".COM;.EXE;.BAT;.CMD;.VBS"),
             Some(dir.path().join("claude.cmd"))
         );
         // A script `Command` can't start doesn't count.
-        assert_eq!(find_in(&path, "claude", ".VBS;.JS"), None);
+        assert_eq!(crate::paths::find_in(&path, "claude", ".VBS;.JS"), None);
         // Elsewhere, the bare name.
-        assert_eq!(find_in(&path, "claude", ""), None);
+        assert_eq!(crate::paths::find_in(&path, "claude", ""), None);
         std::fs::write(dir.path().join("claude"), "#!/bin/sh\n").unwrap();
         assert_eq!(
-            find_in(&path, "claude", ""),
+            crate::paths::find_in(&path, "claude", ""),
             Some(dir.path().join("claude"))
         );
     }

@@ -6022,7 +6022,7 @@ fn inquire_registers_the_notes_hook() {
     assert_eq!(notes["matcher"], "Write|Edit|MultiEdit");
     let cmd = notes["hooks"][0]["command"].as_str().unwrap();
     assert!(
-        cmd.contains("ocgen hook inquire-notes") && cmd.contains("ocgen-hooks 16"),
+        cmd.contains("ocgen hook inquire-notes") && cmd.contains("ocgen-hooks 18"),
         "{cmd}"
     );
     assert_eq!(notes["hooks"][0]["shell"], "bash");

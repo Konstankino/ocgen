@@ -265,7 +265,36 @@ pub fn run_new(
         return Ok(());
     }
 
-    write_with_review(&theme, &project, Path::new(&target_dir))
+    write_with_review(&theme, &project, Path::new(&target_dir))?;
+    grant_sandbox(Path::new(&target_dir), &project);
+    Ok(())
+}
+
+/// Native Windows: give the project's sandbox its permissions now, so the
+/// first command Claude runs isn't refused for want of them (it takes a
+/// while once for a large project). Never in the wizard's own tests.
+fn grant_sandbox(root: &Path, project: &Project) {
+    if cfg!(test)
+        || !project.claude.sandbox.enabled
+        || !project.claude.output.project
+        || !ocgen::claude::ocgen_sandboxes_shell()
+    {
+        return;
+    }
+    println!(
+        "{}",
+        ui::muted(
+            "Giving the project's sandbox its permissions (once; a large project takes a while)…"
+        )
+    );
+    let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let root = ocgen::paths::plain(&root);
+    match ocgen::sandbox::grant_project(&ocgen::verify::sandbox_env(&root), &root) {
+        Ok(lines) => lines.iter().for_each(|l| ui::success(l)),
+        Err(e) => ui::warning(&format!(
+            "{e} — run `ocgen sandbox grant` before Claude runs a command"
+        )),
+    }
 }
 
 /// The tools ocgen can generate for, in the order the wizard offers them.
@@ -949,26 +978,47 @@ pub fn run_edit_team(path: String) -> Result<()> {
     }
     let written = project.scaffold(&root, true)?;
     report_written(&written);
+    grant_sandbox(&root, &project);
     Ok(())
 }
 
-/// What native Windows users are told about the sandbox and the approval gate.
-const SANDBOX_UNSUPPORTED: &str = "The sandbox isn't available on native Windows, so here the approval gate is advisory (it still applies where these settings run on macOS, Linux or WSL2).";
+/// What users on a platform with no sandbox are told about it and the
+/// approval gate.
+const SANDBOX_UNSUPPORTED: &str = "The sandbox isn't available on this platform, so here the approval gate is advisory (it still applies where these settings run on macOS, Linux, WSL2 or Windows).";
+
+/// Who sandboxes the commands Claude runs: Claude Code (macOS, Linux/WSL2),
+/// ocgen (native Windows), or nobody.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Sandboxer {
+    ClaudeCode,
+    Ocgen,
+    None,
+}
 
 /// The sandbox question's help line. With the approval gate on it says what the
 /// gate amounts to without the sandbox.
 fn sandbox_help(gate: bool) -> String {
-    sandbox_help_for(ocgen::claude::sandbox_supported(), gate)
+    let by = if ocgen::claude::ocgen_sandboxes_shell() {
+        Sandboxer::Ocgen
+    } else if ocgen::claude::sandbox_supported() {
+        Sandboxer::ClaudeCode
+    } else {
+        Sandboxer::None
+    };
+    sandbox_help_for(by, gate)
 }
 
-/// [`sandbox_help`] for a platform that does (`supported`) or doesn't sandbox.
-fn sandbox_help_for(supported: bool, gate: bool) -> String {
-    let what = "Bash runs with limited file and network access (Seatbelt on macOS, bubblewrap on Linux/WSL2); new network hosts prompt until allowed.";
-    match (supported, gate) {
-        (false, true) => format!("{what} {SANDBOX_UNSUPPORTED}"),
-        (false, false) => format!("{what} It isn't available on native Windows; it applies where these settings run on macOS, Linux or WSL2."),
-        (true, true) => format!("{what} It keeps sandboxed commands (and the hooks' check and formatter) off the approval store and away from the credentials ocgen knows about. Without it the approval gate is advisory only: a pattern match an agent can phrase its way around."),
-        (true, false) => format!("{what} Off by default."),
+/// [`sandbox_help`] where `by` sandboxes the commands Claude runs.
+fn sandbox_help_for(by: Sandboxer, gate: bool) -> String {
+    let what = match by {
+        Sandboxer::Ocgen => "Claude Code has no sandbox on native Windows, so ocgen runs the Bash and PowerShell commands Claude runs in its own (an AppContainer): they write only the project and the dependency caches, read only those and the toolchains, and ocgen checks your permission rules against each command as written.",
+        _ => "Bash runs with limited file and network access (Seatbelt on macOS, bubblewrap on Linux/WSL2); new network hosts prompt until allowed.",
+    };
+    match (by, gate) {
+        (Sandboxer::None, true) => format!("{what} {SANDBOX_UNSUPPORTED}"),
+        (Sandboxer::None, false) => format!("{what} It isn't available on this platform; it applies where these settings run on macOS, Linux, WSL2 or Windows."),
+        (_, true) => format!("{what} It keeps sandboxed commands (and the hooks' check and formatter) off the approval store and away from the credentials ocgen knows about. Without it the approval gate is advisory only: a pattern match an agent can phrase its way around."),
+        (_, false) => format!("{what} Off by default."),
     }
 }
 
@@ -1003,6 +1053,14 @@ fn configure_sandbox(
         "No (recommended): SSH keys, the gh and git tokens, cloud and kube logins and the npm/cargo/PyPI/gem tokens are withheld, so a push or publish that needs them fails — you do those steps. git also starts with no credential helper, so it doesn't ask your OS keychain (osxkeychain, Git Credential Manager), which the sandbox can't hide — but a command can name one itself, so branch protection on every branch is the real stop for pushes.",
         false,
     )?;
+    if ocgen::claude::ocgen_sandboxes_shell() {
+        sandbox.agent_network = ask_confirm(
+            theme,
+            "  Let the commands Claude runs reach the network?",
+            "Yes (recommended): installs, fetches and tests that need it work. ocgen's sandbox on Windows allows all of the network or none — it can't keep to the allowed domains as Claude Code's does. A push still fails without your credentials.",
+            sandbox.agent_network,
+        )?;
+    }
     Ok(())
 }
 

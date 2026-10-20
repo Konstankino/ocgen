@@ -351,7 +351,7 @@ const CLAUDE_FIELDS: &[Field] = &[
     Field {
         label: "sandbox",
         detail: "Runs Bash with OS-level file and network limits (Seatbelt on macOS, bubblewrap \
-                 on Linux/WSL2; native Windows has none), a starter network allowlist plus your \
+                 on Linux/WSL2; Claude Code has none on native Windows), a starter network allowlist plus your \
                  extra domains, and no unsandboxed retries. Sandboxed commands can't write the \
                  approval store (keep ~/.claude a real folder: a symbolic link there is protected \
                  where it points, not by its name), the statusline, ocgen's state file or \
@@ -361,11 +361,41 @@ const CLAUDE_FIELDS: &[Field] = &[
                  sandbox can't hide — though a command can name one itself (`ocgen verify` \
                  warns while one is configured). It contains shell \
                  commands only, not the file tools, hooks or MCP servers (the hooks run the \
-                 check and formatter in a sandbox of their own). The wizard asks after the \
-                 Agent Teams questions and defaults to yes when the approval gate is on and the \
-                 platform has a sandbox; without it the gate is advisory. claude.sandbox.declined \
-                 records a no to that default, so `ocgen edit team` keeps your no as its default.",
+                 check and formatter in ocgen's own sandbox: see hooks' sandbox). The wizard asks after the \
+                 Agent Teams questions and defaults to yes when the approval gate is on; without \
+                 it the gate is advisory. claude.sandbox.declined records a no to that default, \
+                 so `ocgen edit team` keeps your no as its default.",
         example: "sandbox.enabled: true   extra_domains: [registry.example.com]",
+    },
+    Field {
+        label: "sandbox on native Windows",
+        detail: "Claude Code has no sandbox on native Windows, so there ocgen runs the Bash and \
+                 PowerShell commands Claude runs in its own (the AppContainer of the hooks' \
+                 sandbox): a PreToolUse hook rewrites each command to run through `ocgen \
+                 __sandbox`, leaving the command readable in the middle, and checks the project's \
+                 deny and ask rules against the command as written — deny denies, ask asks, the \
+                 rest runs sandboxed without a prompt. Inside, it writes the project, its git \
+                 folders (not their hooks or config) and the caches, and runs without the \
+                 credentials ocgen knows about. `ocgen sandbox grant` gives the container its \
+                 permissions (the wizard does it when you turn the sandbox on); until then the \
+                 hook refuses commands. agent_network (default true) lets them reach the network \
+                 — all of it or none. A `cd` inside a command doesn't carry over to the next.",
+        example: "sandbox.agent_network: false",
+    },
+    Field {
+        label: "hooks' sandbox",
+        detail: "With the sandbox on, the check and the formatter the hooks run go in ocgen's own \
+                 sandbox, which denies everything it doesn't grant: the system's and the \
+                 toolchains' folders to read and run from, the dependency caches and the project \
+                 to write (not its Claude settings, hooks, state file, .mcp.json or git hooks), \
+                 and no network. Seatbelt on macOS; bubblewrap on Linux, or Landlock with seccomp \
+                 where bwrap can't run; an AppContainer in a job object on native Windows (no WSL \
+                 needed); wasmtime for a WASI module (*.wasm) where none of those works. Never \
+                 unsandboxed: with no sandbox here, or without the ocgen binary, the check isn't \
+                 run and counts as failed. hook_network: true lets them reach the network; \
+                 hook_read, hook_exec and hook_write add paths (~/… or absolute). `ocgen sandbox \
+                 status` shows what runs here, `ocgen sandbox run` runs a command in it.",
+        example: "sandbox.hook_network: true   hook_write: [~/.cache/mytool]",
     },
     Field {
         label: "permission rules (yours)",
@@ -387,11 +417,11 @@ const CLAUDE_FIELDS: &[Field] = &[
                  other Check: line is ignored). It is stopped, with all it started, after \
                  OCGEN_CHECK_TIMEOUT seconds (300, at most 3540: the gate's own hook timeout is \
                  an hour, and Claude Code lets a change through when it times a gate out). With \
-                 the sandbox on, the hooks run it — and \
-                 the formatter — in an OS sandbox that can't write the approval store, ~/.claude, \
-                 shell and git config or the project's Claude settings and git hooks, and \
-                 (unless you allow credentials) without credentials; on Linux without bubblewrap \
-                 the check isn't run and counts as failed. Empty = off.",
+                 the sandbox on, the hooks run it — and the formatter — in ocgen's own sandbox \
+                 (see hooks' sandbox): the project and the toolchains, not the approval store, \
+                 ~/.claude, shell and git config or the project's Claude settings and git hooks, \
+                 no network, and (unless you allow credentials) no credentials; where no sandbox \
+                 can run it, the check isn't run and counts as failed. Empty = off.",
         example: "cargo test",
     },
     Field {

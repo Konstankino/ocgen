@@ -104,6 +104,12 @@ pub enum Command {
         #[arg(long)]
         check: bool,
     },
+    /// The hooks' own sandbox: which one runs the check and the formatter
+    /// here, what it grants, and running a command in it.
+    Sandbox {
+        #[command(subcommand)]
+        action: SandboxAction,
+    },
     /// Approve high-impact actions (pushes, deploys…) for a limited time.
     ///
     /// For a human, from their own terminal: it refuses to run under Claude Code
@@ -229,6 +235,45 @@ const NOTES_EXAMPLES: &str = "Examples:
 Environment:
   OCGEN_NOTES_OPEN=0     never open a browser (=1: always, even in CI or without a display)
   OCGEN_NOTES_BROWSER    a command to open pages with instead of the system default";
+
+#[derive(Subcommand)]
+pub enum SandboxAction {
+    /// Which sandbox runs the hooks' check and formatter on this machine, and
+    /// what it grants.
+    Status {
+        /// Directory inside the project (default: current dir).
+        #[arg(long, short, default_value = ".")]
+        path: String,
+        /// Print it as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Run a command (sh syntax) in the hooks' sandbox, the way the check runs.
+    Run {
+        /// Directory inside the project (default: current dir).
+        #[arg(long, short, default_value = ".")]
+        path: String,
+        /// The command, as one argument (quote it).
+        command: String,
+    },
+    /// Native Windows: give the project's AppContainer its permissions now
+    /// (the first sandboxed check does it otherwise, which can take a while).
+    Grant {
+        /// Directory inside the project (default: current dir).
+        #[arg(long, short, default_value = ".")]
+        path: String,
+    },
+    /// Native Windows: take the permissions ocgen gave the project's
+    /// AppContainer off its files and delete the container.
+    Reset {
+        /// Directory inside the project (default: current dir).
+        #[arg(long, short, default_value = ".")]
+        path: String,
+        /// Every project's, and the toolchains' shared grants too.
+        #[arg(long)]
+        all: bool,
+    },
+}
 
 #[derive(Subcommand)]
 pub enum NotesAction {

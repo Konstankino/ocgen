@@ -96,6 +96,12 @@ fn run_sh(dir: &Path, hook: &str, env: &HashMap<String, String>, payload: &str) 
         "OCGEN_SANDBOX_DENY_WRITE",
         "OCGEN_SANDBOX_DENY_READ",
         "OCGEN_SANDBOX_DENY_ENV",
+        "OCGEN_SANDBOX_ALLOW_READ",
+        "OCGEN_SANDBOX_ALLOW_EXEC",
+        "OCGEN_SANDBOX_ALLOW_WRITE",
+        "OCGEN_SANDBOX_NETWORK",
+        "OCGEN_SANDBOX_POLICY",
+        "OCGEN_SANDBOX_HELPER",
         "MSYSTEM",
     ] {
         cmd.env_remove(k);
@@ -2080,7 +2086,7 @@ fn settings_wire_the_worker_baseline_and_read_only_roles() {
             "{ev} runs the worker gate: {cmd}"
         );
     }
-    assert_eq!(ocgen::hooks::PROTOCOL, "ocgen-hooks 16");
+    assert_eq!(ocgen::hooks::PROTOCOL, "ocgen-hooks 18");
 }
 
 #[test]
@@ -2120,7 +2126,10 @@ fn rules_say_where_confidence_and_owners_are_read() {
 // ---------------------------------------------------------------- sandbox --
 //
 // Claude Code doesn't sandbox hooks, so with the project's sandbox on the hooks
-// sandbox the project code they run themselves: the check and the formatter.
+// run the project code they start themselves — the check and the formatter — in
+// ocgen's own sandbox, which denies whatever isn't granted (more in
+// tests/hook_sandbox.rs). Only the binary can apply it: with the sandbox on, the
+// scripts never run that code.
 
 #[test]
 fn every_script_that_runs_project_code_carries_the_same_sandbox() {
@@ -2133,92 +2142,81 @@ fn every_script_that_runs_project_code_carries_the_same_sandbox() {
     let gate = block("subagent-confidence-gate.sh");
     assert_eq!(block("team-task-completed.sh"), gate);
     assert_eq!(block("format.sh"), gate);
-    // The same reasons as the Rust hook gives.
-    assert!(gate.contains(ocgen::hooks::NO_BWRAP));
-    assert!(gate.contains(ocgen::hooks::NO_SEATBELT));
+    // The reason the Rust hooks give for the scripts.
+    assert!(gate.contains(ocgen::sandbox::NEEDS_BINARY));
 }
 
 /// The sandbox env settings.json gives the hooks (credentials withheld).
 fn sandbox_env() -> Vec<(&'static str, String)> {
-    use ocgen::claude::{CREDENTIAL_ENV, CREDENTIAL_PATHS, HOOK_DENY_WRITE};
+    use ocgen::claude::{
+        CREDENTIAL_ENV, CREDENTIAL_PATHS, HOOK_ALLOW_EXEC, HOOK_ALLOW_READ, HOOK_ALLOW_WRITE,
+        HOOK_DENY_WRITE,
+    };
     vec![
         ("OCGEN_SANDBOX", "1".into()),
         ("OCGEN_SANDBOX_DENY_WRITE", HOOK_DENY_WRITE.join(" ")),
         ("OCGEN_SANDBOX_DENY_READ", CREDENTIAL_PATHS.join(" ")),
         ("OCGEN_SANDBOX_DENY_ENV", CREDENTIAL_ENV.join(" ")),
+        ("OCGEN_SANDBOX_ALLOW_READ", HOOK_ALLOW_READ.join(" ")),
+        ("OCGEN_SANDBOX_ALLOW_EXEC", HOOK_ALLOW_EXEC.join(" ")),
+        ("OCGEN_SANDBOX_ALLOW_WRITE", HOOK_ALLOW_WRITE.join(" ")),
     ]
 }
 
-/// A worker step whose check is `check`, in the sandbox.
-fn sandboxed_check(check: &str, expect: i32) -> Step {
-    let mut s = step(
-        "subagent-confidence-gate",
-        &[
-            ("SUBAGENT_CONFIDENCE_THRESHOLD", "0"),
-            ("OCGEN_CHECK_TIMEOUT", "20"),
-        ],
-        stop_event("w1", "general-purpose", "Confidence: 99%"),
-        expect,
-    )
-    .setup(|d: &Path| {
-        dirty_wt(d);
-        write(d, ".home/.ssh/id_test", "secret\n");
-        write(d, ".home/.claude/ocgen/approvals/old", "1\n");
-    });
-    s.env.push(("OCGEN_CHECK_CMD", check.to_string()));
-    s.env.extend(sandbox_env());
-    s
-}
-
-#[cfg(target_os = "macos")]
 #[test]
-fn a_sandboxed_check_cannot_forge_an_approval_or_read_credentials() {
-    let steps = vec![
-        // Its own work goes ahead.
-        sandboxed_check("echo built > out.txt && test -f out.txt", 0),
-        // The approval store, however reached: written, created, renamed away.
-        sandboxed_check(
-            "echo 9999999999 > ../.home/.claude/ocgen/approvals/old",
-            2,
-        )
-        .err("Operation not permitted"),
-        sandboxed_check(
-            "mkdir -p ../.home/.claude/ocgen/approvals && echo 1 > ../.home/.claude/ocgen/approvals/new",
-            2,
-        ),
-        sandboxed_check("mv ../.home/.claude ../.home/moved", 2),
-        sandboxed_check("mv ../.home ../moved-home", 2),
-        // A withheld credential can't be read, nor its folder moved to read it.
-        sandboxed_check("cat ../.home/.ssh/id_test", 2),
-        sandboxed_check("mv ../.home/.ssh ../.home/k", 2),
-        // What Claude Code and git run unsandboxed, in the project and in the
-        // worker's own folder.
-        sandboxed_check("echo x >> ../.claude/settings.json", 2),
-        sandboxed_check("echo x > ../.claude/settings.local.json", 2),
-        sandboxed_check("echo x > ../.claude/statusline.sh", 2),
-        sandboxed_check("echo x > ../.git/hooks/pre-push", 2),
-        sandboxed_check("mkdir -p .claude/hooks && echo x > .claude/hooks/a.sh", 2),
-        sandboxed_check("mv ../.claude ../c2", 2),
-    ];
-    for (name, extra) in [("sandbox", JQ), ("sandbox (no jq)", NO_JQ)] {
-        let (a, b) = parity(name, &steps, extra);
-        for d in [a.path(), b.path()] {
-            let store = d.join(".home/.claude/ocgen/approvals");
-            assert_eq!(fs::read_to_string(store.join("old")).unwrap(), "1\n");
-            assert!(!store.join("new").exists());
-            assert!(d.join(".home/.ssh/id_test").exists());
-            assert!(!d.join(".claude/settings.local.json").exists());
-            assert!(!d.join("wt/.claude/hooks/a.sh").exists());
-            assert!(
-                d.join("wt/out.txt").exists(),
-                "the check's own write landed"
-            );
+fn the_scripts_never_run_project_code_with_the_sandbox_on() {
+    let dir = project();
+    dirty_wt(dir.path());
+    let d = ocgen::paths::for_shell(dir.path());
+    let mut env: HashMap<String, String> = [
+        ("CLAUDE_PROJECT_DIR", d.clone()),
+        ("HOME", format!("{d}/.home")),
+        ("SUBAGENT_CONFIDENCE_THRESHOLD", "0".into()),
+        ("OCGEN_CHECK_TIMEOUT", "20".into()),
+        ("OCGEN_CHECK_CMD", "echo ran > ran.txt".into()),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_string(), v))
+    .chain(sandbox_env().into_iter().map(|(k, v)| (k.to_string(), v)))
+    .collect();
+    let worker = stop_event("w1", "general-purpose", "Confidence: 99%").replace("{dir}", &d);
+    let task = checked_task("t1", "x").replace("{dir}", &d);
+    for extra in [JQ, NO_JQ] {
+        let mut env = env.clone();
+        for (k, v) in extra {
+            env.insert(k.to_string(), v.to_string());
+        }
+        for (hook, payload) in [
+            ("subagent-confidence-gate", &worker),
+            ("team-task-completed", &task),
+        ] {
+            let o = run_sh(dir.path(), hook, &env, payload);
+            assert_eq!(o.0, 2, "{hook}: {o:?}");
+            assert!(o.2.contains("(exit not run)"), "{hook}: {o:?}");
+            assert!(o.2.contains(ocgen::sandbox::NEEDS_BINARY), "{hook}: {o:?}");
         }
     }
+    assert!(!dir.path().join("wt/ran.txt").exists());
+    assert!(!dir.path().join("ran.txt").exists());
+    // The formatter is skipped, with the same reason (it never blocks).
+    let edit = json!({ "tool_name": "Edit", "tool_input": { "file_path": "{dir}/x.rs" } })
+        .to_string()
+        .replace("{dir}", &d);
+    env.insert("OCGEN_FORMAT_CMD".into(), "echo x > fmt.txt".into());
+    let o = run_sh(dir.path(), "format", &env, &edit);
+    assert_eq!(o.0, 0);
+    assert_eq!(
+        o.2.trim_end(),
+        format!(
+            "format hook: 'echo x > fmt.txt' not run: {}",
+            ocgen::sandbox::NEEDS_BINARY
+        )
+    );
+    assert!(!dir.path().join("fmt.txt").exists());
 }
 
 /// `ocgen hook` as Claude Code runs it: a process of its own, with `env` set.
-#[cfg(target_os = "macos")]
+#[cfg(unix)]
 fn run_bin(hook: &str, env: &[(&str, &str)], payload: &str) -> Out {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_ocgen"));
     cmd.args(["hook", hook])
@@ -2238,336 +2236,150 @@ fn run_bin(hook: &str, env: &[(&str, &str)], payload: &str) -> Out {
     )
 }
 
-#[cfg(target_os = "macos")]
-#[test]
-fn a_sandboxed_check_runs_without_the_withheld_env_and_still_times_out() {
-    let dir = project();
-    dirty_wt(dir.path());
-    let d = ocgen::paths::for_shell(dir.path());
-    let payload = stop_event("w1", "general-purpose", "Confidence: 99%").replace("{dir}", &d);
-    let sb = sandbox_env();
-    let run = |check: &str, sandbox: bool, rust: bool| {
-        let mut env: Vec<(&str, &str)> = vec![
-            ("CLAUDE_PROJECT_DIR", d.as_str()),
-            ("SUBAGENT_CONFIDENCE_THRESHOLD", "0"),
-            ("OCGEN_CHECK_CMD", check),
-            ("OCGEN_CHECK_TIMEOUT", "1"),
-            ("GH_TOKEN", "ghp_test"),
-            ("NPM_TOKEN", "npm_test"),
-        ];
-        if sandbox {
-            env.extend(sb.iter().map(|(k, v)| (*k, v.as_str())));
-        }
-        if rust {
-            run_bin("subagent-confidence-gate", &env, &payload)
-        } else {
-            let env: HashMap<String, String> = env
-                .iter()
-                .map(|(k, v)| (k.to_string(), v.to_string()))
-                .collect();
-            run_sh(dir.path(), "subagent-confidence-gate", &env, &payload)
-        }
-    };
-    let check = r#"test -z "${GH_TOKEN+x}${NPM_TOKEN+x}""#;
-    for rust in [false, true] {
-        let who = if rust { "rust" } else { "sh" };
-        assert_eq!(
-            run(check, true, rust).0,
-            0,
-            "{who}: withheld in the sandbox"
-        );
-        assert_eq!(run(check, false, rust).0, 2, "{who}: there without it");
-        // The timeout still takes the whole sandboxed check down.
-        let started = std::time::Instant::now();
-        let o = run("sleep 30 & echo $! > gc.pid; sleep 30", true, rust);
-        assert!(started.elapsed().as_secs() < 20, "{who}: timed out");
-        assert!(o.2.contains("(exit timeout after 1s)"), "{who}: {o:?}");
-        let pid = fs::read_to_string(dir.path().join("wt/gc.pid")).unwrap();
-        let alive = Command::new("kill")
-            .args(["-0", pid.trim()])
-            .output()
-            .unwrap()
-            .status
-            .success();
-        if alive {
-            let _ = Command::new("kill").args(["-9", pid.trim()]).output();
-        }
-        assert!(!alive, "{who}: the check's child was killed too");
-    }
+/// A home folder outside the project (whatever lies in the project is
+/// writable), with an approval and a credential in it.
+#[cfg(unix)]
+fn sandbox_home() -> TempDir {
+    let home = tempfile::tempdir().unwrap();
+    write(home.path(), ".claude/ocgen/approvals/old", "1\n");
+    write(home.path(), ".ssh/id_test", "secret\n");
+    home
 }
 
-#[cfg(target_os = "macos")]
+/// The worker gate's check `check` run by the binary, in the sandbox, with
+/// `home` as the home folder: its exit code and stderr.
+#[cfg(unix)]
+fn sandboxed_worker(dir: &Path, home: &Path, check: &str) -> Out {
+    let d = ocgen::paths::for_shell(dir);
+    let h = ocgen::paths::for_shell(home);
+    let payload = stop_event("w1", "general-purpose", "Confidence: 99%").replace("{dir}", &d);
+    let sb = sandbox_env();
+    let mut env: Vec<(&str, &str)> = vec![
+        ("CLAUDE_PROJECT_DIR", &d),
+        ("HOME", &h),
+        ("SUBAGENT_CONFIDENCE_THRESHOLD", "0"),
+        ("OCGEN_CHECK_TIMEOUT", "30"),
+        ("OCGEN_CHECK_CMD", check),
+        ("GH_TOKEN", "ghp_test"),
+        ("NPM_TOKEN", "npm_test"),
+    ];
+    env.extend(sb.iter().map(|(k, v)| (*k, v.as_str())));
+    run_bin("subagent-confidence-gate", &env, &payload)
+}
+
+#[cfg(unix)]
+#[test]
+fn a_sandboxed_check_does_its_work_and_nothing_else() {
+    let dir = project();
+    dirty_wt(dir.path());
+    fs::create_dir_all(dir.path().join("wt/out")).unwrap();
+    let home = sandbox_home();
+    let run = |check: &str| sandboxed_worker(dir.path(), home.path(), check);
+    // Its own work goes ahead (in a folder of the worker's: under Landlock
+    // nothing new can be created at its top), without the withheld
+    // credentials in its env.
+    let o = run(
+        r#"echo built > out/built.txt && test -f out/built.txt && test -z "${GH_TOKEN+x}${NPM_TOKEN+x}""#,
+    );
+    assert_eq!(o.0, 0, "{o:?}");
+    assert!(dir.path().join("wt/out/built.txt").exists());
+    for check in [
+        // The approval store, however reached: written, created, renamed away.
+        "echo 9999999999 > \"$HOME/.claude/ocgen/approvals/old\"",
+        "mkdir -p \"$HOME/.claude/ocgen/approvals\" && echo 1 > \"$HOME/.claude/ocgen/approvals/new\"",
+        "mv \"$HOME/.claude\" \"$HOME/moved\"",
+        // A credential.
+        "cat \"$HOME/.ssh/id_test\"",
+        // What Claude Code and git run unsandboxed, in the project and in the
+        // worker's own folder.
+        "echo x >> ../.claude/settings.json",
+        "echo x > ../.claude/settings.local.json",
+        "echo x > ../.claude/statusline.sh",
+        "echo x > ../.git/hooks/pre-push",
+        "mkdir -p .claude/hooks && echo x > .claude/hooks/a.sh",
+        "mv ../.claude ../c2",
+    ] {
+        let o = run(check);
+        assert_eq!(o.0, 2, "{check}: {o:?}");
+    }
+    let store = home.path().join(".claude/ocgen/approvals");
+    assert_eq!(fs::read_to_string(store.join("old")).unwrap(), "1\n");
+    assert!(!store.join("new").exists());
+    assert!(home.path().join(".ssh/id_test").exists());
+    assert!(!dir.path().join(".claude/settings.local.json").exists());
+    assert!(!dir.path().join("wt/.claude/hooks/a.sh").exists());
+    assert!(dir.path().join(".claude").is_dir());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_sandboxed_check_still_times_out_with_everything_it_started() {
+    let dir = project();
+    dirty_wt(dir.path());
+    fs::create_dir_all(dir.path().join("wt/out")).unwrap();
+    let home = sandbox_home();
+    let d = ocgen::paths::for_shell(dir.path());
+    let h = ocgen::paths::for_shell(home.path());
+    let payload = stop_event("w1", "general-purpose", "Confidence: 99%").replace("{dir}", &d);
+    let sb = sandbox_env();
+    // A child that ticks into a file: its PID would mean nothing out here
+    // (bubblewrap gives the check a PID namespace of its own).
+    let mut env: Vec<(&str, &str)> = vec![
+        ("CLAUDE_PROJECT_DIR", &d),
+        ("HOME", &h),
+        ("SUBAGENT_CONFIDENCE_THRESHOLD", "0"),
+        (
+            "OCGEN_CHECK_CMD",
+            "(while :; do echo x >> out/tick; sleep 0.2; done) & sleep 30",
+        ),
+        ("OCGEN_CHECK_TIMEOUT", "2"),
+    ];
+    env.extend(sb.iter().map(|(k, v)| (*k, v.as_str())));
+    let started = std::time::Instant::now();
+    let o = run_bin("subagent-confidence-gate", &env, &payload);
+    assert!(started.elapsed().as_secs() < 20, "timed out");
+    assert!(o.2.contains("(exit timeout after 2s)"), "{o:?}");
+    let tick = dir.path().join("wt/out/tick");
+    let size = || fs::metadata(&tick).map_or(0, |m| m.len());
+    let before = size();
+    assert!(before > 0, "the child ran");
+    std::thread::sleep(std::time::Duration::from_secs(2));
+    assert_eq!(size(), before, "the check's child was killed too");
+}
+
+#[cfg(unix)]
 #[test]
 fn the_team_check_and_the_formatter_run_sandboxed_too() {
-    let mut team = step(
-        "team-task-completed",
-        &[("OCGEN_CHECK_TIMEOUT", "20")],
-        checked_task("t1", "x"),
-        2,
-    )
-    .setup(|d: &Path| write(d, ".home/.claude/ocgen/approvals/old", "1\n"))
-    .err("Operation not permitted");
-    team.env.push((
-        "OCGEN_CHECK_CMD",
-        "echo 9999999999 > .home/.claude/ocgen/approvals/old".into(),
-    ));
-    team.env.extend(sandbox_env());
-    let edit = json!({
-        "session_id": "s", "cwd": "{dir}", "hook_event_name": "PostToolUse",
-        "tool_name": "Edit", "tool_input": { "file_path": "{dir}/src/lib.rs" },
-    })
-    .to_string();
-    let mut fmt = step("format", &[], edit, 0)
-        .setup(|d: &Path| write(d, ".home/.claude/ocgen/approvals/old", "1\n"))
-        .err("format hook:");
-    fmt.env.push((
-        "OCGEN_FORMAT_CMD",
-        "echo formatted > fmt.txt; echo 9999999999 > .home/.claude/ocgen/approvals/old".into(),
-    ));
-    fmt.env.extend(sandbox_env());
-    let (a, b) = parity("sandboxed team check and formatter", &[team, fmt], JQ);
-    for d in [a.path(), b.path()] {
-        let old = d.join(".home/.claude/ocgen/approvals/old");
-        assert_eq!(fs::read_to_string(old).unwrap(), "1\n");
-        assert!(d.join("fmt.txt").exists(), "the formatter ran");
-    }
-}
-
-/// A folder on PATH with the tools the worker gate uses, and `extra` scripts
-/// (`name`, body) — so a test controls what `uname` says and whether `bwrap`
-/// exists.
-#[cfg(unix)]
-fn tool_dir(extra: &[(&str, &str)]) -> TempDir {
-    use std::os::unix::fs::PermissionsExt;
-    let bin = tempfile::tempdir().unwrap();
-    for tool in [
-        "sh", "cat", "awk", "grep", "head", "sed", "tr", "cut", "git", "cksum", "tail", "ps",
-        "sleep", "mktemp", "rm", "mkdir", "date", "dirname", "setsid", "readlink", "env", "touch",
-        "jq",
-    ] {
-        let found = Command::new("sh")
-            .args(["-c", &format!("command -v {tool}")])
-            .output()
-            .unwrap();
-        let path = String::from_utf8_lossy(&found.stdout).trim().to_string();
-        if path.starts_with('/') {
-            std::os::unix::fs::symlink(&path, bin.path().join(tool)).unwrap();
-        }
-    }
-    for (name, body) in extra {
-        let p = bin.path().join(name);
-        fs::write(&p, body).unwrap();
-        fs::set_permissions(&p, fs::Permissions::from_mode(0o755)).unwrap();
-    }
-    bin
-}
-
-/// A fake `uname` that says Linux.
-#[cfg(unix)]
-const LINUX_UNAME: &str = "#!/bin/sh\necho Linux\n";
-
-/// A fake `bwrap`: logs its arguments, one per line, to `bwrap.log` in the
-/// folder it runs in, then runs the command after the options (from `/bin/sh`).
-#[cfg(unix)]
-const FAKE_BWRAP: &str = "#!/bin/sh\nprintf '%s\\n' \"$@\" > bwrap.log\nwhile [ $# -gt 0 ] && [ \"$1\" != /bin/sh ]; do shift; done\nexec \"$@\"\n";
-
-/// A worker isolated in a worktree under the project's `.claude/`, as Claude
-/// Code makes them, plus the home and project files the sandbox protects.
-#[cfg(unix)]
-fn isolated_worker(d: &Path) {
-    let wt = d.join(".claude/worktrees/w1");
-    if !wt.exists() {
-        fs::create_dir_all(&wt).unwrap();
-        git(&wt, &["init", "-q"]);
-        fs::write(wt.join("new.rs"), "// change\n").unwrap();
-    }
-    write(d, ".home/.claude/ocgen/approvals/old", "1\n");
-    write(d, ".home/.ssh/id_test", "secret\n");
-    write(d, ".home/.npmrc", "//registry.npmjs.org/:_authToken=x\n");
-}
-
-/// Linux: the sh twin's bubblewrap command line is exactly the one the Rust
-/// twin builds (`hooks::bwrap_args`) — checked on any Unix with a fake
-/// `uname` and `bwrap`; on Linux the Rust hook runs it too.
-#[cfg(unix)]
-#[test]
-fn linux_runs_the_check_in_bubblewrap_the_same_way() {
-    use ocgen::hooks::{bwrap_args, SandboxSpec};
-    let bin = tool_dir(&[("uname", LINUX_UNAME), ("bwrap", FAKE_BWRAP)]);
-    let path = ocgen::paths::for_shell(bin.path());
-    let sb = sandbox_env();
-    for (variant, extra) in [("jq", JQ), ("no jq", NO_JQ)] {
-        let dir = project();
-        isolated_worker(dir.path());
-        let d = ocgen::paths::for_shell(dir.path());
-        let wt = dir.path().join(".claude/worktrees/w1");
-        let log = wt.join("bwrap.log");
-        let payload = stop_event("w1", "general-purpose", "Confidence: 99%")
-            .replace("{dir}/wt", "{dir}/.claude/worktrees/w1")
-            .replace("{dir}", &d);
-        let mut env: HashMap<String, String> = [
-            ("CLAUDE_PROJECT_DIR", d.clone()),
-            ("HOME", format!("{d}/.home")),
-            ("PATH", path.clone()),
-            ("SUBAGENT_CONFIDENCE_THRESHOLD", "0".into()),
-            ("OCGEN_CHECK_CMD", "echo ran > ran.txt".into()),
-        ]
-        .into_iter()
-        .map(|(k, v)| (k.to_string(), v))
-        .collect();
-        env.extend(sb.iter().map(|(k, v)| (k.to_string(), v.clone())));
-        for (k, v) in extra {
-            env.insert(k.to_string(), v.to_string());
-        }
-        let want: Vec<String> = bwrap_args(&SandboxSpec {
-            deny_write: &env["OCGEN_SANDBOX_DENY_WRITE"],
-            deny_read: &env["OCGEN_SANDBOX_DENY_READ"],
-            home: &env["HOME"],
-            project: dir.path(),
-            dir: &wt,
-        })
-        .into_iter()
-        .chain(["/bin/sh", "-c", "echo ran > ran.txt"].map(String::from))
-        .collect();
-        // One twin at a time: both write the same bwrap.log.
-        let mut twins = vec!["sh"];
-        if cfg!(target_os = "linux") {
-            twins.push("rust");
-        }
-        for who in twins {
-            let o = match who {
-                "sh" => run_sh(dir.path(), "subagent-confidence-gate", &env, &payload),
-                _ => run_rs("subagent-confidence-gate", &env, &payload),
-            };
-            assert_eq!(o.0, 0, "{variant} {who}: {o:?}");
-            let got: Vec<String> = fs::read_to_string(&log)
-                .unwrap()
-                .lines()
-                .map(String::from)
-                .collect();
-            assert_eq!(got, want, "{variant} {who}");
-            fs::remove_file(&log).unwrap();
-        }
-        assert!(wt.join("ran.txt").exists());
-        // The command line protects the store and the project's .claude (the
-        // worker's folder in it stays writable), and hides the credentials.
-        let real = |p: &Path| fs::canonicalize(p).unwrap().to_string_lossy().into_owned();
-        let (home, p, w) = (real(&dir.path().join(".home")), real(dir.path()), real(&wt));
-        let has = |opt: &str, arg: &str| want.windows(2).any(|x| x[0] == opt && x[1] == arg);
-        assert!(has("--ro-bind", &format!("{home}/.claude")), "{want:?}");
-        assert!(has("--ro-bind", &format!("{p}/.claude")), "{want:?}");
-        let ro = want.iter().position(|a| *a == format!("{p}/.claude"));
-        let rw = want.iter().rposition(|a| *a == w);
-        assert!(rw > ro, "the worker's folder is re-opened after: {want:?}");
-        assert!(has("--tmpfs", &format!("{home}/.ssh")), "{want:?}");
-        assert!(
-            want.windows(3).any(|x| x[0] == "--ro-bind"
-                && x[1] == "/dev/null"
-                && x[2] == format!("{home}/.npmrc")),
-            "{want:?}"
-        );
-    }
-}
-
-/// Without bubblewrap a Linux check doesn't run at all — never unsandboxed.
-#[cfg(unix)]
-#[test]
-fn linux_without_bubblewrap_refuses_to_run_the_check() {
-    let bin = tool_dir(&[("uname", LINUX_UNAME)]);
     let dir = project();
-    isolated_worker(dir.path());
+    let home = sandbox_home();
     let d = ocgen::paths::for_shell(dir.path());
-    let payload = stop_event("w1", "general-purpose", "Confidence: 99%").replace("{dir}", &d);
-    dirty_wt(dir.path());
-    let mut env: HashMap<String, String> = [
-        ("CLAUDE_PROJECT_DIR", d.clone()),
-        ("HOME", format!("{d}/.home")),
-        ("PATH", ocgen::paths::for_shell(bin.path())),
-        ("SUBAGENT_CONFIDENCE_THRESHOLD", "0".into()),
-        ("OCGEN_CHECK_CMD", "echo ran > ran.txt".into()),
-        ("OCGEN_NO_JQ", "1".into()),
-    ]
-    .into_iter()
-    .map(|(k, v)| (k.to_string(), v))
-    .collect();
-    env.extend(sandbox_env().into_iter().map(|(k, v)| (k.to_string(), v)));
-    let mut runs = vec![(
-        "sh",
-        run_sh(dir.path(), "subagent-confidence-gate", &env, &payload),
-    )];
-    if cfg!(target_os = "linux") {
-        runs.push(("rust", run_rs("subagent-confidence-gate", &env, &payload)));
-    }
-    let first = runs[0].1 .2.lines().next().map(String::from);
-    for (who, o) in &runs {
-        assert_eq!(o.0, 2, "{who}: {o:?}");
-        assert!(o.2.contains("(exit not run)"), "{who}: {o:?}");
-        assert!(
-            o.2.contains("bubblewrap (bwrap) isn't installed"),
-            "{who}: {o:?}"
-        );
-        assert_eq!(o.2.lines().next().map(String::from), first, "{who}");
-    }
-    assert!(
-        !dir.path().join("wt/ran.txt").exists(),
-        "never run unsandboxed"
+    let h = ocgen::paths::for_shell(home.path());
+    let sb = sandbox_env();
+    let base = |extra: &[(&'static str, &'static str)]| {
+        let mut env: Vec<(&str, &str)> = vec![("CLAUDE_PROJECT_DIR", &d), ("HOME", &h)];
+        env.extend(sb.iter().map(|(k, v)| (*k, v.as_str())));
+        env.extend(extra.iter().copied());
+        env
+    };
+    let store = "echo 9999999999 > \"$HOME/.claude/ocgen/approvals/old\"";
+    let team = base(&[("OCGEN_CHECK_TIMEOUT", "30"), ("OCGEN_CHECK_CMD", store)]);
+    let o = run_bin(
+        "team-task-completed",
+        &team,
+        &checked_task("t1", "x").replace("{dir}", &d),
     );
-
-    // The formatter is skipped with the same reason (it never blocks).
-    let edit = json!({ "tool_name": "Edit", "tool_input": { "file_path": "{dir}/x.rs" } })
+    assert_eq!(o.0, 2, "{o:?}");
+    fs::create_dir_all(dir.path().join("src")).unwrap();
+    let fmt_cmd =
+        "echo formatted > src/fmt.txt; echo 9999999999 > \"$HOME/.claude/ocgen/approvals/old\"";
+    let fmt = base(&[("OCGEN_FORMAT_CMD", fmt_cmd)]);
+    let edit = json!({ "tool_name": "Edit", "tool_input": { "file_path": "{dir}/src/lib.rs" } })
         .to_string()
         .replace("{dir}", &d);
-    env.insert("OCGEN_FORMAT_CMD".into(), "echo x > fmt.txt".into());
-    let o = run_sh(dir.path(), "format", &env, &edit);
-    assert_eq!(o.0, 0);
-    assert!(
-        o.2.starts_with("format hook: 'echo x > fmt.txt' not run: the project's sandbox is on"),
-        "{o:?}"
-    );
-    if cfg!(target_os = "linux") {
-        assert_eq!(run_rs("format", &env, &edit).2, o.2);
-    }
-    assert!(!dir.path().join("fmt.txt").exists());
-}
-
-/// Linux with a working bubblewrap (skipped without one): the check can't reach
-/// the store, the credentials or the project's Claude Code settings.
-#[cfg(target_os = "linux")]
-#[test]
-fn bubblewrap_keeps_the_check_off_the_store_and_the_settings() {
-    let usable = Command::new("bwrap")
-        .args(["--dev-bind", "/", "/", "true"])
-        .output()
-        .is_ok_and(|o| o.status.success());
-    if !usable {
-        eprintln!("skipped: no usable bwrap here");
-        return;
-    }
-    let steps = vec![
-        sandboxed_check("echo built > out.txt && test -f out.txt", 0),
-        sandboxed_check("echo 9999999999 > ../.home/.claude/ocgen/approvals/old", 2),
-        sandboxed_check("cat ../.home/.ssh/id_test", 2),
-        sandboxed_check("echo x >> ../.claude/settings.json", 2),
-        sandboxed_check("echo x > ../.claude/settings.local.json", 2),
-        sandboxed_check("mv ../.home/.claude ../.home/moved", 2),
-    ];
-    let (a, b) = parity("bubblewrap", &steps, NO_JQ);
-    for d in [a.path(), b.path()] {
-        let old = d.join(".home/.claude/ocgen/approvals/old");
-        assert_eq!(fs::read_to_string(old).unwrap(), "1\n");
-        assert!(!d.join(".claude/settings.local.json").exists());
-        assert!(d.join("wt/out.txt").exists());
-    }
-}
-
-/// Native Windows has no sandbox: the check runs as it always has.
-#[cfg(windows)]
-#[test]
-fn windows_runs_the_check_as_before_with_the_sandbox_on() {
-    let mut ok = sandboxed_check("echo built > out.txt", 0);
-    ok.env.retain(|(k, _)| *k != "OCGEN_CHECK_TIMEOUT");
-    let (a, b) = parity("windows sandbox", &[ok], NO_JQ);
-    for d in [a.path(), b.path()] {
-        assert!(d.join("wt/out.txt").exists());
-    }
+    let o = run_bin("format", &fmt, &edit);
+    assert_eq!(o.0, 0, "{o:?}");
+    assert!(o.2.contains("format hook:"), "{o:?}");
+    assert!(dir.path().join("src/fmt.txt").exists(), "the formatter ran");
+    let old = home.path().join(".claude/ocgen/approvals/old");
+    assert_eq!(fs::read_to_string(old).unwrap(), "1\n");
 }
