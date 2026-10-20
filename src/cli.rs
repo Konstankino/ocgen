@@ -256,23 +256,6 @@ pub enum SandboxAction {
         /// The command, as one argument (quote it).
         command: String,
     },
-    /// Native Windows: give the project's AppContainer its permissions now
-    /// (the first sandboxed check does it otherwise, which can take a while).
-    Grant {
-        /// Directory inside the project (default: current dir).
-        #[arg(long, short, default_value = ".")]
-        path: String,
-    },
-    /// Native Windows: take the permissions ocgen gave the project's
-    /// AppContainer off its files and delete the container.
-    Reset {
-        /// Directory inside the project (default: current dir).
-        #[arg(long, short, default_value = ".")]
-        path: String,
-        /// Every project's, and the toolchains' shared grants too.
-        #[arg(long)]
-        all: bool,
-    },
 }
 
 #[derive(Subcommand)]

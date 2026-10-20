@@ -505,15 +505,10 @@ fn doctor_cancel_writes_nothing() {
 use crate::cli::{OutputArg, TeamCli};
 use ocgen::claude::sandbox_supported;
 
-/// Enter on the sandbox question and its follow-ups: extra domains,
-/// credentials and — where ocgen sandboxes the commands Claude runs (native
-/// Windows) — their network.
+/// Enter on the sandbox question and its follow-ups: extra domains and
+/// credentials.
 fn sandbox_yes() -> Vec<&'static str> {
-    let mut a = vec!["", "", ""];
-    if ocgen::claude::ocgen_sandboxes_shell() {
-        a.push("");
-    }
-    a
+    vec!["", "", ""]
 }
 
 /// Answers for `new` on a Claude project up to the sandbox question, keeping
@@ -725,25 +720,16 @@ fn edit_team_without_the_gate_does_not_ask_about_the_sandbox() {
 #[test]
 fn the_sandbox_help_names_the_gate_only_when_it_is_on() {
     use super::{sandbox_help_for, Sandboxer};
-    for by in [Sandboxer::ClaudeCode, Sandboxer::Ocgen] {
-        // Supported: with the gate it says what the gate is without the sandbox.
-        assert!(sandbox_help_for(by, true).contains("approval gate is advisory only"));
-        // …and claims no more than it keeps away.
-        assert!(sandbox_help_for(by, true).contains("the credentials ocgen knows about"));
-        assert!(!sandbox_help_for(by, true).contains("however"));
-        assert!(!sandbox_help_for(by, false).contains("approval gate"));
-    }
-    // Native Windows: ocgen's own sandbox, and the rules checked against the
-    // command as written.
-    let win = sandbox_help_for(Sandboxer::Ocgen, true);
-    assert!(
-        win.contains("ocgen runs the PowerShell commands")
-            && win.contains("refuses its Bash commands")
-            && win.contains("AppContainer"),
-        "{win}"
-    );
-    assert!(win.contains("permission rules"), "{win}");
-    // A platform with none: the gate is advisory there, when there is one.
+    let by = Sandboxer::ClaudeCode;
+    // Supported: with the gate it says what the gate is without the sandbox.
+    assert!(sandbox_help_for(by, true).contains("approval gate is advisory only"));
+    // …and claims no more than it keeps away.
+    assert!(sandbox_help_for(by, true).contains("the credentials ocgen knows about"));
+    assert!(!sandbox_help_for(by, true).contains("however"));
+    assert!(!sandbox_help_for(by, false).contains("approval gate"));
+    // A platform with none (native Windows among them): the gate is advisory
+    // there, when there is one, and WSL2 is named as where it works.
+    assert!(sandbox_help_for(Sandboxer::None, false).contains("WSL2"));
     assert!(sandbox_help_for(Sandboxer::None, true).contains("approval gate is advisory"));
     let off = sandbox_help_for(Sandboxer::None, false);
     assert!(off.contains("isn't available on this platform"), "{off}");

@@ -459,12 +459,11 @@ delete as stale (`-`) is listed with a short diff.
   the helpers git uses in the repository and never runs one. A settings file that takes back
   the empty-helper reset fails, like any other weakened setting;
 - **sandbox:** warns when the approval gate is on and the sandbox off (the gate is then advisory),
-  on Linux when `bwrap` is missing, and on native Windows until ocgen's own sandbox runs the
-  commands Claude runs there (its hook in place, ocgen on PATH, the project granted — see
-  *Native Windows* below);
+  on Linux when `bwrap` is missing, and on native Windows with the sandbox on, where nothing runs
+  sandboxed (see *Native Windows* below);
 - **hooks' sandbox:** names the sandbox that runs the check and the formatter on this machine
-  (Seatbelt, bubblewrap, Landlock or an AppContainer) and what it grants, and fails when none
-  can — then they never run;
+  (Seatbelt, bubblewrap or Landlock) and what it grants, and fails when none can — then they
+  never run;
 - **git pre-push hook:** it runs the installed hook as git would — it must refuse a push made under
   Claude Code and let yours through, and it fails if it isn't executable;
 - **line endings:** a generated script with CRLF endings fails, with the fix;
@@ -1725,26 +1724,13 @@ the gates stop taking the agent's word alone:
     AppArmor restriction), Landlock with seccomp (Linux 6.2 or later). Landlock can't keep a
     path read-only inside a writable folder, so under it nothing new can be created right in the
     project's top folder, `.git/` or `.claude/` (a check that creates `target/` there the first
-    time fails, and `ocgen verify` warns). On native Windows (no WSL needed), an
-    AppContainer in a job object: ocgen puts access entries on the granted folders the first time
-    (`ocgen sandbox grant` does it ahead, `ocgen sandbox reset` takes them off again). Windows
-    doesn't hold an AppContainer to a deny entry or a higher integrity label inside a folder that
-    grants it, so a protected path, and each folder on the way to it, stops inheriting the
-    project's grant: the path gets only reading, and the folders can't be removed or renamed.
-    `ocgen sandbox reset` gives them their inheritance back. The writable folders are labelled Low
-    integrity, without which the container can't create or delete anything there; in a folder your
-    account can't relabel (one made right on `C:\`, such as `C:\dev\…`), ocgen gives your account
-    that right for as long as it labels, as the folder's owner. A batch file (`.cmd`, `.bat`,
-    `npm.cmd`) runs through `cmd /c call`. ocgen checks that
-    each command starts in the project's container at Low integrity before it runs (and ends it if
-    not), and runs the check as one program without a shell (`cargo test --locked`; a pipe or `&&` is refused,
-    and a backslash is part of a path, as in `.\scripts\check.cmd`):
-    Git Bash can't run reliably in an AppContainer (its runtime needs a shared object folder a
-    container may not create, and a command that dies of it can still end with 0). Loopback stays closed
-    there even with the network on. With UAC off (`EnableLUA` 0) ocgen doesn't use an AppContainer. Where none of these works, a command that is a WASI module
-    (`*.wasm`) runs in wasmtime; anything else isn't run and counts as failed, and the formatter
-    is skipped. Never unsandboxed.
-  - Where a sandbox can only protect what exists (bubblewrap, Windows), a protected file the
+    time fails, and `ocgen verify` warns). Native Windows has none: the sandbox Windows offers a
+    program (an AppContainer) can't open the `NUL` device, which cargo, git and most tools open,
+    so they fail in it. There only a command that is a WASI module (`*.wasm`) runs, in wasmtime;
+    anything else isn't run and counts as failed, and the formatter is skipped — run Claude Code
+    and ocgen in WSL2, where bubblewrap works. Elsewhere too, where none of these works, a WASI
+    module runs in wasmtime and nothing else does. Never unsandboxed.
+  - Where a sandbox can only protect what exists (bubblewrap), a protected file the
     check creates right in the project (`.mcp.json`) is moved aside afterwards and the check fails.
   - **Only the binary** applies it: with the sandbox on, the bundled scripts never run the check or
     the formatter, so install ocgen (`ocgen verify` fails without it).
@@ -1768,43 +1754,12 @@ The approval gate matches command text, so it isn't the only safety line:
     the default is yes; otherwise no. A no is remembered, the summary shows
     `sandbox: off — the approval gate is advisory`, `ocgen edit team` offers it again (Enter keeps
     your no), and `ocgen verify` warns.
-  - **Native Windows:** Claude Code has no sandbox there, so ocgen runs the PowerShell commands
-    Claude runs in its own — the AppContainer the hooks' check runs in (see the hooks' sandbox,
-    above) — and refuses its Bash commands, since Git Bash can't run reliably in an AppContainer
-    (turn on Claude Code's PowerShell tool: `CLAUDE_CODE_USE_POWERSHELL_TOOL=1`). A `PreToolUse`
-    hook (`shell-sandbox`) rewrites each PowerShell command so it runs through `ocgen __sandbox`,
-    with the command itself left as written in the middle (a here-string), so a permission prompt
-    still shows what runs. It runs in a `Project:` drive rooted at the project (`Get-Location` shows
-    `Project:\…`, relative paths are the project's): in an AppContainer, PowerShell can't make the
-    project's own path its location.
-    Claude Code checks its permission rules against that rewritten command, which none of them
-    match, so the hook checks the project's rules (the user's, the project's, the local and the
-    managed settings) against the command as written: a deny rule denies it, an ask rule asks, and
-    anything else runs sandboxed without a prompt — as Claude Code does for a command its own
-    sandbox runs (`sandbox.autoAllowBashIfSandboxed`; in plan and auto mode Claude Code decides).
-    Inside, a command writes only the project, its git folders (not their `hooks` or `config`) and
-    the dependency caches; reads only those and the toolchains; can't write the approval store or
-    any path the hooks' sandbox protects; and runs without the credentials ocgen knows about. The
-    approval gate still judges the command as written. On macOS, Linux and WSL2 the hook stops at
-    a shell test and never starts ocgen.
-    - **Setup:** `ocgen new` and `ocgen edit team` give the project's AppContainer its permissions
-      when you turn the sandbox on (`ocgen sandbox grant` does it later, and checks again whether
-      PowerShell starts in it). Until then — or without the ocgen that generated the project on
-      PATH, or where PowerShell can't start in an AppContainer — the hook refuses the command and
-      says why: ocgen never runs it unsandboxed.
-    - **Network:** on by default (`claude.sandbox.agent_network`; the wizard asks). The
-      AppContainer allows all of the network or none: it can't keep to the allowed domains as
-      Claude Code's sandbox does. A push still fails without your credentials.
-    - **Differences from an unsandboxed command:** a `cd` inside it doesn't carry over to the next
-      command, nor do shell functions and aliases from your shell's startup; it runs only inside
-      the project (a command from a folder outside it is refused); it can't read your files outside
-      the project, the toolchains and the caches; and its temporary folder is the container's own.
-      Output, errors and the exit code are the command's own.
-    - **What it doesn't cover:** the Monitor tool and MCP tools run as they are; rules passed only
-      on the command line (`--disallowedTools`) are out of the hook's sight; and "don't ask again"
-      on a prompt saves a rule for the rewritten command, not yours. Another hook that rewrites
-      Bash commands races this one (Claude Code keeps whichever ends last), so ocgen's no-op `cd`
-      hook stands down there.
+  - **Native Windows:** Claude Code has no sandbox there, and ocgen's can't run there either (see
+    the hooks' sandbox, above). So with the sandbox on, a `PreToolUse` hook (`shell-sandbox`)
+    refuses every Bash and PowerShell command Claude runs, and says to run Claude Code and ocgen
+    in WSL2, where the sandbox works, or to turn it off for the project (`ocgen edit team`) —
+    ocgen never runs a command unsandboxed. `ocgen new` doesn't offer the sandbox on native
+    Windows. On macOS, Linux and WSL2 the hook stops at a shell test and never starts ocgen.
   - **Where it stops:** it contains shell commands, not the file tools — so with the gate on,
     `settings.json` always asks before edits to the gate's hook scripts, `settings*.json`, the
     state file, the statusline and any `.git/hooks/**`, and before `ocgen edit` and
@@ -1917,7 +1872,7 @@ defaults to `.`.
 | `ocgen new [dir] --target claude --output plugin` | Emit a distributable plugin instead of the project tree. |
 | `ocgen new [dir] --target claude --output both --repo <owner/repo>` | Emit both the project **and** a plugin (marketplace + release workflow). |
 | `ocgen new [dir] --target claude --team` | Also enable Agent Teams (env flag + `/team` + hooks + guidance). With the approval gate on, the sandbox question defaults to yes (macOS, Linux/WSL2). |
-| `ocgen edit team -p <dir>` | Turn Agent Teams and its gates on, off or retune them later. With the approval gate on and the sandbox off, it offers the sandbox (on native Windows, ocgen's own; turning it on grants the project). |
+| `ocgen edit team -p <dir>` | Turn Agent Teams and its gates on, off or retune them later. With the approval gate on and the sandbox off, it offers the sandbox (macOS, Linux/WSL2). |
 | `ocgen edit language -p <dir> [--prompts L] [--answers L]` | Change the instruction language (re-seeds the preset agents you didn't edit; lists the rest) or the answer language (the coordinator's answer line and Claude Code's `language` setting). Without flags it asks. See [Languages](#languages). |
 
 `--output` is `project` (default) / `plugin` / `both`; `--repo` is the GitHub `owner/repo`
@@ -1955,10 +1910,8 @@ for a plugin; `--team` is off by default. (The `--base-url` flag is OpenCode-onl
 | `ocgen notes render <file.md>…` | Render `/inquire` ledgers (`.claude/notes/<topic-slug>.md`), `/recap` reports (`.claude/notes/recap/<date>.md`) and `/intent` reading copies (`.claude/intent/view/<name>.md`), in any of the project's languages, to their HTML pages without opening them; any other file is refused. |
 | `ocgen draft [name] [-p dir]` | Open an `/intent` or `/review-intent` issue draft (`.claude/intent/drafts/<name>.md`) in a local browser editor: edit it as formatted text (Markdown syntax hidden) or as Markdown source, save it back as plain Markdown (untouched blocks keep their exact text), preview it as GitHub shows it, and copy it. A calm black page by default (white on request), the text around the cursor dimmed, and a Focus button for full screen. With no name, the only draft, or with several, their list to pick from (10 a page, newest first); `ADR-0007` picks by intent. Typing `draft` in Claude Code does the same, with the draft that session wrote last selected in the list ([details](#from-findings-to-a-github-issue-intent)). |
 | `ocgen adr [name] [-p dir]` | Read an `/intent` file (`docs/adr/ADR-0007-<slug>.md` by default; the project's prefix and directory) in a local browser page, read-only and sanitized like the draft's preview, in the drafts' black or white palette. With no name, the only file, or with several, their list to pick from (10 a page, highest number first); a name, its start, or a number (`7`, `0007`, `ADR-7`) picks one. Typing the prefix in lowercase (`adr`) in Claude Code does the same, with the file that session wrote last selected ([details](#from-findings-to-a-github-issue-intent)). |
-| `ocgen sandbox status [-p dir] [--json]` | Which sandbox runs the hooks' check and formatter on this machine (Seatbelt, bubblewrap, Landlock, AppContainer, wasmtime for WASI modules), why the others can't, and what it grants. |
+| `ocgen sandbox status [-p dir] [--json]` | Which sandbox runs the hooks' check and formatter on this machine (Seatbelt, bubblewrap, Landlock, wasmtime for WASI modules; on native Windows, why there is none), why the others can't, and what it grants. |
 | `ocgen sandbox run '<command>' [-p dir]` | Run a command in the hooks' sandbox, the way the check runs (in the current folder when it is in the project). Exits as the command did. |
-| `ocgen sandbox grant [-p dir]` | Native Windows: give the project's AppContainer its access entries now, for the hooks' check and formatter and for the commands Claude runs (the hook refuses those until it's done; it can take a while on a big tree), and check again whether PowerShell starts in it. |
-| `ocgen sandbox reset [-p dir] [--all]` | Native Windows: take the entries ocgen put on the files off again and delete the project's AppContainer (`--all`: every project's, and the shared toolchain grants). |
 | `ocgen managed-settings` | Print a recommended organisation policy (`managed-settings.json`): no bypass mode, secrets unreadable, high-impact commands always ask, strict sandbox. |
 | `ocgen fields` (alias `reference`) | Explain every configurable field, including the Claude-specific ones (alias, tools, skills, output/plugin, agent teams). |
 

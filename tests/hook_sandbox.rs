@@ -1,8 +1,8 @@
 //! The hooks' own sandbox, end to end: `ocgen sandbox run` runs a command the
 //! way the hooks run the check, in whichever sandbox this machine has —
-//! Seatbelt on macOS, bubblewrap or Landlock on Linux, an AppContainer on
-//! native Windows. These start a real sandbox, so they can't run inside
-//! another one (Claude Code's own, say): CI runs them on every OS. Set
+//! Seatbelt on macOS, bubblewrap or Landlock on Linux; native Windows has none,
+//! and refuses. These start a real sandbox, so they can't run inside another
+//! one (Claude Code's own, say): CI runs them on every OS. Set
 //! `OCGEN_TEST_SANDBOX_EXPECT` to the sandbox the machine must use, and
 //! `OCGEN_TEST_NETWORK=1` where the internet is reachable.
 
@@ -77,9 +77,6 @@ fn ocgen(f: &Fixture, args: &[&str]) -> std::process::Output {
         .env("USERPROFILE", &f.home)
         .env_remove("CLAUDE_CONFIG_DIR")
         .env("GH_TOKEN", "ghp_test")
-        // Git Bash would turn `cmd /c` into `cmd C:/` (Windows only).
-        .env("MSYS_NO_PATHCONV", "1")
-        .env("MSYS2_ARG_CONV_EXCL", "*")
         .output()
         .unwrap()
 }
@@ -96,74 +93,13 @@ fn run(f: &Fixture, cmd: &str) -> (i32, String) {
     (o.status.code().unwrap_or(-1), text)
 }
 
-/// The same command on every OS: `sh` syntax, or on Windows a `cmd` line any
-/// runner there passes on unchanged (`{home}` is the home folder).
-struct Cmd {
-    unix: &'static str,
-    windows: &'static str,
-}
-
-impl Cmd {
-    fn text(&self, f: &Fixture) -> String {
-        if cfg!(windows) {
-            let home = f.home.display().to_string();
-            format!("cmd /d /s /c \"{}\"", self.windows.replace("{home}", &home))
-        } else {
-            self.unix.to_string()
-        }
-    }
-}
-
 /// What `ocgen sandbox run` says when it finds the hooks' sandbox off for the
 /// project: it ran nothing.
+#[cfg(unix)]
 const OFF: &str = "the hooks' sandbox is off";
 
-/// On Windows, what a refused command that ended with 0 ran into: the
-/// permissions on the protected file and the folders above it, whether UAC is
-/// on, and what PowerShell says when it writes the file (cmd's exit code
-/// doesn't tell a write that went through from one that was refused).
-/// Nothing elsewhere.
-fn windows_state(f: &Fixture) -> String {
-    if !cfg!(windows) {
-        return String::new();
-    }
-    let file = f.p.join(r".claude\settings.json");
-    let mut s = String::new();
-    for path in [file.clone(), f.p.join(".claude"), f.p.clone()] {
-        let o = Command::new("icacls").arg(&path).output().unwrap();
-        s.push_str(&String::from_utf8_lossy(&o.stdout));
-    }
-    s.push_str(&uac());
-    let was = fs::read_to_string(&file).unwrap();
-    let who = run(f, "whoami /groups /fo csv /nh");
-    let ps = run(
-        f,
-        r#"powershell -NoProfile -NonInteractive -Command "Add-Content -LiteralPath .claude\settings.json -Value x -ErrorAction Stop""#,
-    );
-    let wrote = fs::read_to_string(&file).unwrap() != was;
-    fs::write(&file, was).unwrap();
-    s.push_str(&format!(
-        "whoami in the sandbox: {who:?}\nPowerShell's write in the sandbox: {ps:?}, went through: {wrote}"
-    ));
-    s
-}
-
-/// Whether UAC is on (`EnableLUA`), as the registry says: what Windows' own
-/// checks on an AppContainer may depend on.
-fn uac() -> String {
-    let o = Command::new("reg")
-        .args([
-            "query",
-            r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System",
-            "/v",
-            "EnableLUA",
-        ])
-        .output()
-        .unwrap();
-    String::from_utf8_lossy(&o.stdout).trim().to_string() + "\n"
-}
-
 /// The sandbox the machine must be using, when the environment says.
+#[cfg(unix)]
 fn expect_backend(f: &Fixture) {
     let Ok(want) = std::env::var("OCGEN_TEST_SANDBOX_EXPECT") else {
         return;
@@ -175,6 +111,7 @@ fn expect_backend(f: &Fixture) {
     assert_eq!(v["backend"], want.as_str(), "{v}");
 }
 
+#[cfg(unix)]
 #[test]
 fn a_sandboxed_command_does_its_work_and_nothing_else() {
     let f = fixture(false);
@@ -182,60 +119,31 @@ fn a_sandboxed_command_does_its_work_and_nothing_else() {
     // Its own work goes ahead, without the withheld credentials in its env
     // (in a folder of the project: under Landlock nothing new can be created
     // right at its top).
-    let ok = Cmd {
-        unix: r#"echo built > src/out.txt && test -f src/out.txt && test -z "${GH_TOKEN+x}""#,
-        windows: r"echo built> src\out.txt && if defined GH_TOKEN exit 1",
-    };
-    let o = run(&f, &ok.text(&f));
+    let o = run(
+        &f,
+        r#"echo built > src/out.txt && test -f src/out.txt && test -z "${GH_TOKEN+x}""#,
+    );
     assert_eq!(o.0, 0, "{o:?}");
     assert!(f.p.join("src/out.txt").exists());
 
     let settings_path = f.p.join(".claude/settings.json");
     let settings_was = fs::read_to_string(&settings_path).unwrap();
     let mut ran = Vec::new();
-    for c in [
+    for cmd in [
         // What Claude Code and git run unsandboxed: written, created, renamed.
-        Cmd {
-            unix: "echo x >> .claude/settings.json",
-            windows: r"echo x>> .claude\settings.json",
-        },
-        Cmd {
-            unix: "echo x > .claude/settings.local.json",
-            windows: r"echo x> .claude\settings.local.json",
-        },
-        Cmd {
-            unix: "echo x > .claude/hooks/a.sh",
-            windows: r"echo x> .claude\hooks\a.sh",
-        },
-        Cmd {
-            unix: "echo x > .claude/statusline.sh",
-            windows: r"echo x> .claude\statusline.sh",
-        },
-        Cmd {
-            unix: "echo x > .git/hooks/pre-push",
-            windows: r"echo x> .git\hooks\pre-push",
-        },
-        Cmd {
-            unix: "mv .claude c2",
-            windows: "move .claude c2",
-        },
+        "echo x >> .claude/settings.json",
+        "echo x > .claude/settings.local.json",
+        "echo x > .claude/hooks/a.sh",
+        "echo x > .claude/statusline.sh",
+        "echo x > .git/hooks/pre-push",
+        "mv .claude c2",
         // The approval store and a credential, outside the project.
-        Cmd {
-            unix: r#"echo 9999999999 > "$HOME/.claude/ocgen/approvals/old""#,
-            windows: r"echo 9999999999> {home}\.claude\ocgen\approvals\old",
-        },
-        Cmd {
-            unix: r#"cat "$HOME/.ssh/id_test""#,
-            windows: r"type {home}\.ssh\id_test",
-        },
+        r#"echo 9999999999 > "$HOME/.claude/ocgen/approvals/old""#,
+        r#"cat "$HOME/.ssh/id_test""#,
         // A protected file that doesn't exist yet: refused, or moved aside.
-        Cmd {
-            unix: "echo {} > .mcp.json",
-            windows: "echo {}> .mcp.json",
-        },
+        "echo {} > .mcp.json",
     ] {
-        let cmd = c.text(&f);
-        let o = run(&f, &cmd);
+        let o = run(&f, cmd);
         assert!(!o.1.contains(OFF), "{cmd}: ocgen didn't run it: {o:?}");
         if o.0 == 0 {
             ran.push(format!("{cmd}: {o:?}"));
@@ -259,9 +167,8 @@ fn a_sandboxed_command_does_its_work_and_nothing_else() {
     }
     assert!(
         ran.is_empty(),
-        "refused, yet ended with 0:\n{}\n{}",
-        ran.join("\n"),
-        windows_state(&f)
+        "refused, yet ended with 0:\n{}",
+        ran.join("\n")
     );
     let settings = fs::read_to_string(f.p.join(".claude/settings.json")).unwrap();
     assert!(settings.starts_with("{\"env\""), "{settings}");
@@ -277,17 +184,16 @@ fn a_sandboxed_command_does_its_work_and_nothing_else() {
     assert!(!f.p.join(".mcp.json").exists());
 }
 
-/// The command runs at Low integrity in its AppContainer, which keeps it from
-/// writing what isn't labelled for it.
+/// Native Windows has no sandbox for the check: it is refused, with what to
+/// do instead, and never run.
 #[cfg(windows)]
 #[test]
-fn the_container_runs_its_command_at_low_integrity() {
+fn native_windows_refuses_and_says_where_the_sandbox_works() {
     let f = fixture(false);
-    expect_backend(&f);
-    let o = run(&f, "whoami /groups /fo csv /nh");
-    assert_eq!(o.0, 0, "{o:?}");
-    // S-1-16-4096: Mandatory Label\Low Mandatory Level.
-    assert!(o.1.contains("S-1-16-4096"), "{o:?}\n{}", uac());
+    let o = run(&f, "cmd /d /c echo built> src\\out.txt");
+    assert_ne!(o.0, 0, "{o:?}");
+    assert!(o.1.contains("WSL2"), "{o:?}");
+    assert!(!f.p.join("src/out.txt").exists());
 }
 
 /// A worker's worktree inside the project's `.claude/` (as Claude Code makes

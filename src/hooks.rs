@@ -1169,11 +1169,6 @@ impl<'a> Hook<'a> {
         // filesystem `/w/App` is not `/w/app`, and `/x/…` is a folder, not a drive.
         let windows =
             cfg!(windows) || !self.env("MSYSTEM").is_empty() || self.env("OS") == "Windows_NT";
-        // There the shell-sandbox hook rewrites the command, and of two hooks
-        // that rewrite it, Claude Code keeps the one that ends last: stand down.
-        if windows && self.env("OCGEN_SANDBOX") == "1" {
-            return Outcome::allow();
-        }
         if !same_folder(target, &cwd, windows) {
             return Outcome::allow();
         }
@@ -2136,42 +2131,16 @@ fn shell(cmd: &str) -> Command {
 //
 impl Hook<'_> {
     /// PreToolUse (Bash|PowerShell), native Windows with the project's sandbox
-    /// on: Claude Code has no sandbox there, so run the command in ocgen's —
-    /// rewritten to run through `ocgen __sandbox`, after the project's deny and
-    /// ask rules are checked against it as written ([`crate::sandbox::shell`]).
-    /// Anywhere else, or with the sandbox off, it says nothing.
+    /// on: Claude Code has no sandbox there, and ocgen's can't run there
+    /// ([`crate::sandbox::NATIVE_WINDOWS`]), so the command is refused — never
+    /// run unsandboxed. Anywhere else, or with the sandbox off, it says nothing.
     fn shell_sandbox(&self) -> Outcome {
-        if !cfg!(windows) || self.env("OCGEN_SANDBOX") != "1" {
+        let windows =
+            cfg!(windows) || !self.env("MSYSTEM").is_empty() || self.env("OS") == "Windows_NT";
+        if !windows || self.env("OCGEN_SANDBOX") != "1" {
             return Outcome::allow();
         }
-        let Some(sh) = crate::sandbox::shell::Shell::of_tool(&self.field("tool_name")) else {
-            return Outcome::allow();
-        };
-        let project = self.project();
-        let Some(exe) = crate::sandbox::helper_exe(self.env) else {
-            return Outcome::block(format!("{}\n", crate::sandbox::NEEDS_BINARY));
-        };
-        let cwd = match self.field("cwd") {
-            c if c.is_empty() => project.clone(),
-            c => PathBuf::from(c),
-        };
-        let rules = crate::sandbox::shell::Rules::load(&project);
-        let ready = crate::sandbox::agent_ready(self.env, &project, &cwd, sh);
-        let out = crate::sandbox::shell::pre_tool_use(&crate::sandbox::shell::Request {
-            event: &self.json,
-            project: &project,
-            exe: &exe,
-            rules: &rules,
-            ready,
-        });
-        match out {
-            Some(v) => Outcome {
-                code: 0,
-                stdout: format!("{v}\n"),
-                stderr: String::new(),
-            },
-            None => Outcome::allow(),
-        }
+        Outcome::block(format!("Blocked: {}.\n", crate::sandbox::NATIVE_WINDOWS))
     }
 }
 

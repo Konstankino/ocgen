@@ -221,7 +221,7 @@ pub fn verify(project: &Project, root: &Path, opts: &Options) -> Vec<Check> {
             out.push(draft_review(&probe));
             out.push(recap_github(&probe));
         }
-        out.push(sandbox(project, &layers, root));
+        out.push(sandbox(project, &layers));
         out.push(hook_sandbox(root, &layers));
         out.push(git_credentials(project, root, &layers));
         out.push(pre_push(shell_ok.then_some(sh.as_path()), project, root));
@@ -804,36 +804,19 @@ pub fn hook_shell(settings: &Value, windows: bool, bash: Option<&Path>) -> Check
 /// the approval store or (by default) push and deploy credentials. `on` is
 /// whether it is on in the settings Claude Code merges, `off_by` the file that
 /// turns it off, `os` is `std::env::consts::OS` and `bwrap` whether bubblewrap
-/// is on PATH. On native Windows, where ocgen sandboxes the commands Claude
-/// runs itself, `shell` says whether that is in place, or why not.
-pub fn sandbox_check(
-    gate: bool,
-    on: bool,
-    off_by: Option<&str>,
-    os: &str,
-    bwrap: bool,
-    shell: Result<(), String>,
-) -> Check {
+/// is on PATH. On native Windows nothing runs sandboxed
+/// ([`crate::sandbox::NATIVE_WINDOWS`]): with the sandbox on, it says so.
+pub fn sandbox_check(gate: bool, on: bool, off_by: Option<&str>, os: &str, bwrap: bool) -> Check {
     let name = "sandbox";
     if os == "windows" && on {
-        return match (shell, gate) {
-            (Ok(()), true) => check(
-                name,
-                Status::Pass,
-                "on — Claude Code has no sandbox on native Windows, so ocgen runs the PowerShell commands Claude runs in its own (and refuses its Bash commands): they, and the check and formatter the hooks run, can't write the approval store",
+        return check(
+            name,
+            Status::Warn,
+            format!(
+                "on, but {} — the hooks' check and the commands Claude runs are refused here",
+                crate::sandbox::NATIVE_WINDOWS
             ),
-            (Ok(()), false) => check(
-                name,
-                Status::Pass,
-                "on — ocgen runs the PowerShell commands Claude runs in its own sandbox here, and refuses its Bash commands",
-            ),
-            (Err(why), true) => check(
-                name,
-                Status::Warn,
-                format!("on, but {why} — until then the approval gate is advisory here"),
-            ),
-            (Err(why), false) => check(name, Status::Warn, format!("on, but {why}")),
-        };
+        );
     }
     if on && os == "linux" && !bwrap {
         return check(
@@ -864,7 +847,7 @@ pub fn sandbox_check(
 }
 
 /// [`sandbox_check`] for this project, on this machine.
-fn sandbox(project: &Project, layers: &Layers, root: &Path) -> Check {
+fn sandbox(project: &Project, layers: &Layers) -> Check {
     let gate = project.claude.team.enabled && project.claude.team.approval_gate;
     let (on, off_by) = match layers.get("/sandbox/enabled") {
         Some((v, from)) => {
@@ -873,55 +856,12 @@ fn sandbox(project: &Project, layers: &Layers, root: &Path) -> Check {
         }
         None => (false, None),
     };
-    let shell = if cfg!(windows) && on {
-        shell_sandbox_ready(layers, root)
-    } else {
-        Ok(())
-    };
     sandbox_check(
         gate,
         on,
         off_by,
         std::env::consts::OS,
         find_on_path("bwrap").is_some(),
-        shell,
-    )
-}
-
-/// Native Windows: whether ocgen runs the commands Claude runs in the
-/// project's sandbox — its hook in place and running, the binary that wraps
-/// them on PATH, the container given its permissions — and if not, why.
-fn shell_sandbox_ready(layers: &Layers, root: &Path) -> Result<(), String> {
-    if let Some((why, _)) = layers.hooks_off() {
-        return Err(format!(
-            "{why}, so the commands Claude runs aren't sandboxed"
-        ));
-    }
-    let wired = layers
-        .of(Scope::Project)
-        .and_then(|s| s.pointer("/hooks/PreToolUse"))
-        .and_then(Value::as_array)
-        .is_some_and(|groups| {
-            groups.iter().any(|g| {
-                g["matcher"] == "Bash|PowerShell" && g.to_string().contains("shell-sandbox")
-            })
-        });
-    if !wired {
-        return Err(format!(
-            "{SETTINGS} lacks the shell-sandbox hook, so the commands Claude runs aren't sandboxed — run `ocgen doctor`"
-        ));
-    }
-    if !ocgen_hook_ok() {
-        return Err(format!(
-            "ocgen ({}) isn't on PATH, and without it the hook refuses every command Claude runs",
-            crate::hooks::PROTOCOL
-        ));
-    }
-    crate::sandbox::agent_ready(
-        &sandbox_env(root),
-        root,
-        root,
-        crate::sandbox::shell::Shell::Bash,
     )
 }
 
@@ -1263,11 +1203,9 @@ fn weakens(key: &str, want: Option<&str>, got: Option<&str>, ocgen: &Value) -> b
         "OCGEN_SANDBOX_ALLOW_READ" | "OCGEN_SANDBOX_ALLOW_EXEC" | "OCGEN_SANDBOX_ALLOW_WRITE" => {
             got.is_some() && adds()
         }
-        "OCGEN_SANDBOX_NETWORK" | "OCGEN_SANDBOX_AGENT_NETWORK" => {
-            got == Some("1") && want != Some("1")
-        }
+        "OCGEN_SANDBOX_NETWORK" => got == Some("1") && want != Some("1"),
         // The helper's input and the binary it runs: ocgen never sets them.
-        "OCGEN_SANDBOX_POLICY" | "OCGEN_SANDBOX_HELPER" | "OCGEN_SANDBOX_COMMAND" => got.is_some(),
+        "OCGEN_SANDBOX_POLICY" | "OCGEN_SANDBOX_HELPER" => got.is_some(),
         "TEAM_CONFIDENCE_THRESHOLD" | "SUBAGENT_CONFIDENCE_THRESHOLD" => {
             let w = reads(want)[0];
             w > 0 && reads(got).iter().any(|&g| g < w)
@@ -3024,7 +2962,7 @@ mod tests {
         // Only wasmtime: an ordinary check never runs.
         let c = hook_sandbox_check(&r(
             true,
-            vec![(Kind::AppContainer, Err("x".into())), (Kind::Wasm, Ok(()))],
+            vec![(Kind::Seatbelt, Err("x".into())), (Kind::Wasm, Ok(()))],
             ok(),
         ));
         assert_eq!(c.status, Status::Fail, "{c:?}");
