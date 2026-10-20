@@ -209,9 +209,19 @@ fn a_wrapped_command_prints_and_exits_as_it_would_unwrapped() {
         out.contains("it's here") && err.contains("err"),
         "{out}{err}"
     );
-    // In the project's folder, like Claude's shell.
-    let w = wrapped(&f, "PowerShell", "Split-Path -Leaf (Get-Location).Path");
-    assert_eq!(run_ps(&f, &w).1.trim(), "p");
+    // In the project's folder, like Claude's shell: through the `Project:`
+    // drive, which leads there.
+    let w = wrapped(
+        &f,
+        "PowerShell",
+        "(Get-Location).Path; Split-Path -Leaf (Get-Location).ProviderPath.TrimEnd('\\')",
+    );
+    let out = run_ps(&f, &w).1;
+    assert_eq!(
+        out.lines().map(str::trim).collect::<Vec<_>>(),
+        ["Project:\\", "p"],
+        "{out}"
+    );
     let _ = ocgen(&f, &["sandbox", "reset", "-p", &f.p.display().to_string()]);
 }
 

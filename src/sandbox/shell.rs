@@ -98,16 +98,36 @@ pub fn wrap(shell: Shell, exe: &Path, project: &Path, cmd: &str) -> String {
     }
 }
 
-/// What the PowerShell helper runs: `cmd`, with UTF-8 output, exiting the
-/// way Claude Code reads a PowerShell command's result — the last program's
-/// exit code, else 0 or 1 by whether the last statement succeeded.
-pub fn powershell_script(cmd: &str) -> String {
+/// The PowerShell drive the helper roots at the project: in an AppContainer,
+/// PowerShell can't make the project's own path its location (it looks into
+/// every folder above it, which the container can't), so it works in
+/// `Project:\` instead, where relative paths are the project's.
+pub const PROJECT_DRIVE: &str = "Project";
+
+/// What the PowerShell helper runs: `cmd` in `dir` of `project` (through
+/// [`PROJECT_DRIVE`]), with UTF-8 output, exiting the way Claude Code reads a
+/// PowerShell command's result — the last program's exit code, else 0 or 1
+/// by whether the last statement succeeded. It never runs `cmd` anywhere
+/// else: if it can't get there, it says so and ends with 125.
+pub fn powershell_script(cmd: &str, project: &Path, dir: &Path) -> String {
+    let quote = |p: &Path| format!("'{}'", p.display().to_string().replace('\'', "''"));
+    let below: PathBuf = dir
+        .components()
+        .skip(project.components().count())
+        .collect();
+    let at = Path::new(&format!("{PROJECT_DRIVE}:\\")).join(below);
     format!(
         "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8\n\
          $OutputEncoding = [System.Text.Encoding]::UTF8\n\
+         try {{ $null = New-PSDrive -Name {PROJECT_DRIVE} -PSProvider FileSystem -Root {root} -Scope Global -ErrorAction Stop; \
+         Set-Location -LiteralPath {at} -ErrorAction Stop }} \
+         catch {{ [Console]::Error.WriteLine('ocgen sandbox: PowerShell can''t start in ' + {dirq} + ': ' + $_.Exception.Message); exit 125 }}\n\
          {cmd}\n\
          $ocgenOk = $?\n\
-         exit $(if ($null -ne $LASTEXITCODE) {{ $LASTEXITCODE }} elseif ($ocgenOk) {{ 0 }} else {{ 1 }})"
+         exit $(if ($null -ne $LASTEXITCODE) {{ $LASTEXITCODE }} elseif ($ocgenOk) {{ 0 }} else {{ 1 }})",
+        root = quote(project),
+        at = quote(&at),
+        dirq = quote(dir),
     )
 }
 
@@ -745,10 +765,28 @@ mod tests {
 
     #[test]
     fn the_powershell_script_exits_as_claude_code_reads_it() {
-        let s = powershell_script("git status");
+        let s = powershell_script("git status", Path::new("/p"), Path::new("/p"));
         assert!(s.contains("\ngit status\n$ocgenOk = $?\n"), "{s}");
         assert!(s.ends_with("elseif ($ocgenOk) { 0 } else { 1 })"), "{s}");
         assert!(s.starts_with("[Console]::OutputEncoding"), "{s}");
+    }
+
+    /// It starts in the command's folder through a drive rooted at the
+    /// project (a quote in a path doubled), and never runs the command
+    /// elsewhere.
+    #[test]
+    fn the_powershell_script_starts_in_the_commands_folder() {
+        let s = powershell_script("ls", Path::new("/w/it's"), Path::new("/w/it's/src/a"));
+        assert!(
+            s.contains("New-PSDrive -Name Project -PSProvider FileSystem -Root '/w/it''s'"),
+            "{s}"
+        );
+        let at = Path::new("Project:\\").join("src").join("a");
+        assert!(
+            s.contains(&format!("Set-Location -LiteralPath '{}'", at.display())),
+            "{s}"
+        );
+        assert!(s.contains("exit 125 }\nls\n"), "{s}");
     }
 
     #[test]

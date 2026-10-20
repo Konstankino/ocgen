@@ -1774,7 +1774,9 @@ The approval gate matches command text, so it isn't the only safety line:
     (turn on Claude Code's PowerShell tool: `CLAUDE_CODE_USE_POWERSHELL_TOOL=1`). A `PreToolUse`
     hook (`shell-sandbox`) rewrites each PowerShell command so it runs through `ocgen __sandbox`,
     with the command itself left as written in the middle (a here-string), so a permission prompt
-    still shows what runs.
+    still shows what runs. It runs in a `Project:` drive rooted at the project (`Get-Location` shows
+    `Project:\…`, relative paths are the project's): in an AppContainer, PowerShell can't make the
+    project's own path its location.
     Claude Code checks its permission rules against that rewritten command, which none of them
     match, so the hook checks the project's rules (the user's, the project's, the local and the
     managed settings) against the command as written: a deny rule denies it, an ask rule asks, and

@@ -1577,7 +1577,7 @@ pub fn run_agent(p: &Policy, sh: Shell, cmd: &str) -> Result<i32, String> {
                     ps.display()
                 ));
             }
-            let utf16: Vec<u8> = super::shell::powershell_script(cmd)
+            let utf16: Vec<u8> = super::shell::powershell_script(cmd, &p.project, &p.dir)
                 .encode_utf16()
                 .flat_map(u16::to_le_bytes)
                 .collect();
