@@ -135,6 +135,7 @@ fn windows_state(f: &Fixture) -> String {
     }
     s.push_str(&uac());
     let was = fs::read_to_string(&file).unwrap();
+    let who = run(f, "whoami /groups /fo csv /nh");
     let ps = run(
         f,
         r#"powershell -NoProfile -NonInteractive -Command "Add-Content -LiteralPath .claude\settings.json -Value x -ErrorAction Stop""#,
@@ -142,7 +143,7 @@ fn windows_state(f: &Fixture) -> String {
     let wrote = fs::read_to_string(&file).unwrap() != was;
     fs::write(&file, was).unwrap();
     s.push_str(&format!(
-        "PowerShell's write in the sandbox: {ps:?}, went through: {wrote}"
+        "whoami in the sandbox: {who:?}\nPowerShell's write in the sandbox: {ps:?}, went through: {wrote}"
     ));
     s
 }
@@ -241,9 +242,19 @@ fn a_sandboxed_command_does_its_work_and_nothing_else() {
         }
         // A write that went through is put back, or ocgen would find the
         // sandbox off and refuse every command after it.
-        if fs::read_to_string(&settings_path).unwrap() != settings_was {
-            ran.push(format!("{cmd}: changed settings.json"));
-            fs::write(&settings_path, &settings_was).unwrap();
+        match fs::read_to_string(&settings_path) {
+            Ok(settings_now) if settings_now != settings_was => {
+                ran.push(format!("{cmd}: changed settings.json"));
+                fs::write(&settings_path, &settings_was).unwrap();
+            }
+            Err(e) => {
+                ran.push(format!("{cmd}: settings.json is missing: {e}"));
+                let moved = f.p.join("c2");
+                if moved.join("settings.json").is_file() {
+                    fs::rename(moved, f.p.join(".claude")).unwrap();
+                }
+            }
+            _ => {}
         }
     }
     assert!(
