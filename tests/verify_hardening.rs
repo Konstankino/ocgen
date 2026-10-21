@@ -1002,9 +1002,8 @@ fn the_noop_cd_probe_quotes_a_path_with_spaces() {
 
 #[test]
 fn the_sandbox_check_says_when_the_gate_is_advisory() {
-    let ok = || Ok(());
     // Gate on, no sandbox: advisory, and how to fix it.
-    let c = sandbox_check(true, false, None, "macos", false, ok());
+    let c = sandbox_check(true, false, None, "macos", false);
     assert_eq!(c.status, Status::Warn);
     assert!(
         c.detail
@@ -1019,62 +1018,43 @@ fn the_sandbox_check_says_when_the_gate_is_advisory() {
         Some(".claude/settings.local.json"),
         "linux",
         true,
-        ok(),
     );
     assert_eq!(c.status, Status::Warn);
     assert!(c.detail.contains(".claude/settings.local.json"), "{c:#?}");
-    // Native Windows: ocgen's own sandbox runs the commands Claude runs, once
-    // it is in place — not advisory then.
-    let c = sandbox_check(true, true, None, "windows", false, ok());
-    assert_eq!(c.status, Status::Pass, "{c:#?}");
-    assert!(
-        c.detail.contains("ocgen")
-            && c.detail.contains("PowerShell")
-            && !c.detail.contains("advisory"),
-        "{c:#?}"
-    );
-    assert_eq!(
-        sandbox_check(false, true, None, "windows", false, ok()).status,
-        Status::Pass
-    );
-    // …until then, it says why, and what the gate is meanwhile.
-    let c = sandbox_check(
-        true,
-        true,
-        None,
-        "windows",
-        false,
-        Err("run `ocgen sandbox grant`".into()),
-    );
-    assert_eq!(c.status, Status::Warn, "{c:#?}");
-    assert!(
-        c.detail.contains("ocgen sandbox grant") && c.detail.contains("advisory"),
-        "{c:#?}"
-    );
-    let c = sandbox_check(true, false, None, "windows", false, ok());
+    // Native Windows: nothing runs sandboxed there, so with the sandbox on
+    // everything is refused — and it says what to do instead.
+    for gate in [true, false] {
+        let c = sandbox_check(gate, true, None, "windows", false);
+        assert_eq!(c.status, Status::Warn, "{c:#?}");
+        assert!(
+            c.detail.contains("WSL2") && c.detail.contains("ocgen edit team"),
+            "{c:#?}"
+        );
+    }
+    let c = sandbox_check(true, false, None, "windows", false);
     assert_eq!(c.status, Status::Warn, "{c:#?}");
     assert!(
         c.detail.contains("advisory") && c.detail.contains("ocgen edit team"),
         "{c:#?}"
     );
     // Linux: the sandbox needs bubblewrap.
-    let c = sandbox_check(false, true, None, "linux", false, ok());
+    let c = sandbox_check(false, true, None, "linux", false);
     assert_eq!(c.status, Status::Warn);
     assert!(
         c.detail.contains("bwrap") && c.detail.contains("bubblewrap"),
         "{c:#?}"
     );
     assert_eq!(
-        sandbox_check(true, true, None, "linux", true, ok()).status,
+        sandbox_check(true, true, None, "linux", true).status,
         Status::Pass
     );
     assert_eq!(
-        sandbox_check(true, true, None, "macos", false, ok()).status,
+        sandbox_check(true, true, None, "macos", false).status,
         Status::Pass
     );
     // Neither gate nor sandbox: nothing to say.
     assert_eq!(
-        sandbox_check(false, false, None, "macos", false, ok()).status,
+        sandbox_check(false, false, None, "macos", false).status,
         Status::Skip
     );
 }

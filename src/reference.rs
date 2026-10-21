@@ -369,18 +369,15 @@ const CLAUDE_FIELDS: &[Field] = &[
     },
     Field {
         label: "sandbox on native Windows",
-        detail: "Claude Code has no sandbox on native Windows, so there ocgen runs the Bash and \
-                 PowerShell commands Claude runs in its own (the AppContainer of the hooks' \
-                 sandbox): a PreToolUse hook rewrites each command to run through `ocgen \
-                 __sandbox`, leaving the command readable in the middle, and checks the project's \
-                 deny and ask rules against the command as written — deny denies, ask asks, the \
-                 rest runs sandboxed without a prompt. Inside, it writes the project, its git \
-                 folders (not their hooks or config) and the caches, and runs without the \
-                 credentials ocgen knows about. `ocgen sandbox grant` gives the container its \
-                 permissions (the wizard does it when you turn the sandbox on); until then the \
-                 hook refuses commands. agent_network (default true) lets them reach the network \
-                 — all of it or none. A `cd` inside a command doesn't carry over to the next.",
-        example: "sandbox.agent_network: false",
+        detail: "Neither Claude Code nor ocgen can sandbox anything on native Windows: the \
+                 sandbox Windows offers a program (an AppContainer) can't open the NUL device, \
+                 which cargo, git and most tools open. So with the sandbox on there, a \
+                 PreToolUse hook refuses every Bash and PowerShell command Claude runs, and the \
+                 hooks' check and formatter don't run (a WASI module aside) — never \
+                 unsandboxed. Run Claude Code and ocgen in WSL2, where the sandbox works, or \
+                 turn it off for the project (`ocgen edit team`). `ocgen new` doesn't offer it \
+                 on native Windows.",
+        example: "sandbox.enabled: false   (native Windows, outside WSL2)",
     },
     Field {
         label: "hooks' sandbox",
@@ -389,8 +386,8 @@ const CLAUDE_FIELDS: &[Field] = &[
                  toolchains' folders to read and run from, the dependency caches and the project \
                  to write (not its Claude settings, hooks, state file, .mcp.json or git hooks), \
                  and no network. Seatbelt on macOS; bubblewrap on Linux, or Landlock with seccomp \
-                 where bwrap can't run; an AppContainer in a job object on native Windows (no WSL \
-                 needed); wasmtime for a WASI module (*.wasm) where none of those works. Never \
+                 where bwrap can't run; none on native Windows (see sandbox on native Windows); \
+                 wasmtime for a WASI module (*.wasm) where none of those works. Never \
                  unsandboxed: with no sandbox here, or without the ocgen binary, the check isn't \
                  run and counts as failed. hook_network: true lets them reach the network; \
                  hook_read, hook_exec and hook_write add paths (~/… or absolute). `ocgen sandbox \

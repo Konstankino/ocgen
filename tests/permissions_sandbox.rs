@@ -358,26 +358,16 @@ fn a_user_allow_of_a_gate_ask_rule_has_no_effect() {
 
 #[test]
 fn sandbox_support_follows_the_platform() {
-    // Claude Code's sandbox on macOS and Linux (WSL2 included), ocgen's own
-    // for the commands Claude runs on native Windows.
-    let expected = cfg!(any(target_os = "macos", target_os = "linux", windows));
+    // Claude Code's sandbox on macOS and Linux (WSL2 included); none on native
+    // Windows, where ocgen's can't run either.
+    let expected = cfg!(any(target_os = "macos", target_os = "linux"));
     assert_eq!(ocgen::claude::sandbox_supported(), expected);
 }
 
-#[test]
-fn the_agents_network_is_on_unless_turned_off_and_old_states_load_it_on() {
-    assert!(SandboxProfile::default().agent_network);
-    let old: SandboxProfile = serde_json::from_str(r#"{"enabled": true}"#).unwrap();
-    assert!(old.agent_network, "a state written before the switch");
-    let off: SandboxProfile =
-        serde_json::from_str(r#"{"enabled": true, "agent_network": false}"#).unwrap();
-    assert!(!off.agent_network);
-}
-
-/// Native Windows has no Claude Code sandbox: with the project's on, a hook
-/// runs every Bash and PowerShell command Claude runs in ocgen's. The
-/// settings run on every OS, so the hook comes with the sandbox, and does
-/// nothing at all where Claude Code's own sandbox works.
+/// Native Windows has no Claude Code sandbox, nor can ocgen's run there: with
+/// the project's on, a hook refuses every Bash and PowerShell command Claude
+/// runs. The settings run on every OS, so the hook comes with the sandbox, and
+/// does nothing at all where Claude Code's own sandbox works.
 #[test]
 fn the_shell_sandbox_hook_comes_with_the_sandbox() {
     let dir = tempdir().unwrap();
@@ -413,11 +403,10 @@ fn the_shell_sandbox_hook_comes_with_the_sandbox() {
         .unwrap()
         .success());
     // The settings env carries the sandbox, even with nothing for a hook to
-    // run; the commands Claude runs reach the network unless turned off.
+    // run.
     let env = hook_env(dir.path());
     assert_eq!(env["OCGEN_SANDBOX"], "1");
     assert!(env.contains_key("OCGEN_SANDBOX_DENY_WRITE"));
-    assert_eq!(env["OCGEN_SANDBOX_AGENT_NETWORK"], "1");
     assert!(!env.contains_key("OCGEN_SANDBOX_NETWORK"), "the hooks' own");
 
     // Outside native Windows the command runs nothing — not even ocgen.
@@ -450,21 +439,14 @@ fn the_shell_sandbox_hook_comes_with_the_sandbox() {
         let o = run(None);
         assert_eq!(o.status.code(), Some(0), "{o:?}");
         assert!(o.stdout.is_empty() && o.stderr.is_empty(), "{o:?}");
-        // Where it would run (Windows) without the binary: refused, never run as is.
+        // On Windows: refused, with what to do instead.
         let o = run(Some("Windows_NT"));
         assert_eq!(o.status.code(), Some(2), "{o:?}");
         assert!(
-            String::from_utf8_lossy(&o.stderr).contains("never runs the command unsandboxed"),
+            String::from_utf8_lossy(&o.stderr).contains(ocgen::sandbox::NATIVE_WINDOWS),
             "{o:?}"
         );
     }
-
-    // The agents' network off.
-    let dir = tempdir().unwrap();
-    let mut p = sandboxed("sb-shell-offline");
-    p.claude.sandbox.agent_network = false;
-    p.scaffold(dir.path(), false).unwrap();
-    assert!(!hook_env(dir.path()).contains_key("OCGEN_SANDBOX_AGENT_NETWORK"));
 
     // No sandbox: no hook, no script.
     let dir = tempdir().unwrap();

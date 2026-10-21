@@ -1687,7 +1687,7 @@ impl Project {
             let body = templates::load_embedded("claude/hooks/recap-github.sh")?;
             components.push(("hooks/recap-github.sh".to_string(), body));
         }
-        // Native Windows: the commands Claude runs go in ocgen's sandbox.
+        // Native Windows: the commands Claude runs are refused there.
         if self.claude.sandbox.enabled {
             let body = templates::load_embedded("claude/hooks/shell-sandbox.sh")?;
             components.push(("hooks/shell-sandbox.sh".to_string(), body));
@@ -2203,9 +2203,6 @@ impl Project {
             if sb.hook_network {
                 env.insert("OCGEN_SANDBOX_NETWORK".into(), json!("1"));
             }
-            if sb.agent_network {
-                env.insert("OCGEN_SANDBOX_AGENT_NETWORK".into(), json!("1"));
-            }
         }
         if self.claude.sandbox.enabled && !self.claude.sandbox.allow_credentials {
             // Git asks an OS keychain the sandbox can't hide: start with no helper.
@@ -2599,9 +2596,9 @@ impl Project {
             );
         }
         if self.claude.sandbox.enabled {
-            // Native Windows has no Claude Code sandbox: ocgen runs each command
-            // Claude runs in its own. Anywhere else the command stops at the
-            // test, without starting ocgen.
+            // Native Windows has no Claude Code sandbox, nor can ocgen's run
+            // there: each command Claude runs is refused. Anywhere else the
+            // command stops at the test, without starting ocgen.
             push(
                 "PreToolUse",
                 json!({ "matcher": "Bash|PowerShell", "hooks": [ command_hook(format!(

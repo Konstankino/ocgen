@@ -21,12 +21,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # The hooks' sandbox each runner must use (tests/hook_sandbox.rs checks).
+        # The hooks' sandbox each runner must use (tests/hook_sandbox.rs checks;
+        # native Windows has none, and refuses).
         include:
           - { name: ubuntu-latest, os: ubuntu-latest, sandbox: bwrap }
           - { name: ubuntu-latest landlock, os: ubuntu-latest, sandbox: landlock }
           - { name: macos-latest, os: macos-latest, sandbox: seatbelt }
-          - { name: windows-latest, os: windows-latest, sandbox: appcontainer }
+          - { name: windows-latest, os: windows-latest, sandbox: none }
     env:
       OCGEN_TEST_SANDBOX_EXPECT: ${{ matrix.sandbox }}
       OCGEN_TEST_NETWORK: "1"
@@ -48,18 +49,11 @@ jobs:
         run: |
           sudo apt-get remove -y bubblewrap || true
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=1 || true
-      - name: The hooks' sandbox, first (on Windows it shows whether Git Bash starts in an AppContainer)
+      - name: The hooks' sandbox, first
         run: cargo test --locked --test hook_sandbox -- --nocapture --test-threads=1
       - name: Test
         # --no-fail-fast: report every failing test binary, not just the first.
         run: cargo test --locked --all-targets --no-fail-fast
-      - name: What the AppContainer runs commands with
-        if: always() && runner.os == 'Windows'
-        shell: bash
-        run: cat "$LOCALAPPDATA"/ocgen/sandbox/*.json || true
-      - name: Take the AppContainer grants off again
-        if: always() && runner.os == 'Windows'
-        run: cargo run --locked --quiet -- sandbox reset --all
 
   lint:
     name: fmt + clippy (${{ matrix.os }})

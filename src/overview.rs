@@ -520,17 +520,9 @@ fn run_claude(root: &Path, project: &Project) -> Result<()> {
             let net = |on: bool| if on { "network" } else { "no network" };
             let sb = &project.claude.sandbox;
             format!(
-                "on (strict; {} extra domain(s); hooks: {}{})",
+                "on (strict; {} extra domain(s); hooks: {})",
                 sb.extra_domains.len(),
                 net(sb.hook_network),
-                if ocgen::claude::ocgen_sandboxes_shell() {
-                    format!(
-                        "; Claude's commands: {}, in ocgen's sandbox",
-                        net(sb.agent_network)
-                    )
-                } else {
-                    String::new()
-                }
             )
         } else {
             ui::muted("off")
@@ -837,6 +829,7 @@ pub fn run_sandbox(action: crate::cli::SandboxAction) -> Result<()> {
                     "backends": backends,
                     "policy": policy,
                     "error": error,
+                    "note": cfg!(windows).then_some(sandbox::NATIVE_WINDOWS),
                 });
                 println!("{}", serde_json::to_string_pretty(&out)?);
                 return Ok(());
@@ -856,6 +849,10 @@ pub fn run_sandbox(action: crate::cli::SandboxAction) -> Result<()> {
                     Ok(()) => println!("  {} {}", style("✔").green(), k.name()),
                     Err(e) => println!("  {} {}  {}", style("✘").red(), k.name(), ui::muted(e)),
                 }
+            }
+            if cfg!(windows) {
+                println!();
+                ui::warning(sandbox::NATIVE_WINDOWS);
             }
             println!();
             match &r.policy {
@@ -890,40 +887,6 @@ pub fn run_sandbox(action: crate::cli::SandboxAction) -> Result<()> {
                 std::process::exit(128 + sig);
             }
             std::process::exit(status.code().unwrap_or(1));
-        }
-        SandboxAction::Grant { path } => {
-            let root = root_of(&path)?;
-            let env = ocgen::verify::sandbox_env(&root);
-            for line in sandbox::grant_project(&env, &root).map_err(|e| anyhow!(e))? {
-                if cfg!(windows) {
-                    ui::success(&line);
-                } else {
-                    println!("{line}");
-                }
-            }
-            Ok(())
-        }
-        SandboxAction::Reset { path, all } => {
-            #[cfg(windows)]
-            {
-                let root = if all { None } else { Some(root_of(&path)?) };
-                let done = sandbox::windows::reset(root.as_deref()).map_err(|e| anyhow!(e))?;
-                if done.is_empty() {
-                    println!("nothing to reset: ocgen gave no AppContainer permissions here");
-                }
-                for d in done {
-                    ui::success(&format!("reset {d}"));
-                }
-            }
-            #[cfg(not(windows))]
-            {
-                let _ = (path, all);
-                println!(
-                    "nothing to reset: the hooks' sandbox leaves nothing behind on {}",
-                    std::env::consts::OS
-                );
-            }
-            Ok(())
         }
     }
 }
