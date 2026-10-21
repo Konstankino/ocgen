@@ -2424,15 +2424,13 @@ impl Project {
             );
         }
         if self.claude.team.enabled && self.claude.team.hooks {
-            for (event, script) in [
-                ("TeammateIdle", "team-teammate-idle.sh"),
-                ("TaskCreated", "team-task-created.sh"),
-            ] {
-                hooks.insert(
-                    event.to_string(),
-                    json!([ { "hooks": [ command_hook(hook_cmd(prefix, dir, script)) ] } ]),
-                );
-            }
+            hooks.insert(
+                "TeammateIdle".into(),
+                json!([ { "hooks": [ command_hook(hook_cmd(prefix, dir, "team-teammate-idle.sh")) ] } ]),
+            );
+            // The plan gate: a task it can't judge isn't created.
+            let plan = safety_gate(command_hook(hook_cmd(prefix, dir, "team-task-created.sh")));
+            hooks.insert("TaskCreated".into(), json!([ { "hooks": [ plan ] } ]));
             let gate = command_hook(hook_cmd(prefix, dir, "team-task-completed.sh"));
             hooks.insert(
                 "TaskCompleted".into(),
@@ -2443,11 +2441,12 @@ impl Project {
         // every tool — any tool with a `command` (Bash, Monitor, PowerShell, MCP…)
         // can run a high-impact action, and any file tool can touch the approval
         // store. Emitted whenever the gate is on, independent of the `hooks` toggle.
+        // A gate that fails to run blocks the call: every tool call, until fixed.
         if self.claude.team.enabled && self.claude.team.approval_gate {
             hooks.insert(
                 "PreToolUse".into(),
                 json!([ {
-                    "hooks": [ command_hook(hook_cmd(prefix, dir, "team-approval-gate.sh")) ]
+                    "hooks": [ safety_gate(command_hook(hook_cmd(prefix, dir, "team-approval-gate.sh"))) ]
                 } ]),
             );
         }
@@ -2576,7 +2575,7 @@ impl Project {
         // Deterministic line for every WebFetch: HTTPS, trusted docs sites only.
         push(
             "PreToolUse",
-            json!({ "matcher": "WebFetch", "hooks": [ command_hook(hook_cmd(prefix, dir, "https-only-fetch.sh")) ] }),
+            json!({ "matcher": "WebFetch", "hooks": [ safety_gate(command_hook(hook_cmd(prefix, dir, "https-only-fetch.sh"))) ] }),
         );
         if x.drop_noop_cd {
             // `cd <this folder> && …` → `…`, so the read block can check its paths.
@@ -2590,9 +2589,10 @@ impl Project {
             );
         }
         if x.config_audit {
+            // A change the audit can't judge keeps the settings Claude Code loaded.
             push(
                 "ConfigChange",
-                json!({ "hooks": [ command_hook(hook_cmd(prefix, dir, "config-audit.sh")) ] }),
+                json!({ "hooks": [ safety_gate(command_hook(hook_cmd(prefix, dir, "config-audit.sh"))) ] }),
             );
         }
         if self.claude.sandbox.enabled {
@@ -2601,10 +2601,10 @@ impl Project {
             // command stops at the test, without starting ocgen.
             push(
                 "PreToolUse",
-                json!({ "matcher": "Bash|PowerShell", "hooks": [ command_hook(format!(
+                json!({ "matcher": "Bash|PowerShell", "hooks": [ safety_gate(command_hook(format!(
                     "[ \"${{OS:-}}\" != Windows_NT ] || {{ {}; }}",
                     hook_cmd(prefix, dir, "shell-sandbox.sh")
-                )) ] }),
+                ))) ] }),
             );
         }
         if self.has_blocking_hooks() {
@@ -4328,6 +4328,14 @@ fn command_hook(command: impl Into<String>) -> Value {
 fn check_gate(mut hook: Value, status: &str) -> Value {
     hook["timeout"] = json!(crate::hooks::CHECK_GATE_TIMEOUT);
     hook["statusMessage"] = json!(status);
+    hook
+}
+
+/// A safety gate ([`crate::hooks::FAIL_CLOSED`]): when it can't start, crashes or
+/// times out, Claude Code blocks the action as exit 2 would, instead of letting
+/// it through. Claude Code older than 2.1.295 ignores the key and runs the hook.
+fn safety_gate(mut hook: Value) -> Value {
+    hook["onFailure"] = json!("block");
     hook
 }
 

@@ -444,9 +444,13 @@ delete as stale (`-`) is listed with a short diff.
 - every hook script exists and parses, and the side-effect-free hook commands ocgen generates
   actually run;
 - every hook pins `"shell": "bash"`, and on Windows Git Bash is installed. The hook commands
-  are POSIX sh; without Git Bash Claude Code runs them in PowerShell, where they fail to
-  parse and **the gates let everything through** — install Git for Windows (or set
-  `CLAUDE_CODE_GIT_BASH_PATH`);
+  are POSIX sh; without Git Bash they can't run: the safety gates then block everything they
+  guard (on Claude Code older than 2.1.295 they let it through), and **the other gates let
+  everything through** — install Git for Windows (or set `CLAUDE_CODE_GIT_BASH_PATH`);
+- **gates fail closed:** each safety gate sets `"onFailure": "block"`, so one that can't start,
+  crashes or times out blocks what it guards (see *A gate that can't run blocks*). Warns when one
+  doesn't (a project from before this: run `ocgen doctor`), and when the installed Claude Code is
+  older than 2.1.295, which ignores the field (with `--no-claude` the version isn't asked);
 - the approval gate blocks `git push`, deploys and self-approval, and allows `git status`;
 - every gate (approval, WebFetch, plan, task, worker, risk) is the one ocgen generates: a
   hand-edited script or `settings.json` hook fails. So does one an older ocgen wrote — after
@@ -476,7 +480,8 @@ delete as stale (`-`) is listed with a short diff.
 - a compatible `ocgen` is on your `PATH`; a stale binary is flagged, and so are ignored template
   overrides;
 - `.claude/` is tracked by git;
-- `claude plugin validate` accepts the agents, skills and plugin (skip with `--no-claude`).
+- `claude plugin validate` accepts the agents, skills and plugin (skip with `--no-claude`, which
+  also skips asking `claude --version`).
 
 **What verify runs.** Only what ocgen generates: hook commands, hook scripts and the statusline
 are re-rendered from the state, and one that differs on disk is reported (`… differs from what
@@ -1624,6 +1629,35 @@ if [ "$(ocgen hook --check 2>/dev/null)" = "ocgen-hooks 18" ]; then ocgen hook t
   WebFetch guard, the worker, plan, task and risk gates, the config audit, and a push phrased
   around the text gate that the `pre-push` hook still stops before it reaches a remote.
 
+#### A gate that can't run blocks
+
+On most events Claude Code goes ahead with the action when a hook fails, so a gate whose script is
+missing, that crashes or that times out would let everything through. Each safety gate therefore
+sets `"onFailure": "block"` (Claude Code 2.1.295 or later), and a failure does what the gate's
+own block does:
+
+| Gate | Event | When it can't run |
+|---|---|---|
+| approval gate | `PreToolUse`, every tool | the tool call is blocked |
+| WebFetch guard | `PreToolUse`, WebFetch | the fetch is blocked |
+| `shell-sandbox` (native Windows) | `PreToolUse`, Bash and PowerShell | the command is blocked |
+| config audit | `ConfigChange` | Claude Code keeps the settings it loaded |
+| plan gate | `TaskCreated` | the task isn't created |
+
+- **What counts as failing:** the hook can't start, its script is missing (a worktree without the
+  config), it exits with anything but 0 or 2 (a crash), it times out, or its JSON output is
+  invalid. A gate that answers, allowing (exit 0) or blocking (exit 2), never fails.
+- **A broken approval gate stops every tool call** until it's fixed, and Claude can't fix it from
+  inside the session: run `ocgen verify` and `ocgen doctor` in your own terminal. The error names
+  the hook and ends with `blocking because onFailure is "block"`.
+- **Not on the other gates.** The check, confidence and risk gates run on `SubagentStop`,
+  `TaskCompleted` and `TeammateIdle`, where Claude Code ignores `onFailure`, which is why the check
+  gates outlast the check (see *The check command*). Nor on hooks whose failure would cost you a
+  prompt or a tool call for nothing: `note`, `draft`, the formatter, the no-op `cd`.
+- **An older Claude Code** ignores the key and runs the hook as before, so there a gate that
+  fails lets the action through; `ocgen verify` warns. Projects made before this get the key from
+  `ocgen doctor`.
+
 #### The execution-approval line
 
 With Agent Teams' approval gate on, pushes, deploys, cloud mutations, publishes and remote
@@ -1705,8 +1739,9 @@ the gates stop taking the agent's word alone:
 - **Timeout:** after `OCGEN_CHECK_TIMEOUT` seconds (300 by default; time spent waiting for the
   lock counts) the check and everything it started are stopped, by the Rust hook and the scripts
   alike. The gates' own hook timeout is an hour, and Claude Code lets a change through when it times
-  a gate out, so the check gets at most 3540 seconds (59 minutes) whatever the variable says, and an
-  overrun fails the gate. While a gate runs, Claude Code's spinner says so.
+  a gate out (`onFailure` doesn't apply on these events), so the check gets at most 3540 seconds
+  (59 minutes) whatever the variable says, and an overrun fails the gate. While a gate runs, Claude
+  Code's spinner says so.
 - **Sandboxed:** Claude Code doesn't sandbox hooks, so with the sandbox on the hooks run the check
   and the formatter in ocgen's own sandbox, which denies everything it doesn't grant. It grants
   the system's folders and the toolchains' (`~/.cargo/bin`, `~/.rustup`, nvm, pyenv, …) to read
@@ -1766,6 +1801,8 @@ The approval gate matches command text, so it isn't the only safety line:
     `ocgen doctor`, which rewrite them. Hooks and MCP servers run outside it (the check and the
     formatter the hooks run get ocgen's own, above). A protected path reached through a
     symbolic link is protected where the link points, not by its name.
+- **Failing closed:** a safety gate that can't run blocks what it guards instead of letting it
+  through (see *A gate that can't run blocks*).
 - **`permissions.ask`** (with the power-user defaults): Claude Code itself asks before high-impact
   commands (`git push`, `terraform apply/destroy`, `pulumi up/destroy`,
   `kubectl apply/delete/set/rollout`, `helm`, `gh pr merge`/`release`/`workflow run`, publishes
@@ -1903,7 +1940,7 @@ for a plugin; `--team` is off by default. (The `--base-url` flag is OpenCode-onl
 |---|---|
 | `ocgen landscape [dir]` (alias `horizon`) | Read-only overview: agents (alias/tools/colour), skills, workflow/output/team setup, delegation topology, and a **Checks** section. |
 | `ocgen doctor [dir] [--dry-run] [--yes]` | Repair the project and rewrite files (invalid models, colours, empty roles, bad enum values, older state files). Shows a per-file plan with diffs, flags hand edits, offers to keep hand-added permission rules and MCP servers, removes files ocgen no longer generates, asks first, and backs up to `.ocgen-backup/`. |
-| `ocgen verify [dir] [--no-claude]` | Check the project works: up to date, settings valid, no local/user/managed setting turns hooks off or weakens a gate, hooks run (in bash; Git Bash present on Windows), every gate is ocgen's own and the approval gate blocks, http:// WebFetch is blocked, a no-op `cd` is dropped, `/inquire` ledgers get their HTML view, `note` opens them, `draft` opens the `/intent` issue draft and `adr` its intent files, `/recap`'s GitHub request gets an answer, pending intents and drafts name the current approvers, the sandbox is on behind the gate, the hooks' sandbox works here, the pre-push hook blocks Claude and lets you through, scripts use LF, the statusline renders, ocgen on PATH is current, Claude Code validation passes. Runs only what ocgen generates. Exits 1 on failure. |
+| `ocgen verify [dir] [--no-claude]` | Check the project works: up to date, settings valid, no local/user/managed setting turns hooks off or weakens a gate, hooks run (in bash; Git Bash present on Windows), the safety gates block when they fail to run (on Claude Code 2.1.295+), every gate is ocgen's own and the approval gate blocks, http:// WebFetch is blocked, a no-op `cd` is dropped, `/inquire` ledgers get their HTML view, `note` opens them, `draft` opens the `/intent` issue draft and `adr` its intent files, `/recap`'s GitHub request gets an answer, pending intents and drafts name the current approvers, the sandbox is on behind the gate, the hooks' sandbox works here, the pre-push hook blocks Claude and lets you through, scripts use LF, the statusline renders, ocgen on PATH is current, Claude Code validation passes. Runs only what ocgen generates. Exits 1 on failure. |
 | `ocgen approve [dir] [--minutes N] [--status] [--revoke]` | You approve high-impact actions for 1–1440 minutes (default 30). Refuses to run under Claude Code or without a terminal. |
 | `ocgen verify [dir] --run-check` | Also run the project's committed check command, as you and unsandboxed (only on a repository you trust). |
 | `ocgen notes open [topic]` | Show an `/inquire` ledger's HTML page: refresh the tab that shows it, or open one ([details](#the-visual-ledger)). |
