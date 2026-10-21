@@ -55,6 +55,20 @@ pub const NAMES: [&str; 16] = [
     "shell-sandbox",
 ];
 
+/// The safety gates: a gate that can't start, crashes, times out or exits with
+/// anything but 0 or 2 blocks what it guards (`onFailure: "block"`, Claude Code
+/// 2.1.295+) instead of letting it through. Claude Code ignores the field on
+/// Stop, SubagentStop, TaskCompleted and TeammateIdle, so the gates there
+/// aren't listed; nor are hooks whose failure must not cost the user a prompt
+/// or a tool call (the words, the formatter, the no-op `cd`).
+pub const FAIL_CLOSED: [&str; 5] = [
+    "team-approval-gate",
+    "https-only-fetch",
+    "shell-sandbox",
+    "config-audit",
+    "team-task-created",
+];
+
 /// A Bash command that starts with one `cd <target>` and goes on after `&&` or
 /// `;` (shared with `drop-noop-cd.sh`, which runs it through jq). The target is
 /// one plain word or a simple quoted string — nothing the shell would expand.

@@ -40,7 +40,8 @@ pub struct Check {
 
 #[derive(Debug, Clone)]
 pub struct Options {
-    /// Also run `claude plugin validate` (needs the Claude Code CLI).
+    /// Also run `claude plugin validate`, and ask `claude --version` whether the
+    /// safety gates' `onFailure` is honoured (needs the Claude Code CLI).
     pub run_claude: bool,
     /// Also run the project's check command (may be slow: it is usually the tests).
     pub run_check: bool,
@@ -209,6 +210,10 @@ pub fn verify(project: &Project, root: &Path, opts: &Options) -> Vec<Check> {
             s,
             cfg!(windows),
             find_git_bash(&user).as_deref(),
+        ));
+        out.push(gates_fail_closed(
+            s,
+            opts.run_claude.then(claude_version).flatten(),
         ));
         out.push(effective(&layers, &expected));
         if shell_ok {
@@ -702,26 +707,118 @@ fn hook_entries(settings: &Value) -> Vec<(String, String)> {
     v
 }
 
+/// Every command hook in the hooks table, in table order.
+fn command_hooks(settings: &Value) -> Vec<&Value> {
+    settings
+        .get("hooks")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flat_map(|hooks| hooks.values())
+        .flat_map(|groups| groups.as_array().into_iter().flatten())
+        .flat_map(|g| {
+            g.get("hooks")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+        })
+        .filter(|h| h.get("command").is_some())
+        .collect()
+}
+
 /// Whether each command hook pins `"shell": "bash"` (in table order).
 fn hook_shells_pinned(settings: &Value) -> Vec<bool> {
-    let mut v = Vec::new();
-    if let Some(hooks) = settings.get("hooks").and_then(Value::as_object) {
-        for groups in hooks.values() {
-            for g in groups.as_array().into_iter().flatten() {
-                for h in g
-                    .get("hooks")
-                    .and_then(Value::as_array)
-                    .into_iter()
-                    .flatten()
-                {
-                    if h.get("command").is_some() {
-                        v.push(h.get("shell").and_then(Value::as_str) == Some("bash"));
-                    }
-                }
-            }
+    command_hooks(settings)
+        .into_iter()
+        .map(|h| h.get("shell").and_then(Value::as_str) == Some("bash"))
+        .collect()
+}
+
+/// The first Claude Code that honours a hook's `onFailure`.
+pub const ON_FAILURE_SINCE: (u32, u32, u32) = (2, 1, 295);
+
+/// The version `claude --version` prints first ("2.1.285 (Claude Code)").
+pub fn claude_version_of(out: &str) -> Option<(u32, u32, u32)> {
+    let mut parts = out.split_whitespace().next()?.split('.');
+    let mut num = || parts.next()?.parse::<u32>().ok();
+    let v = (num()?, num()?, num()?);
+    parts.next().is_none().then_some(v)
+}
+
+/// The installed Claude Code's version, if it runs and says.
+fn claude_version() -> Option<(u32, u32, u32)> {
+    let mut cmd = Command::new(find_on_path("claude")?);
+    cmd.arg("--version");
+    match run(cmd, "", Duration::from_secs(30)) {
+        Ok((0, out, _)) => claude_version_of(&out),
+        _ => None,
+    }
+}
+
+fn dotted((major, minor, patch): (u32, u32, u32)) -> String {
+    format!("{major}.{minor}.{patch}")
+}
+
+/// A safety gate ([`crate::hooks::FAIL_CLOSED`]) that can't start, crashes or
+/// times out must block what it guards, not let it through: `onFailure:
+/// "block"`, which Claude Code honours from [`ON_FAILURE_SINCE`]. `claude` is
+/// the installed Claude Code's version, when verify asked it.
+pub fn gates_fail_closed(settings: &Value, claude: Option<(u32, u32, u32)>) -> Check {
+    let name = "gates fail closed";
+    let mut gates = 0;
+    let mut open = Vec::new();
+    for h in command_hooks(settings) {
+        let cmd = h.get("command").and_then(Value::as_str).unwrap_or("");
+        let Some(gate) = crate::hooks::FAIL_CLOSED
+            .iter()
+            .find(|g| cmd.contains(&format!("ocgen hook {g}")) || cmd.contains(&format!("{g}.sh")))
+        else {
+            continue;
+        };
+        gates += 1;
+        if h.get("onFailure").and_then(Value::as_str) != Some("block") {
+            open.push(*gate);
         }
     }
-    v
+    let since = dotted(ON_FAILURE_SINCE);
+    if gates == 0 {
+        return check(name, Status::Skip, "no safety gates configured");
+    }
+    if !open.is_empty() {
+        open.dedup();
+        return check(
+            name,
+            Status::Warn,
+            format!(
+                "{} let what they guard through when they crash, can't start or time out (no `\"onFailure\": \"block\"`) — run `ocgen doctor`",
+                open.join(", ")
+            ),
+        );
+    }
+    match claude {
+        Some(v) if v < ON_FAILURE_SINCE => check(
+            name,
+            Status::Warn,
+            format!(
+                "Claude Code {} ignores `onFailure`, so a safety gate that crashes, can't start or times out lets what it guards through — update Claude Code to {since} or later",
+                dotted(v)
+            ),
+        ),
+        Some(v) => check(
+            name,
+            Status::Pass,
+            format!(
+                "{gates} safety gate(s) block what they guard when they fail to run (Claude Code {})",
+                dotted(v)
+            ),
+        ),
+        None => check(
+            name,
+            Status::Pass,
+            format!(
+                "{gates} safety gate(s) block what they guard when they fail to run, on Claude Code {since} or later"
+            ),
+        ),
+    }
 }
 
 /// Git Bash on Windows, the way Claude Code looks for it: the
@@ -767,7 +864,8 @@ fn find_git_bash(user: &Value) -> Option<PathBuf> {
 
 /// The generated hook commands are POSIX sh. Claude Code runs them in bash only
 /// when the hook says so and — on Windows — Git Bash exists; otherwise they go to
-/// PowerShell, fail to parse, and every gate fails open (a hook error never blocks).
+/// PowerShell, fail to parse, and every gate fails open (a hook error blocks only
+/// a safety gate's action, [`gates_fail_closed`]).
 pub fn hook_shell(settings: &Value, windows: bool, bash: Option<&Path>) -> Check {
     let name = "hook shell";
     let pinned = hook_shells_pinned(settings);
@@ -778,7 +876,7 @@ pub fn hook_shell(settings: &Value, windows: bool, bash: Option<&Path>) -> Check
         return check(
             name,
             Status::Fail,
-            "Git Bash not found — the hooks cannot run here, so the gates (including the approval gate) let everything through. Install Git for Windows, or set CLAUDE_CODE_GIT_BASH_PATH to its bash.exe",
+            "Git Bash not found — the hooks cannot run here: the safety gates block everything they guard (on Claude Code older than 2.1.295 they let it through), and the other gates let everything through. Install Git for Windows, or set CLAUDE_CODE_GIT_BASH_PATH to its bash.exe",
         );
     }
     let unpinned = pinned.iter().filter(|p| !**p).count();

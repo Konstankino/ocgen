@@ -4632,6 +4632,141 @@ fn verify_flags_hooks_that_cannot_run_in_bash() {
     assert_eq!(hook_shell(&none, true, None).status, Status::Skip);
 }
 
+#[test]
+fn safety_gates_block_the_action_when_they_fail() {
+    // A safety gate that can't start, crashes or times out blocks what it
+    // guards (`onFailure: "block"`) instead of letting it through. Nothing else
+    // does: a word hook would swallow the prompt, and on Stop, SubagentStop,
+    // TaskCompleted and TeammateIdle Claude Code ignores the field.
+    let dir = tempdir().unwrap();
+    let mut p = claude_default("fc");
+    p.claude.team = Team {
+        enabled: true,
+        mode: "in-process".into(),
+        hooks: true,
+        plan_gate: true,
+        confidence_threshold: 96,
+        risk_rounds: true,
+        approval_gate: true,
+    };
+    p.claude.sandbox.enabled = true;
+    p.claude.workflow.check_cmd = "cargo test".into();
+    p.claude.hooks_extra.notify = true;
+    p.claude.hooks_extra.format_cmd = "cargo fmt".into();
+    p.claude.hooks_extra.config_audit = true;
+    p.claude.output = Output {
+        project: true,
+        plugin: true,
+    };
+    p.scaffold(dir.path(), false).unwrap();
+
+    let plugin: serde_json::Value =
+        serde_json::from_str(&read(dir.path(), "plugin/fc/hooks/hooks.json")).unwrap();
+    for table in [settings_of(dir.path()), plugin] {
+        let mut gates: Vec<&str> = Vec::new();
+        for (event, groups) in table["hooks"].as_object().unwrap() {
+            for h in groups
+                .as_array()
+                .unwrap()
+                .iter()
+                .flat_map(|g| g["hooks"].as_array().unwrap())
+            {
+                let cmd = h["command"].as_str().unwrap();
+                let gate = ocgen::hooks::FAIL_CLOSED
+                    .iter()
+                    .find(|g| cmd.contains(&format!("ocgen hook {g};")));
+                match gate {
+                    Some(g) => {
+                        assert_eq!(h["onFailure"], "block", "{event}: {h}");
+                        assert!(
+                            !matches!(
+                                event.as_str(),
+                                "Stop" | "SubagentStop" | "TaskCompleted" | "TeammateIdle"
+                            ),
+                            "{g} on {event}, where Claude Code ignores onFailure"
+                        );
+                        assert!(h.get("async").is_none() && h.get("if").is_none(), "{h}");
+                        gates.push(g);
+                    }
+                    None => assert!(h.get("onFailure").is_none(), "{event}: {h}"),
+                }
+            }
+        }
+        gates.sort_unstable();
+        let mut want = ocgen::hooks::FAIL_CLOSED.to_vec();
+        want.sort_unstable();
+        assert_eq!(gates, want, "every safety gate, once");
+    }
+}
+
+#[test]
+fn verify_flags_safety_gates_that_fail_open() {
+    use ocgen::verify::{claude_version_of, gates_fail_closed, Status, ON_FAILURE_SINCE};
+    let gate = |extra: serde_json::Value| {
+        let mut h = serde_json::json!({
+            "type": "command",
+            "command": "if [ \"$(ocgen hook --check 2>/dev/null)\" = \"ocgen-hooks 18\" ]; then ocgen hook team-approval-gate; else sh \".claude/hooks/team-approval-gate.sh\"; fi",
+            "shell": "bash"
+        });
+        for (k, v) in extra.as_object().unwrap() {
+            h[k] = v.clone();
+        }
+        serde_json::json!({ "hooks": { "PreToolUse": [ { "hooks": [ h ] } ] } })
+    };
+    let closed = gate(serde_json::json!({ "onFailure": "block" }));
+    let open = gate(serde_json::json!({}));
+
+    assert_eq!(
+        claude_version_of("2.1.285 (Claude Code)"),
+        Some((2, 1, 285))
+    );
+    assert_eq!(claude_version_of("2.1.306\n"), Some((2, 1, 306)));
+    assert_eq!(claude_version_of("Claude Code"), None);
+    assert_eq!(ON_FAILURE_SINCE, (2, 1, 295));
+
+    // Blocks on failure, on a Claude Code that knows the field.
+    let c = gates_fail_closed(&closed, Some((2, 1, 306)));
+    assert_eq!(c.status, Status::Pass, "{}", c.detail);
+    assert!(c.detail.contains("1 safety gate"), "{}", c.detail);
+    // The version wasn't asked (`--no-claude`): pass, and say what it needs.
+    let c = gates_fail_closed(&closed, None);
+    assert_eq!(c.status, Status::Pass, "{}", c.detail);
+    assert!(c.detail.contains("2.1.295"), "{}", c.detail);
+
+    // An older Claude Code ignores the field: the gate fails open there.
+    let c = gates_fail_closed(&closed, Some((2, 1, 285)));
+    assert_eq!(c.status, Status::Warn, "{}", c.detail);
+    assert!(
+        c.detail.contains("2.1.285") && c.detail.contains("2.1.295"),
+        "{}",
+        c.detail
+    );
+
+    // A project generated before ocgen set it.
+    for version in [None, Some((2, 1, 306))] {
+        let c = gates_fail_closed(&open, version);
+        assert_eq!(c.status, Status::Warn, "{}", c.detail);
+        assert!(
+            c.detail.contains("team-approval-gate") && c.detail.contains("ocgen doctor"),
+            "{}",
+            c.detail
+        );
+    }
+    // Set to let the action through, by hand.
+    let c = gates_fail_closed(&gate(serde_json::json!({ "onFailure": "continue" })), None);
+    assert_eq!(c.status, Status::Warn, "{}", c.detail);
+
+    // Hooks, but no safety gate among them; or no hooks at all.
+    let other = serde_json::json!({ "hooks": { "Stop": [ { "hooks": [
+        { "type": "command", "command": "ocgen hook inquire-notes;", "shell": "bash" }
+    ] } ] } });
+    assert_eq!(gates_fail_closed(&other, None).status, Status::Skip);
+    assert_eq!(
+        gates_fail_closed(&serde_json::json!({}), None).status,
+        Status::Skip
+    );
+}
+
 // ------------------------------------------------------------- extra permissions -----
 
 #[test]
