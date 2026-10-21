@@ -2151,8 +2151,8 @@ impl Project {
         }
         if self.claude.sandbox.enabled {
             // Claude Code doesn't sandbox hooks: the hooks run the check and the
-            // formatter in an OS sandbox of their own, from these lists — and on
-            // native Windows, the commands Claude runs too.
+            // formatter in an OS sandbox of their own, from these lists (none on
+            // native Windows, where they are refused: sandbox::NATIVE_WINDOWS).
             use crate::claude::{
                 CREDENTIAL_ENV, CREDENTIAL_PATHS, HOOK_ALLOW_EXEC, HOOK_ALLOW_READ,
                 HOOK_ALLOW_WRITE, HOOK_DENY_WRITE,
