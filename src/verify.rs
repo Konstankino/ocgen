@@ -225,6 +225,7 @@ pub fn verify(project: &Project, root: &Path, opts: &Options) -> Vec<Check> {
             out.push(doc_versions(&probe, project));
             out.push(draft_review(&probe));
             out.push(recap_github(&probe));
+            out.push(github_read(&probe));
         }
         out.push(sandbox(project, &layers));
         out.push(hook_sandbox(root, &layers));
@@ -399,11 +400,12 @@ fn undo(from: &str) -> String {
 /// settings, minus the keys that name a command to run.
 fn probe_env_key(key: &str) -> bool {
     const PREFIXES: [&str; 4] = ["OCGEN_", "TEAM_", "LOOP_GUARD_", "SUBAGENT_"];
-    const COMMANDS: [&str; 4] = [
+    const COMMANDS: [&str; 5] = [
         "OCGEN_CHECK_CMD",
         "OCGEN_FORMAT_CMD",
         "OCGEN_NOTES_BROWSER",
         "OCGEN_RECAP_GH",
+        "OCGEN_GITHUB_GH",
     ];
     (PREFIXES.iter().any(|p| key.starts_with(p)) || key == "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS")
         && !COMMANDS.contains(&key)
@@ -1258,7 +1260,8 @@ fn effective(layers: &Layers, expected: &Value) -> Check {
 /// documentation site trusted (as the ConfigChange audit judges it), the
 /// hooks' sandbox off or protecting less, verify's own probe switch (the
 /// gates then decide but record nothing), or a stand-in for gh in /recap's
-/// GitHub hook (it would run with the user's gh login, outside the sandbox).
+/// GitHub hook or the GitHub read (it would run with the user's gh login,
+/// outside the sandbox).
 /// A key that no generated gate reads loosens nothing.
 ///
 /// Values are read as the hooks read them — roles and sites in any letter case,
@@ -1321,9 +1324,10 @@ fn weakens(key: &str, want: Option<&str>, got: Option<&str>, ocgen: &Value) -> b
         }
         "TEAM_TASK_GATE" => hook("SubagentStop") && got == Some("1") && want != Some("1"),
         "OCGEN_HOOK_PROBE" => got.is_some(),
-        // Replaces gh in /recap's GitHub hook, which runs with the user's gh
-        // login outside the sandbox; ocgen never sets it (tests only).
-        "OCGEN_RECAP_GH" => got.is_some_and(|g| !g.trim().is_empty()),
+        // Replaces gh in /recap's GitHub hook and in the GitHub read, which run
+        // with the user's gh login outside the sandbox; ocgen never sets them
+        // (tests only).
+        "OCGEN_RECAP_GH" | "OCGEN_GITHUB_GH" => got.is_some_and(|g| !g.trim().is_empty()),
         // The reset that keeps git from asking a keychain (claude::GIT_HELPER_RESET).
         "GIT_CONFIG_COUNT" | "GIT_CONFIG_KEY_0" | "GIT_CONFIG_VALUE_0" => {
             want.is_some() && got != want
@@ -2442,6 +2446,70 @@ fn recap_github(p: &Probe) -> Check {
     }
 }
 
+/// The GitHub read: a write of Claude's request gets a note, and any other write
+/// passes untouched. Probed in the project itself: in probe mode the hook reads
+/// nothing, calls no gh and writes nothing.
+fn github_read(p: &Probe) -> Check {
+    let name = "GitHub read";
+    let Some((event, group, cmd)) = p.find("PostToolUse", "github-read") else {
+        return check(name, Status::Skip, "not in this project's settings.json");
+    };
+    if let Some(what) = p.hand_edited(&event, &group, &cmd) {
+        return check(name, Status::Warn, not_run(&what));
+    }
+    let run = |rel: &str| {
+        let ev = serde_json::json!({
+            "session_id": "ocgen-verify", "tool_name": "Write",
+            "tool_input": { "file_path": crate::paths::for_shell(&p.root.join(rel)) }
+        })
+        .to_string();
+        run_sh(p.sh, &cmd, &ev, &p.env, p.root, Duration::from_secs(20))
+    };
+    let (Some(other), Some(request)) = (run("src/ocgen-verify.rs"), run(crate::github::REQUEST))
+    else {
+        return check(name, Status::Fail, "the hook did not finish");
+    };
+    if let Some((code, _, err)) = [&other, &request].into_iter().find(|o| o.0 != 0) {
+        return check(
+            name,
+            Status::Fail,
+            format!(
+                "the hook exited {code} ({}) — it must never fail a write; run `ocgen doctor`",
+                err.lines().next().unwrap_or("").trim()
+            ),
+        );
+    }
+    if !other.1.trim().is_empty() {
+        return check(
+            name,
+            Status::Fail,
+            "the hook answered a write other than Claude's GitHub request — run `ocgen doctor`",
+        );
+    }
+    if request.1.contains("additionalContext") {
+        check(
+            name,
+            Status::Pass,
+            "Claude's read-only GitHub requests are answered with your gh login, outside the sandbox",
+        )
+    } else if !ocgen_hook_ok() {
+        check(
+            name,
+            Status::Warn,
+            format!(
+                "needs ocgen ({}) on PATH — without it Claude can't read GitHub from the sandbox",
+                crate::hooks::PROTOCOL
+            ),
+        )
+    } else {
+        check(
+            name,
+            Status::Fail,
+            "the hook ran but didn't answer Claude's GitHub request — run `ocgen doctor`",
+        )
+    }
+}
+
 /// The approval gate must block pushes — including phrasings with flags and via
 /// a deploy script — and allow ordinary work. Tested with an empty HOME so a
 /// current approval can't hide a broken gate. `off` is why the settings Claude
@@ -3237,6 +3305,7 @@ mod tests {
             "OCGEN_FORMAT_CMD",
             "OCGEN_CHECK_CMD",
             "OCGEN_RECAP_GH",
+            "OCGEN_GITHUB_GH",
         ] {
             assert!(!probe_env_key(key), "{key}");
         }
@@ -3346,6 +3415,8 @@ mod tests {
         // Nothing sets the stand-in for gh: it would run with the user's login.
         assert!(w("OCGEN_RECAP_GH", None, Some("sh ./x")));
         assert!(!w("OCGEN_RECAP_GH", None, Some(" ")));
+        assert!(w("OCGEN_GITHUB_GH", None, Some("sh ./x")));
+        assert!(!w("OCGEN_GITHUB_GH", None, Some(" ")));
         assert!(!w("OCGEN_NO_JQ", None, Some("1")));
 
         // No worker gate, no risk gate: their lists and switches loosen nothing.

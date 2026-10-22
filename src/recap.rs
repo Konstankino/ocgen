@@ -113,7 +113,7 @@ pub struct Request {
 }
 
 /// A value for an error message, cut short.
-fn shown(v: &Value) -> String {
+pub(crate) fn shown(v: &Value) -> String {
     let s = v.to_string();
     match s.char_indices().nth(40) {
         Some((i, _)) => format!("{}…", &s[..i]),
@@ -121,7 +121,7 @@ fn shown(v: &Value) -> String {
     }
 }
 
-fn remote_ok(r: &str) -> bool {
+pub(crate) fn remote_ok(r: &str) -> bool {
     static RE: OnceLock<Regex> = OnceLock::new();
     r.len() <= 100 && re(&RE, r"^[A-Za-z0-9][A-Za-z0-9._-]*$").is_match(r)
 }
@@ -353,6 +353,9 @@ pub fn gh_args(plan: &Plan) -> Vec<String> {
     a
 }
 
+/// What a gh that isn't there is reported as.
+pub(crate) const GH_MISSING: &str = "gh (GitHub CLI) isn't installed — https://cli.github.com";
+
 /// gh's answer as GraphQL `data`, or why there is none, in words for the report.
 /// An answer counts whatever the exit code: one lookup that finds nothing (a
 /// stray `#7`) makes gh exit 1, with the rest of the answer intact.
@@ -360,7 +363,6 @@ pub fn classify(
     run: Result<(i32, String, String), String>,
     limit: Duration,
 ) -> Result<Value, String> {
-    const MISSING: &str = "gh (GitHub CLI) isn't installed — https://cli.github.com";
     let (code, out, err) = match run {
         Ok(r) => r,
         Err(e) if e == "timed out" => {
@@ -369,7 +371,7 @@ pub fn classify(
                 limit.as_secs()
             ))
         }
-        Err(e) if e.starts_with("could not start") => return Err(MISSING.into()),
+        Err(e) if e.starts_with("could not start") => return Err(GH_MISSING.into()),
         Err(e) => return Err(format!("gh didn't run ({e})")),
     };
     let body: Value = serde_json::from_str(out.trim()).unwrap_or(Value::Null);
@@ -391,18 +393,43 @@ pub fn classify(
             )
         })
         .collect();
-    let text = format!("{err}\n{}", errors.join("\n")).to_lowercase();
+    let text = format!("{err}\n{}", errors.join("\n"));
+    let reason = known_failure(code, &text)
+        .map(|(r, _)| r)
+        .unwrap_or_else(|| {
+            let first = err
+                .lines()
+                .chain(errors.iter().map(String::as_str))
+                .map(str::trim)
+                .find(|l| !l.is_empty());
+            match first {
+                Some(l) => format!("gh failed: {}", l.chars().take(200).collect::<String>()),
+                None => format!("gh exited {code} without an answer"),
+            }
+        });
+    Err(reason)
+}
+
+/// Why gh failed, in words the user can act on, when its exit code or `text`
+/// (its stderr, and any GraphQL errors) say so plainly — and whether every
+/// other call would fail the same way (no gh, no login, no network).
+pub(crate) fn known_failure(code: i32, text: &str) -> Option<(String, bool)> {
+    let text = text.to_lowercase();
     let has = |words: &[&str]| words.iter().any(|w| text.contains(w));
     let reason = if code == 127 || has(&["command not found", "executable file not found"]) {
-        MISSING.to_string()
+        (GH_MISSING.to_string(), true)
     } else if code == 4 || has(&["gh auth login"]) {
-        "gh isn't logged in to github.com — run `gh auth login` in your terminal".into()
+        let r = "gh isn't logged in to github.com — run `gh auth login` in your terminal";
+        (r.into(), true)
     } else if has(&["bad credentials", "http 401"]) {
-        "GitHub rejected gh's token — run `gh auth refresh` in your terminal".into()
+        let r = "GitHub rejected gh's token — run `gh auth refresh` in your terminal";
+        (r.into(), true)
     } else if has(&["saml"]) {
-        "the organization requires SSO — authorize gh's token for it (`gh auth refresh`)".into()
+        let r = "the organization requires SSO — authorize gh's token for it (`gh auth refresh`)";
+        (r.into(), false)
     } else if has(&["rate limit", "rate_limited"]) {
-        "GitHub's API rate limit is used up — it resets within the hour".into()
+        let r = "GitHub's API rate limit is used up — it resets within the hour";
+        (r.into(), true)
     } else if has(&[
         "error connecting",
         "could not resolve host",
@@ -411,21 +438,15 @@ pub fn classify(
         "network is unreachable",
         "i/o timeout",
     ]) {
-        "can't reach GitHub (offline, or api.github.com is blocked)".into()
+        let r = "can't reach GitHub (offline, or api.github.com is blocked)";
+        (r.into(), true)
     } else if has(&["could not resolve to a repository"]) {
-        "gh's login can't see this repository (private, renamed or deleted)".into()
+        let r = "gh's login can't see this repository (private, renamed or deleted)";
+        (r.into(), false)
     } else {
-        let first = err
-            .lines()
-            .chain(errors.iter().map(String::as_str))
-            .map(str::trim)
-            .find(|l| !l.is_empty());
-        match first {
-            Some(l) => format!("gh failed: {}", l.chars().take(200).collect::<String>()),
-            None => format!("gh exited {code} without an answer"),
-        }
+        return None;
     };
-    Err(reason)
+    Some(reason)
 }
 
 // ---------------------------------------------------------------- digest --
@@ -434,7 +455,7 @@ fn time(v: &Value) -> Option<i64> {
     v.as_str().and_then(parse_time)
 }
 
-fn cut(s: &str, max: usize) -> (String, bool) {
+pub(crate) fn cut(s: &str, max: usize) -> (String, bool) {
     match s.char_indices().nth(max) {
         Some((i, _)) => (format!("{}…", &s[..i]), true),
         None => (s.to_string(), false),
@@ -911,23 +932,46 @@ pub struct Gh {
 
 impl Gh {
     fn run(&self, root: &Path, args: &[String]) -> Result<(i32, String, String), String> {
-        let mut c = if self.program.is_empty() {
-            Command::new("gh")
-        } else {
+        self.call(root, args, "", self.limit)
+    }
+
+    /// gh with `args` and `stdin` in the project at `root`, stopped after `limit`.
+    /// Under WSL with no Linux gh, the Windows one (`gh.exe`, run through WSL's
+    /// interop) and its login: WSL1 users often keep gh on the Windows side.
+    pub(crate) fn call(
+        &self,
+        root: &Path,
+        args: &[String],
+        stdin: &str,
+        limit: Duration,
+    ) -> Result<(i32, String, String), String> {
+        let run = |mut c: Command| {
+            c.args(args)
+                .current_dir(crate::paths::plain(root))
+                .env("GH_PROMPT_DISABLED", "1")
+                .env("GH_NO_UPDATE_NOTIFIER", "1")
+                .env("GH_SPINNER_DISABLED", "1")
+                .env("NO_COLOR", "1");
+            crate::verify::run(c, stdin, limit)
+        };
+        if !self.program.is_empty() {
             let mut c = Command::new("sh");
             c.arg("-c")
                 .arg(format!("{} \"$@\"", self.program))
                 .arg("ocgen-gh");
-            c
-        };
-        c.args(args)
-            .current_dir(crate::paths::plain(root))
-            .env("GH_PROMPT_DISABLED", "1")
-            .env("GH_NO_UPDATE_NOTIFIER", "1")
-            .env("GH_SPINNER_DISABLED", "1")
-            .env("NO_COLOR", "1");
-        crate::verify::run(c, "", self.limit)
+            return run(c);
+        }
+        match run(Command::new("gh")) {
+            Err(e) if e.starts_with("could not start") && in_wsl() => run(Command::new("gh.exe")),
+            r => r,
+        }
     }
+}
+
+/// Whether this runs under WSL (1 or 2), which names its distribution in the
+/// environment of every process it starts.
+fn in_wsl() -> bool {
+    cfg!(target_os = "linux") && std::env::var_os("WSL_DISTRO_NAME").is_some_and(|d| !d.is_empty())
 }
 
 /// The URL of `remote` in the repository at `root`, from its git config only
@@ -949,7 +993,7 @@ fn remote_url(root: &Path, remote: &str) -> Option<String> {
 /// The request as written (a little past the size [`parse_request`] takes, so
 /// a larger one is refused, never read whole). Read again a moment later if it
 /// isn't JSON yet: a formatter hook may be rewriting it right now.
-fn read_request(path: &Path) -> String {
+pub(crate) fn read_request(path: &Path) -> String {
     use std::io::Read;
     let read = || {
         let mut text = String::new();

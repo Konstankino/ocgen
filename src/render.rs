@@ -888,6 +888,19 @@ impl Project {
         .context("rendering the commit and authorship rules")
     }
 
+    /// Where agents may write: inside the project only, unless the user allows
+    /// more. A section of the Claude workflow rule (always English, like the
+    /// rule), and part of every OpenCode agent's text (in the instruction
+    /// language), as the commit and authorship rules are.
+    fn workspace(&self, env: &Environment, language: &str) -> Result<String> {
+        env.render_str(
+            &templates::load("workspace.md.j2")?,
+            context! { language => canonical_language(language) },
+        )
+        .map(|n| n.trim().to_string())
+        .context("rendering where agents write")
+    }
+
     /// The language agents answer the user in: `response_language`, else the
     /// instruction language, else English.
     pub fn response_language(&self) -> &str {
@@ -951,6 +964,14 @@ impl Project {
     /// and /intent reading copies as pages.
     pub fn renders_notes(&self) -> bool {
         self.claude.workflow.inquire || self.claude.workflow.recap || self.writes_reading_copies()
+    }
+
+    /// Whether the sandbox withholds the user's gh login from Claude's shell, so
+    /// `gh` can't run there and the `github-read` hook is Claude's only way to
+    /// read GitHub (elsewhere — no sandbox, as on native Windows or WSL1 — it is
+    /// the read-only way).
+    pub fn withholds_gh(&self) -> bool {
+        self.claude.sandbox.enabled && !self.claude.sandbox.allow_credentials
     }
 
     /// Whether the word `note` or `notes` opens the ledgers.
@@ -1191,6 +1212,7 @@ impl Project {
         // OpenCode has no setting for commit attribution and no rule file every
         // agent loads, so each agent's text carries it.
         let authorship = self.authorship(&env, lang)?;
+        let workspace = self.workspace(&env, lang)?;
         for agent in &self.agents {
             // What ocgen adds to a coordinator goes at the end of its prompt file,
             // or of its body when it has none.
@@ -1207,6 +1229,7 @@ impl Project {
                     Some(n) => with_paragraph(text, n),
                     None => text.to_string(),
                 };
+                let text = with_paragraph(&text, &workspace);
                 let text = with_paragraph(&text, &authorship);
                 with_paragraph(&text, &mindset)
             };
@@ -1687,6 +1710,10 @@ impl Project {
             let body = templates::load_embedded("claude/hooks/recap-github.sh")?;
             components.push(("hooks/recap-github.sh".to_string(), body));
         }
+        // Claude's GitHub requests are answered by this hook, outside any sandbox,
+        // with or without one.
+        let body = templates::load_embedded("claude/hooks/github-read.sh")?;
+        components.push(("hooks/github-read.sh".to_string(), body));
         // Native Windows: the commands Claude runs are refused there.
         if self.claude.sandbox.enabled {
             let body = templates::load_embedded("claude/hooks/shell-sandbox.sh")?;
@@ -1768,6 +1795,7 @@ impl Project {
             fanout => self.claude.workflow.fanout,
             verify_todos => self.claude.workflow.verify_todos,
             prefer_explorer => self.prefers_explorer(),
+            gh_withheld => self.withholds_gh(),
             deliver => self.claude.workflow.deliver,
             inquire => self.claude.workflow.inquire,
             intent => self.claude.workflow.intent,
@@ -1779,6 +1807,8 @@ impl Project {
             // Subagents and teammates load the rules too, so this reaches every
             // agent that writes a commit or a document.
             authorship => self.authorship(&env, "English")?,
+            // Where every agent may write, said once for all of them.
+            workspace => self.workspace(&env, "English")?,
         };
         components.push((
             "rules/ocgen-workflow.md".to_string(),
@@ -2572,6 +2602,17 @@ impl Project {
                 json!({ "matcher": "Write|Edit|MultiEdit", "hooks": [ command_hook(hook_cmd(prefix, dir, "recap-github.sh")) ] }),
             );
         }
+        // Claude writes a GitHub request; the hook reads it — read-only, the
+        // remotes' repositories only — with the user's own gh login, which the
+        // Bash sandbox withholds from Claude's shell. Without a sandbox (native
+        // Windows, WSL1) it is still the read-only way. Its gh calls get all
+        // but a minute of its timeout.
+        let mut read = command_hook(hook_cmd(prefix, dir, "github-read.sh"));
+        read["timeout"] = json!(crate::github::HOOK_TIMEOUT);
+        push(
+            "PostToolUse",
+            json!({ "matcher": "Write|Edit|MultiEdit", "hooks": [ read ] }),
+        );
         // Deterministic line for every WebFetch: HTTPS, trusted docs sites only.
         push(
             "PreToolUse",

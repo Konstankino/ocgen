@@ -1,0 +1,50 @@
+{% if language == "Ukrainian" -%}
+## Куди ти пишеш
+
+Пиши лише всередині цього проєкту: у теці, де почався сеанс, і в усьому, що в ній, разом із
+робочими деревами в `.claude/worktrees/`. Поза нею нічого не створюй, не змінюй, не переміщуй і не
+видаляй, якщо користувач явно не дозволив цей шлях чи цю дію в цій розмові. Тобто не пиши в
+домашню теку, її приховані файли й налаштування інструментів (`~/.config`, `~/.claude`,
+`~/.gitconfig`, `~/.npmrc`), у `/tmp` чи будь-яку іншу тимчасову теку (також ту, яку пропонує
+твій інструмент як чернетку), в інші репозиторії й проєкти чи в системні теки, і нічого не
+встановлюй глобально (`npm install -g`, `pip install --user`, `cargo install`, `brew install`).
+
+- Це стосується кожного інструмента: Write і Edit, а також кожної команди — перенаправлень (`>`,
+  `>>`), `cp`, `mv`, `tee`, `ln`, `mkdir`, `touch`, параметрів виводу (`-o`, `--output`,
+  `--out-dir`), `git clone` чи `git worktree add` в іншу теку, `git config --global`.
+- Тимчасові файли клади в `.claude/scratch/` цього проєкту, а не в тимчасову теку. Якщо її немає,
+  створи її разом із файлом `.gitignore`, у якому один рядок `*`, а свої файли там видаляй, щойно
+  вони більше не потрібні.
+- Збирати, тестувати й перевіряти проєкт його звичними командами можна, хоча інструменти тримають
+  свої кеші поза ним (cargo, npm, pip). Але ніколи не спрямовуй їхній вивід, встановлення чи
+  налаштування кудись поза проєкт.
+- Якщо для роботи треба щось записати поза проєктом, зупинись і спершу запитай користувача: скажи,
+  що саме буде записано і куди. Дозвіл стосується лише того, що користувач назвав, і лише цього
+  завдання.
+- Коли передаєш роботу агентові, який не отримує цих інструкцій (вбудованому, як-от Explore, Plan
+  чи general-purpose), додай цей розділ до тексту його завдання.
+{%- else -%}
+## Where you write
+
+Write only inside this project: the folder the session started in and everything under it,
+worktrees under `.claude/worktrees/` included. Outside it, create, change, move or delete nothing
+unless the user has explicitly allowed that path or action in this conversation. That rules out
+your home folder, its dotfiles and tool config (`~/.config`, `~/.claude`, `~/.gitconfig`,
+`~/.npmrc`), `/tmp` and every other temp folder (a scratchpad your tool offers included), other
+repositories and projects, and system folders, and it rules out installing anything globally
+(`npm install -g`, `pip install --user`, `cargo install`, `brew install`).
+
+- It holds for every tool: Write and Edit, and every command — redirections (`>`, `>>`), `cp`,
+  `mv`, `tee`, `ln`, `mkdir`, `touch`, output options (`-o`, `--output`, `--out-dir`), `git clone`
+  or `git worktree add` into another folder, `git config --global`.
+- Scratch files go in this project's `.claude/scratch/`, never in a temp folder. If it isn't there,
+  create it with a `.gitignore` holding the one line `*`, and delete your files there as soon as
+  they're no longer needed.
+- Building, testing and linting the project with its usual commands is fine, though the tools keep
+  their own caches outside it (cargo, npm, pip). Never point their output, an install or their
+  config anywhere outside the project.
+- When the work needs a write outside the project, stop and ask the user first: say exactly what
+  would be written, and where. An approval covers only what the user named, for this task.
+- When you hand work to an agent that doesn't get these instructions (a built-in one such as
+  Explore, Plan or general-purpose), put this section in its prompt.
+{%- endif %}

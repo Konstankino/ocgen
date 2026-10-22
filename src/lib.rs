@@ -21,6 +21,7 @@ mod clock;
 pub mod diff;
 pub mod docs;
 pub mod gitcheck;
+pub mod github;
 pub mod hooks;
 pub mod intent;
 pub mod manifest;

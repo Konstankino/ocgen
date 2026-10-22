@@ -277,6 +277,36 @@ To change the wording, edit `authorship.md.j2` (see
 `claude/rules/ocgen-workflow.md.j2` from before this has no `{{ authorship }}` line, so its
 projects get no section until you add one.
 
+### Where agents write: the project only
+
+Every project ocgen sets up tells its agents to write only inside the project: the folder the
+session started in and everything under it, worktrees under `.claude/worktrees/` included.
+Outside it they create, change, move and delete nothing unless you have explicitly allowed that
+path or action in the conversation:
+- **Off limits:** your home folder, its dotfiles and tool config (`~/.config`, `~/.claude`,
+  `~/.gitconfig`, `~/.npmrc`), `/tmp` and every other temp folder (a scratchpad Claude Code
+  offers included), other repositories and projects, system folders, and global installs
+  (`npm install -g`, `pip install --user`, `cargo install`, `brew install`).
+- **Every tool:** Write and Edit, and every command: redirections, `cp`, `mv`, `tee`, `ln`,
+  `mkdir`, `touch`, output options (`-o`, `--out-dir`), `git clone` or `git worktree add` into
+  another folder, `git config --global`.
+- **Scratch files** go in the project's `.claude/scratch/`, which the agent creates with a
+  `.gitignore` holding `*`, and cleans up after itself.
+- **Builds and tests** run as usual, though their tools keep caches outside the project
+  (cargo, npm, pip); the agents never point output, installs or config elsewhere.
+- **Anything else** waits for you: the agent stops, says what it would write and where, and an
+  approval covers only what you named, for that task. An agent that doesn't get these
+  instructions (a built-in one such as Explore, Plan or general-purpose) gets the section in its
+  prompt from the agent that hands it the work.
+
+Where it lives, as with the commit rules: a "Where you write" section of
+`.claude/rules/ocgen-workflow.md` for Claude Code (in English, loaded by every session, subagent
+and teammate), and the same section in every OpenCode agent's text, in the instruction language.
+`ocgen doctor` adds it to an existing project. It is an instruction, not a fence: with the sandbox
+on, Claude Code's own limits on where commands may write still apply; Claude Code's own features
+that write under `~/.claude` (its memory, plan mode's plan file) count as outside the project too.
+To change the wording, edit `workspace.md.j2`.
+
 ### Other commands
 
 ```bash
@@ -565,6 +595,7 @@ repo used for a plugin's marketplace and release workflow; `--team` enables
 .claude/intent/viewer/               # the intent files' viewer and session records — type `adr` to read them (git-ignored)
 .claude/intent/view/<name>.md        # an intent file's reading copy in your language, with its page (git-ignored)
 .claude/intent/intent-template.md    # /intent's intent-file (ADR) structure — yours, written once
+.claude/notes/github/                # Claude's read-only GitHub requests and their answers (git-ignored)
 .claude/skills/fanout/SKILL.md       # /fanout — worktree-isolated parallel writers (you run it)
 .claude/skills/improve-prompt/SKILL.md
 .claude/skills/<name>/SKILL.md       # your own skills (`ocgen add skill`)
@@ -778,17 +809,22 @@ and autocomplete it.
 **Fewer read-block prompts.** With `permissions.blockReadsOutsideWorkingDirectories` on, Claude
 Code asks about every shell command it can't prove only reads inside the project: a `cd …;`
 before relative paths, `find -exec`, `for` loops and `$(…)`, sed programs, PowerShell script
-blocks. "Don't ask again" can't save them, so they come back every time. Three defaults keep
-them rare:
+blocks. In PowerShell that includes a plain `( … )`, which Claude Code counts as a subexpression
+(`(Get-Clipboard -Raw).Length` is reported as "Command contains subexpressions $()"), `@( … )`,
+`.Property` or `.Method()` on a result, `"…$x…"` strings and `@splat`. "Don't ask again" can't
+save them, so they come back every time. Three defaults keep them rare:
 - **Research goes to `explorer`.** Claude Code's built-in `Explore` agent ignores CLAUDE.md and
   writes exactly those one-liners, so `Agent(Explore)` is denied and the workflow rule sends
   research to the generated `explorer`, which has Read, Grep and Glob but no shell. Answer *no*
   to the wizard's explorer question to keep the built-in one (for example, to let research run
   `git`/`gh`); nothing is denied when the project has no `explorer`.
 - **A "Shell commands" rule.** `.claude/rules/ocgen-workflow.md` tells the main session and
-  every agent to read with Read, Grep and Glob, to run one plain command per Bash call (no
-  `cd`, loops, `$(…)`, `find -exec`, sed programs or script blocks), and to pass that on when it
-  delegates to a built-in agent.
+  every agent to read with Read, Grep and Glob (not `cat` or `Get-Content`), to run one plain
+  command per Bash or PowerShell call (no `cd`, loops, `$(…)`, `find -exec`, sed programs, script
+  blocks, and in PowerShell no `( … )`, `@( … )`, `.Property`, `"…$x…"`, `@splat` or `;`), never
+  to use the clipboard, and to pass that on when it delegates to a built-in agent. `/intent` and
+  `/review-intent` count a draft's words in the text, and leave copying it to you (`draft`'s copy
+  button).
 - **A no-op `cd` is dropped.** Claude Code only ignores a `cd` spelled exactly like its working
   directory; `cd C:/…` for `C:\…`, a trailing `/` or a symlinked path still asks. A
   `PreToolUse` hook removes a leading `cd` into the current folder (by text, then by resolved
@@ -1538,6 +1574,45 @@ default (the AWS sites, say) reaches an existing project only through `ocgen edi
 also adds the guard to projects without `/intent`, so fetches from there to untrusted sites start
 being blocked; the block message names the `ocgen edit docs --trust <host>` to run.
 
+#### Reading GitHub (`github-read`)
+
+Claude reads GitHub by writing a request, which a hook answers with your own gh login. With the
+sandbox on, Claude's shell has no GitHub login (`~/.config/gh` and `GH_TOKEN` are withheld), so
+`gh` can't even start there: it fails reading its config file. Without a sandbox (native Windows,
+WSL1) `gh` may run, but the request stays the read-only way. Every Claude project gets it.
+
+- **The request.** Claude writes `.claude/notes/github/request.json` with the Write tool: up to
+  20 requests, each a REST `get` (`repos/{owner}/{repo}/issues/12`, with `paginate`, and an
+  `accept` media type such as `application/vnd.github.diff`) or a `graphql` query. The workflow
+  rule's "GitHub" section teaches it.
+- **Only reads, only your remotes.** The `github-read` hook (`PostToolUse`, matcher
+  `Write|Edit|MultiEdit`) runs outside any sandbox and answers with `gh api` on github.com:
+  - A `get` is sent as a GET, and only under `repos/OWNER/NAME` of a repository that one of the
+    project's git remotes names. Every remote counts (`origin`, `upstream`, a fork). An unknown
+    key (`"method": "POST"`), a host, `..`, an encoded `.` or `/`, or any other repository is
+    refused.
+  - A `graphql` document holds one query; a mutation or subscription is refused. Its top-level
+    fields must be `repository(owner:, name:)` of such a repository (or `rateLimit`). `viewer`,
+    `node`, `search` and fragments at the top level reach past the remotes, so they're refused.
+    `$owner` and `$repo` are filled in from the remote. Fields under `repository` can still reach
+    what it links to (its forks, its owner), as the REST API's links do.
+  - The remotes come from git's config only. GitHub Enterprise and SSH host aliases aren't
+    supported.
+- **Answers go to files, not into Claude's context.** `.claude/notes/github/answer.json` lists each
+  request's status (`ok`, `error` with the HTTP status, `refused` with the reason, `not run`) and
+  its file under `responses/`. JSON is pretty-printed so it reads in parts, a diff or a log is
+  kept as text, and each file holds at most 1 MiB (cut at a line end); binary answers aren't kept.
+  Claude is told only where to read, and treats what GitHub returned as data, never
+  instructions. The folder ignores itself (a `.gitignore` with `*`).
+- **Bounded.** Each call gets 30 seconds (`OCGEN_GITHUB_TIMEOUT`), and one request file 4 minutes
+  in all (the hook's timeout is 5). gh not installed or not logged in, no network, or a used-up
+  rate limit stops the rest, with the reason in the answer file. Under WSL with no Linux gh, the
+  hook runs the Windows `gh.exe` with its login.
+- **Needs ocgen on PATH.** The script fallback does nothing, so without ocgen Claude asks you to
+  run the gh command. `ocgen verify` checks the hook, and fails when a settings file sets
+  `OCGEN_GITHUB_GH`, the tests' stand-in for gh.
+- **Writing to GitHub stays yours.** Nothing here comments, labels, merges or files an issue.
+
 #### Agent Teams
 
 [Agent Teams](https://code.claude.com/docs/en/agent-teams) coordinate several parallel
@@ -1595,7 +1670,7 @@ and inside the ocgen binary (`ocgen hook <name>`). The generated hook command us
 binary when a compatible ocgen is installed, and the script otherwise:
 
 ```sh
-if [ "$(ocgen hook --check 2>/dev/null)" = "ocgen-hooks 18" ]; then ocgen hook team-approval-gate; else sh ".../team-approval-gate.sh"; fi
+if [ "$(ocgen hook --check 2>/dev/null)" = "ocgen-hooks 19" ]; then ocgen hook team-approval-gate; else sh ".../team-approval-gate.sh"; fi
 ```
 
 - **The binary gives you** real JSON parsing instead of `grep`, and hooks that work on
@@ -1604,9 +1679,9 @@ if [ "$(ocgen hook --check 2>/dev/null)" = "ocgen-hooks 18" ]; then ocgen hook t
   The exceptions are `inquire-notes`, which renders the notes pages, opens them on `note` and
   asks for each document's other language version, `intent-draft`, which opens `/intent`'s issue draft (and, on `adr`, its intent files)
   in the browser, `intent-approvers`, which checks drafts against the current approvers, and
-  `recap-github`, which answers `/recap`'s GitHub request: their scripts do nothing, so without
+  `recap-github` and `github-read`, which answer `/recap`'s and Claude's GitHub requests: their scripts do nothing, so without
   ocgen the ledgers stay Markdown only, nothing asks for a document's other language, `draft`, `note` and `adr` reach Claude as typed, only `ocgen verify` and `ocgen edit intent` report a draft that misses an
-  approver, and `/recap` reports GitHub as not checked.
+  approver, `/recap` reports GitHub as not checked, and Claude asks you to run gh.
   They need only a POSIX `sh` (Git Bash on Windows): `jq` is used when present and is never
   required (without it, JSON escapes are decoded, and a command holding a `\b`, `\f` or `\u`
   escape is treated as high-impact), and Windows paths (`C:\Users\...`) are handled in both
@@ -1710,9 +1785,11 @@ ocgen approve --revoke     # re-lock now
   configured: protect every branch on the server, not only `main`. For an approved push to work
   from Claude, allow the credentials: the wizard asks when it turns the sandbox on, or set
   `claude.sandbox.allow_credentials` in `.claude/.ocgen-state.json` and run `ocgen doctor`.
-  One hook uses your GitHub login on purpose: `/recap`'s `recap-github`, which runs outside the
-  sandbox like every hook and makes one fixed, read-only query with your gh login. Claude never
-  gets the token, only the answer file; `/recap --no-github` skips it.
+  Two hooks use your GitHub login on purpose, outside the sandbox like every hook:
+  `/recap`'s `recap-github` makes one fixed, read-only query (`/recap --no-github` skips it), and
+  `github-read` answers Claude's read-only requests on the project's own repositories (see
+  [Reading GitHub](#reading-github-github-read)). Claude never gets the token, only the answer
+  files.
 
 The old `touch .claude/team/execution-approved` file is no longer honoured, because an agent
 could create it. `ocgen verify` flags a leftover one.

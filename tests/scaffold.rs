@@ -1036,10 +1036,13 @@ fn claude_powerups_and_workflow_can_be_disabled() {
         serde_json::from_str(&read(dir.path(), ".claude/settings.json")).unwrap();
     assert_eq!(settings["model"], "opus");
     assert!(settings.get("permissions").is_none());
-    // Only the WebFetch guard, which every Claude project has.
+    // Only the WebFetch guard and the GitHub read, which every Claude project has.
     let hooks: Vec<&String> = settings["hooks"].as_object().unwrap().keys().collect();
-    assert_eq!(hooks, ["PreToolUse"]);
+    assert_eq!(hooks, ["PostToolUse", "PreToolUse"]);
     assert_eq!(settings["hooks"]["PreToolUse"][0]["matcher"], "WebFetch");
+    let post = settings["hooks"]["PostToolUse"].as_array().unwrap();
+    assert_eq!(post.len(), 1);
+    assert!(post[0].to_string().contains("ocgen hook github-read"));
     assert!(settings.get("outputStyle").is_none());
     assert!(settings.get("statusLine").is_none());
 }
@@ -1427,13 +1430,14 @@ fn claude_team_enabled_without_hook_stubs() {
     assert_eq!(s["env"]["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"], "1");
     assert_eq!(s["teammateMode"], "auto");
     // Hooks disabled → no team hook events, and no team hook scripts on disk
-    // (only the WebFetch guard, which every Claude project has)…
+    // (only the WebFetch guard and the GitHub read, which every Claude project has)…
     assert!(s["hooks"].get("TaskCreated").is_none());
-    let scripts: Vec<String> = std::fs::read_dir(dir.path().join(".claude/hooks"))
+    let mut scripts: Vec<String> = std::fs::read_dir(dir.path().join(".claude/hooks"))
         .unwrap()
         .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
         .collect();
-    assert_eq!(scripts, ["https-only-fetch.sh"]);
+    scripts.sort();
+    assert_eq!(scripts, ["github-read.sh", "https-only-fetch.sh"]);
     // …but the /team command is still emitted.
     assert!(dir.path().join(".claude/skills/team/SKILL.md").is_file());
 }
@@ -4705,7 +4709,7 @@ fn verify_flags_safety_gates_that_fail_open() {
     let gate = |extra: serde_json::Value| {
         let mut h = serde_json::json!({
             "type": "command",
-            "command": "if [ \"$(ocgen hook --check 2>/dev/null)\" = \"ocgen-hooks 18\" ]; then ocgen hook team-approval-gate; else sh \".claude/hooks/team-approval-gate.sh\"; fi",
+            "command": "if [ \"$(ocgen hook --check 2>/dev/null)\" = \"ocgen-hooks 19\" ]; then ocgen hook team-approval-gate; else sh \".claude/hooks/team-approval-gate.sh\"; fi",
             "shell": "bash"
         });
         for (k, v) in extra.as_object().unwrap() {
@@ -5972,6 +5976,39 @@ fn the_workflow_rule_steers_away_from_shell_that_always_prompts() {
     ] {
         assert!(rule.contains(want), "missing {want}: {rule}");
     }
+    // PowerShell forms Claude Code can't analyse: a plain `( … )` counts as a
+    // subexpression, so `(Get-Clipboard -Raw).Length` asks like `$(…)` does.
+    let flat = rule.split_whitespace().collect::<Vec<_>>().join(" ");
+    for want in [
+        "`Get-Content`, `Select-String` or `Get-ChildItem`",
+        "`( … )` around a command, `$( … )`, `@( … )`",
+        "`.Property` or `.Method()` on a result",
+        "`\"…$x…\"` strings, `@splat` or PowerShell script blocks `{ … }`",
+        "`(Get-Content x).Length` asks as `$(…)` does",
+        "Never use the clipboard (`Set-Clipboard`, `Get-Clipboard`, `clip`, `pbcopy`, `xclip`)",
+    ] {
+        assert!(flat.contains(want), "missing {want}: {flat}");
+    }
+}
+
+/// /intent and /review-intent ask for a word count and show a draft the user
+/// copies: neither is a reason for a shell command or the clipboard.
+#[test]
+fn drafts_are_counted_in_the_text_and_never_copied_by_claude() {
+    let dir = tempdir().unwrap();
+    let mut p = claude_default("wc");
+    p.claude.workflow.intent = true;
+    p.scaffold(dir.path(), false).unwrap();
+    for skill in ["intent", "review-intent"] {
+        let md = read(dir.path(), &format!(".claude/skills/{skill}/SKILL.md"));
+        let flat = md.split_whitespace().collect::<Vec<_>>().join(" ");
+        for want in [
+            "count the words in the text you wrote, never with a shell command or the clipboard",
+            "Never copy a draft to the clipboard yourself",
+        ] {
+            assert!(flat.contains(want), "{skill}: missing {want}");
+        }
+    }
 }
 
 #[test]
@@ -6157,7 +6194,7 @@ fn inquire_registers_the_notes_hook() {
     assert_eq!(notes["matcher"], "Write|Edit|MultiEdit");
     let cmd = notes["hooks"][0]["command"].as_str().unwrap();
     assert!(
-        cmd.contains("ocgen hook inquire-notes") && cmd.contains("ocgen-hooks 18"),
+        cmd.contains("ocgen hook inquire-notes") && cmd.contains("ocgen-hooks 19"),
         "{cmd}"
     );
     assert_eq!(notes["hooks"][0]["shell"], "bash");
