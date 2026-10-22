@@ -128,12 +128,17 @@ this project's git remotes:
 ## Shell commands
 
 Read files with **Read**, search with **Grep** and list with **Glob** — not `cat`, `sed`, `head`,
-`find` or `ls`: those tools are checked by path and never prompt. In Bash, run one plain command
-per call from the working directory: no `cd` (use relative paths or `git -C`), no `for`/`while`
-loops, `$(…)` or `$var`, no `find -exec` or `xargs`, no sed or awk programs, no PowerShell script
-blocks. Run independent commands as separate calls, in parallel. A command the permission parser
-can't analyse asks the user every time. When you delegate to a built-in agent (Explore, Plan,
-general-purpose), which doesn't read these rules, put this paragraph in its prompt.
+`find` or `ls`, nor `Get-Content`, `Select-String` or `Get-ChildItem`: those tools are checked by
+path and never prompt. In Bash or PowerShell, run one plain command per call from the working
+directory: no `cd` (use relative paths or `git -C`), no `for`/`while` loops, `$(…)` or `$var`, no
+`find -exec` or `xargs`, no sed or awk programs. In PowerShell also no `( … )` around a command,
+`$( … )`, `@( … )`, no `.Property` or `.Method()` on a result, no `"…$x…"` strings, `@splat` or
+PowerShell script blocks `{ … }`, and no `;` between commands: Claude Code counts a plain `( … )`
+as a subexpression, so `(Get-Content x).Length` asks as `$(…)` does.
+Run independent commands as separate calls, in parallel. A command the permission parser can't
+analyse asks the user every time. Never use the clipboard (`Set-Clipboard`, `Get-Clipboard`,
+`clip`, `pbcopy`, `xclip`): the user copies what they need. When you delegate to a built-in agent
+(Explore, Plan, general-purpose), which doesn't read these rules, put this paragraph in its prompt.
 
 {{ authorship }}
 {% if fanout %}

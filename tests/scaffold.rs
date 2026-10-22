@@ -5976,6 +5976,39 @@ fn the_workflow_rule_steers_away_from_shell_that_always_prompts() {
     ] {
         assert!(rule.contains(want), "missing {want}: {rule}");
     }
+    // PowerShell forms Claude Code can't analyse: a plain `( … )` counts as a
+    // subexpression, so `(Get-Clipboard -Raw).Length` asks like `$(…)` does.
+    let flat = rule.split_whitespace().collect::<Vec<_>>().join(" ");
+    for want in [
+        "`Get-Content`, `Select-String` or `Get-ChildItem`",
+        "`( … )` around a command, `$( … )`, `@( … )`",
+        "`.Property` or `.Method()` on a result",
+        "`\"…$x…\"` strings, `@splat` or PowerShell script blocks `{ … }`",
+        "`(Get-Content x).Length` asks as `$(…)` does",
+        "Never use the clipboard (`Set-Clipboard`, `Get-Clipboard`, `clip`, `pbcopy`, `xclip`)",
+    ] {
+        assert!(flat.contains(want), "missing {want}: {flat}");
+    }
+}
+
+/// /intent and /review-intent ask for a word count and show a draft the user
+/// copies: neither is a reason for a shell command or the clipboard.
+#[test]
+fn drafts_are_counted_in_the_text_and_never_copied_by_claude() {
+    let dir = tempdir().unwrap();
+    let mut p = claude_default("wc");
+    p.claude.workflow.intent = true;
+    p.scaffold(dir.path(), false).unwrap();
+    for skill in ["intent", "review-intent"] {
+        let md = read(dir.path(), &format!(".claude/skills/{skill}/SKILL.md"));
+        let flat = md.split_whitespace().collect::<Vec<_>>().join(" ");
+        for want in [
+            "count the words in the text you wrote, never with a shell command or the clipboard",
+            "Never copy a draft to the clipboard yourself",
+        ] {
+            assert!(flat.contains(want), "{skill}: missing {want}");
+        }
+    }
 }
 
 #[test]

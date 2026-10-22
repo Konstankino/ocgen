@@ -809,17 +809,22 @@ and autocomplete it.
 **Fewer read-block prompts.** With `permissions.blockReadsOutsideWorkingDirectories` on, Claude
 Code asks about every shell command it can't prove only reads inside the project: a `cd …;`
 before relative paths, `find -exec`, `for` loops and `$(…)`, sed programs, PowerShell script
-blocks. "Don't ask again" can't save them, so they come back every time. Three defaults keep
-them rare:
+blocks. In PowerShell that includes a plain `( … )`, which Claude Code counts as a subexpression
+(`(Get-Clipboard -Raw).Length` is reported as "Command contains subexpressions $()"), `@( … )`,
+`.Property` or `.Method()` on a result, `"…$x…"` strings and `@splat`. "Don't ask again" can't
+save them, so they come back every time. Three defaults keep them rare:
 - **Research goes to `explorer`.** Claude Code's built-in `Explore` agent ignores CLAUDE.md and
   writes exactly those one-liners, so `Agent(Explore)` is denied and the workflow rule sends
   research to the generated `explorer`, which has Read, Grep and Glob but no shell. Answer *no*
   to the wizard's explorer question to keep the built-in one (for example, to let research run
   `git`/`gh`); nothing is denied when the project has no `explorer`.
 - **A "Shell commands" rule.** `.claude/rules/ocgen-workflow.md` tells the main session and
-  every agent to read with Read, Grep and Glob, to run one plain command per Bash call (no
-  `cd`, loops, `$(…)`, `find -exec`, sed programs or script blocks), and to pass that on when it
-  delegates to a built-in agent.
+  every agent to read with Read, Grep and Glob (not `cat` or `Get-Content`), to run one plain
+  command per Bash or PowerShell call (no `cd`, loops, `$(…)`, `find -exec`, sed programs, script
+  blocks, and in PowerShell no `( … )`, `@( … )`, `.Property`, `"…$x…"`, `@splat` or `;`), never
+  to use the clipboard, and to pass that on when it delegates to a built-in agent. `/intent` and
+  `/review-intent` count a draft's words in the text, and leave copying it to you (`draft`'s copy
+  button).
 - **A no-op `cd` is dropped.** Claude Code only ignores a `cd` spelled exactly like its working
   directory; `cd C:/…` for `C:\…`, a trailing `/` or a symlinked path still asks. A
   `PreToolUse` hook removes a leading `cd` into the current folder (by text, then by resolved
