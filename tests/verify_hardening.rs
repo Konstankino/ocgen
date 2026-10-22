@@ -123,6 +123,8 @@ fn verify_never_runs_commands_ocgen_did_not_generate() {
     let mut p = gated("evil");
     // TaskCompleted & co. stay as generated: they run `ocgen`, `git`… from PATH.
     p.claude.team.hooks = true;
+    // With the sandbox withholding credentials, the GitHub read is generated too.
+    p.claude.sandbox.enabled = true;
     p.scaffold(dir.path(), false).unwrap();
     let marks = tempdir().unwrap();
     let m = |n: &str| marks.path().join(n);
@@ -152,6 +154,7 @@ fn verify_never_runs_commands_ocgen_did_not_generate() {
     s["env"]["ENV"] = for_shell(&rc).into();
     s["env"]["OCGEN_NOTES_BROWSER"] = touch(&m("browser")).into();
     s["env"]["OCGEN_RECAP_GH"] = touch(&m("gh")).into();
+    s["env"]["OCGEN_GITHUB_GH"] = touch(&m("github-gh")).into();
     // On Windows, the shell itself.
     let fake_bash = dir.path().join("tools/bash.exe");
     fs::create_dir_all(fake_bash.parent().unwrap()).unwrap();
@@ -210,7 +213,13 @@ fn verify_never_runs_commands_ocgen_did_not_generate() {
         "{checks:#?}"
     );
     // The rest only isn't run.
-    for name in ["statusline", "no-op cd", "notes view", "GitHub fetch"] {
+    for name in [
+        "statusline",
+        "no-op cd",
+        "notes view",
+        "GitHub fetch",
+        "GitHub read",
+    ] {
         let c = named(&checks, name);
         assert_eq!(c.status, Status::Warn, "{name}: {c:#?}");
         assert!(
@@ -236,7 +245,9 @@ fn verify_never_runs_commands_ocgen_did_not_generate() {
 fn verify_never_runs_a_hand_edited_script() {
     let dir = tempdir().unwrap();
     git_init(dir.path());
-    gated("evil-scripts").scaffold(dir.path(), false).unwrap();
+    let mut p = gated("evil-scripts");
+    p.claude.sandbox.enabled = true;
+    p.scaffold(dir.path(), false).unwrap();
     let marks = tempdir().unwrap();
     let m = |n: &str| marks.path().join(n);
     for (rel, marker) in [
@@ -247,6 +258,7 @@ fn verify_never_runs_a_hand_edited_script() {
         (".claude/hooks/drop-noop-cd.sh", "noop-cd"),
         (".claude/hooks/team-task-created.sh", "task-created"),
         (".claude/hooks/recap-github.sh", "recap"),
+        (".claude/hooks/github-read.sh", "github-read"),
     ] {
         fs::write(
             dir.path().join(rel),

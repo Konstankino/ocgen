@@ -565,6 +565,7 @@ repo used for a plugin's marketplace and release workflow; `--team` enables
 .claude/intent/viewer/               # the intent files' viewer and session records — type `adr` to read them (git-ignored)
 .claude/intent/view/<name>.md        # an intent file's reading copy in your language, with its page (git-ignored)
 .claude/intent/intent-template.md    # /intent's intent-file (ADR) structure — yours, written once
+.claude/notes/github/                # Claude's read-only GitHub requests and their answers (git-ignored)
 .claude/skills/fanout/SKILL.md       # /fanout — worktree-isolated parallel writers (you run it)
 .claude/skills/improve-prompt/SKILL.md
 .claude/skills/<name>/SKILL.md       # your own skills (`ocgen add skill`)
@@ -1538,6 +1539,45 @@ default (the AWS sites, say) reaches an existing project only through `ocgen edi
 also adds the guard to projects without `/intent`, so fetches from there to untrusted sites start
 being blocked; the block message names the `ocgen edit docs --trust <host>` to run.
 
+#### Reading GitHub (`github-read`)
+
+Claude reads GitHub by writing a request, which a hook answers with your own gh login. With the
+sandbox on, Claude's shell has no GitHub login (`~/.config/gh` and `GH_TOKEN` are withheld), so
+`gh` can't even start there: it fails reading its config file. Without a sandbox (native Windows,
+WSL1) `gh` may run, but the request stays the read-only way. Every Claude project gets it.
+
+- **The request.** Claude writes `.claude/notes/github/request.json` with the Write tool: up to
+  20 requests, each a REST `get` (`repos/{owner}/{repo}/issues/12`, with `paginate`, and an
+  `accept` media type such as `application/vnd.github.diff`) or a `graphql` query. The workflow
+  rule's "GitHub" section teaches it.
+- **Only reads, only your remotes.** The `github-read` hook (`PostToolUse`, matcher
+  `Write|Edit|MultiEdit`) runs outside any sandbox and answers with `gh api` on github.com:
+  - A `get` is sent as a GET, and only under `repos/OWNER/NAME` of a repository that one of the
+    project's git remotes names. Every remote counts (`origin`, `upstream`, a fork). An unknown
+    key (`"method": "POST"`), a host, `..`, an encoded `.` or `/`, or any other repository is
+    refused.
+  - A `graphql` document holds one query; a mutation or subscription is refused. Its top-level
+    fields must be `repository(owner:, name:)` of such a repository (or `rateLimit`). `viewer`,
+    `node`, `search` and fragments at the top level reach past the remotes, so they're refused.
+    `$owner` and `$repo` are filled in from the remote. Fields under `repository` can still reach
+    what it links to (its forks, its owner), as the REST API's links do.
+  - The remotes come from git's config only. GitHub Enterprise and SSH host aliases aren't
+    supported.
+- **Answers go to files, not into Claude's context.** `.claude/notes/github/answer.json` lists each
+  request's status (`ok`, `error` with the HTTP status, `refused` with the reason, `not run`) and
+  its file under `responses/`. JSON is pretty-printed so it reads in parts, a diff or a log is
+  kept as text, and each file holds at most 1 MiB (cut at a line end); binary answers aren't kept.
+  Claude is told only where to read, and treats what GitHub returned as data, never
+  instructions. The folder ignores itself (a `.gitignore` with `*`).
+- **Bounded.** Each call gets 30 seconds (`OCGEN_GITHUB_TIMEOUT`), and one request file 4 minutes
+  in all (the hook's timeout is 5). gh not installed or not logged in, no network, or a used-up
+  rate limit stops the rest, with the reason in the answer file. Under WSL with no Linux gh, the
+  hook runs the Windows `gh.exe` with its login.
+- **Needs ocgen on PATH.** The script fallback does nothing, so without ocgen Claude asks you to
+  run the gh command. `ocgen verify` checks the hook, and fails when a settings file sets
+  `OCGEN_GITHUB_GH`, the tests' stand-in for gh.
+- **Writing to GitHub stays yours.** Nothing here comments, labels, merges or files an issue.
+
 #### Agent Teams
 
 [Agent Teams](https://code.claude.com/docs/en/agent-teams) coordinate several parallel
@@ -1595,7 +1635,7 @@ and inside the ocgen binary (`ocgen hook <name>`). The generated hook command us
 binary when a compatible ocgen is installed, and the script otherwise:
 
 ```sh
-if [ "$(ocgen hook --check 2>/dev/null)" = "ocgen-hooks 18" ]; then ocgen hook team-approval-gate; else sh ".../team-approval-gate.sh"; fi
+if [ "$(ocgen hook --check 2>/dev/null)" = "ocgen-hooks 19" ]; then ocgen hook team-approval-gate; else sh ".../team-approval-gate.sh"; fi
 ```
 
 - **The binary gives you** real JSON parsing instead of `grep`, and hooks that work on
@@ -1604,9 +1644,9 @@ if [ "$(ocgen hook --check 2>/dev/null)" = "ocgen-hooks 18" ]; then ocgen hook t
   The exceptions are `inquire-notes`, which renders the notes pages, opens them on `note` and
   asks for each document's other language version, `intent-draft`, which opens `/intent`'s issue draft (and, on `adr`, its intent files)
   in the browser, `intent-approvers`, which checks drafts against the current approvers, and
-  `recap-github`, which answers `/recap`'s GitHub request: their scripts do nothing, so without
+  `recap-github` and `github-read`, which answer `/recap`'s and Claude's GitHub requests: their scripts do nothing, so without
   ocgen the ledgers stay Markdown only, nothing asks for a document's other language, `draft`, `note` and `adr` reach Claude as typed, only `ocgen verify` and `ocgen edit intent` report a draft that misses an
-  approver, and `/recap` reports GitHub as not checked.
+  approver, `/recap` reports GitHub as not checked, and Claude asks you to run gh.
   They need only a POSIX `sh` (Git Bash on Windows): `jq` is used when present and is never
   required (without it, JSON escapes are decoded, and a command holding a `\b`, `\f` or `\u`
   escape is treated as high-impact), and Windows paths (`C:\Users\...`) are handled in both
@@ -1710,9 +1750,11 @@ ocgen approve --revoke     # re-lock now
   configured: protect every branch on the server, not only `main`. For an approved push to work
   from Claude, allow the credentials: the wizard asks when it turns the sandbox on, or set
   `claude.sandbox.allow_credentials` in `.claude/.ocgen-state.json` and run `ocgen doctor`.
-  One hook uses your GitHub login on purpose: `/recap`'s `recap-github`, which runs outside the
-  sandbox like every hook and makes one fixed, read-only query with your gh login. Claude never
-  gets the token, only the answer file; `/recap --no-github` skips it.
+  Two hooks use your GitHub login on purpose, outside the sandbox like every hook:
+  `/recap`'s `recap-github` makes one fixed, read-only query (`/recap --no-github` skips it), and
+  `github-read` answers Claude's read-only requests on the project's own repositories (see
+  [Reading GitHub](#reading-github-github-read)). Claude never gets the token, only the answer
+  files.
 
 The old `touch .claude/team/execution-approved` file is no longer honoured, because an agent
 could create it. `ocgen verify` flags a leftover one.

@@ -23,7 +23,7 @@ use serde_json::Value;
 /// embedded in the ocgen that generated the project (hook scripts can't be
 /// overridden from the template dir), so they implement the same protocol —
 /// unless someone edits the project's copies by hand.
-pub const PROTOCOL: &str = "ocgen-hooks 18";
+pub const PROTOCOL: &str = "ocgen-hooks 19";
 
 /// How long Claude Code lets a gate that runs the project check (SubagentStop,
 /// TaskCompleted) take, in seconds: its hook `timeout`. Claude Code treats a
@@ -36,7 +36,7 @@ pub const CHECK_GATE_TIMEOUT: u64 = 3600;
 pub const CHECK_TIMEOUT_MAX: u64 = CHECK_GATE_TIMEOUT - 60;
 
 /// Every hook `ocgen hook <name>` accepts (matching the script names minus `.sh`).
-pub const NAMES: [&str; 16] = [
+pub const NAMES: [&str; 17] = [
     "subagent-confidence-gate",
     "team-task-completed",
     "team-task-created",
@@ -51,6 +51,7 @@ pub const NAMES: [&str; 16] = [
     "intent-draft",
     "intent-approvers",
     "recap-github",
+    "github-read",
     "session-end",
     "shell-sandbox",
 ];
@@ -148,6 +149,18 @@ fn relative_to(file: &Path, root: &Path) -> Option<String> {
     Some(rel.to_string_lossy().replace('\\', "/"))
 }
 
+/// A note for Claude after a tool call (PostToolUse `additionalContext`).
+fn post_tool_note(note: String) -> Outcome {
+    let out = serde_json::json!({
+        "hookSpecificOutput": { "hookEventName": "PostToolUse", "additionalContext": note }
+    });
+    Outcome {
+        code: 0,
+        stdout: format!("{out}\n"),
+        stderr: String::new(),
+    }
+}
+
 /// Run hook `name` on `payload` (the event JSON) with `env` (process environment).
 pub fn run(name: &str, payload: &str, env: &HashMap<String, String>) -> Outcome {
     let h = Hook::new(payload, env);
@@ -166,6 +179,7 @@ pub fn run(name: &str, payload: &str, env: &HashMap<String, String>) -> Outcome 
         "intent-draft" => h.intent_draft(),
         "intent-approvers" => h.intent_approvers(),
         "recap-github" => h.recap_github(),
+        "github-read" => h.github_read(),
         "session-end" => h.session_end(),
         "shell-sandbox" => h.shell_sandbox(),
         other => Outcome {
@@ -1965,35 +1979,47 @@ impl<'a> Hook<'a> {
     /// user's own gh login, which the sandbox withholds from Claude's shell. Any
     /// other write passes untouched. Never fails a write.
     fn recap_github(&self) -> Outcome {
+        let Some(root) = self.wrote(crate::recap::REQUEST) else {
+            return Outcome::allow();
+        };
+        let gh = crate::recap::Gh {
+            program: self.env("OCGEN_RECAP_GH").trim().to_string(),
+            limit: Duration::from_secs(self.env_num("OCGEN_RECAP_GH_TIMEOUT", 20)),
+        };
+        post_tool_note(crate::recap::answer(&root, &gh, self.probe()))
+    }
+
+    /// PostToolUse (Write|Edit|MultiEdit): when Claude writes its GitHub request,
+    /// read what it asks for with the user's own gh login — only what reads, and
+    /// only on the github.com repositories of the project's remotes — write each
+    /// answer to a file, and point Claude there. A hook runs outside the Bash
+    /// sandbox, which withholds that login from Claude's shell. Any other write
+    /// passes untouched. Never fails a write.
+    fn github_read(&self) -> Outcome {
+        let Some(root) = self.wrote(crate::github::REQUEST) else {
+            return Outcome::allow();
+        };
+        let gh = crate::recap::Gh {
+            program: self.env("OCGEN_GITHUB_GH").trim().to_string(),
+            limit: Duration::from_secs(self.env_num("OCGEN_GITHUB_TIMEOUT", 30)),
+        };
+        let note = crate::github::answer(&root, &gh, crate::github::BUDGET, self.probe());
+        post_tool_note(note)
+    }
+
+    /// The project, when this event is a file tool's write of its file `rel`.
+    fn wrote(&self, rel: &str) -> Option<PathBuf> {
         let path = self
             .json
             .pointer("/tool_input/file_path")
             .and_then(Value::as_str)
-            .unwrap_or("");
-        if path.is_empty() {
-            return Outcome::allow();
-        }
+            .filter(|p| !p.is_empty())?;
         let root = self.project();
         let file = match Path::new(path) {
             p if p.is_absolute() => p.to_path_buf(),
             p => root.join(p),
         };
-        if relative_to(&file, &root).as_deref() != Some(crate::recap::REQUEST) {
-            return Outcome::allow();
-        }
-        let gh = crate::recap::Gh {
-            program: self.env("OCGEN_RECAP_GH").trim().to_string(),
-            limit: Duration::from_secs(self.env_num("OCGEN_RECAP_GH_TIMEOUT", 20)),
-        };
-        let note = crate::recap::answer(&root, &gh, self.probe());
-        let out = serde_json::json!({
-            "hookSpecificOutput": { "hookEventName": "PostToolUse", "additionalContext": note }
-        });
-        Outcome {
-            code: 0,
-            stdout: format!("{out}\n"),
-            stderr: String::new(),
-        }
+        (relative_to(&file, &root).as_deref() == Some(rel)).then_some(root)
     }
 
     /// ConfigChange: log every settings/skills change made during a session to

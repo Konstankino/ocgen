@@ -78,6 +78,8 @@ fn sh(
         "OCGEN_NOTES_BROWSER",
         "OCGEN_RECAP_GH",
         "OCGEN_RECAP_GH_TIMEOUT",
+        "OCGEN_GITHUB_GH",
+        "OCGEN_GITHUB_TIMEOUT",
         "OCGEN_SANDBOX",
     ] {
         cmd.env_remove(k);
@@ -1084,7 +1086,7 @@ fn inquire_notes_renders_the_view_and_the_script_is_a_no_op() {
     assert_eq!(o.code, 0);
     assert!(o.stderr.starts_with("inquire-notes:"), "{o:?}");
     assert!(ocgen::hooks::NAMES.contains(&"inquire-notes"));
-    assert_eq!(ocgen::hooks::PROTOCOL, "ocgen-hooks 18");
+    assert_eq!(ocgen::hooks::PROTOCOL, "ocgen-hooks 19");
 }
 
 // ---------------------------------------------------------- intent-draft --
@@ -1219,6 +1221,55 @@ fn recap_github_script_is_a_no_op() {
     assert_eq!((code, out.as_str()), (0, ""));
     assert!(!dir.path().join(ocgen::recap::RESULT).exists());
     assert!(ocgen::hooks::NAMES.contains(&"recap-github"));
+}
+
+// ----------------------------------------------------------- github-read --
+
+#[test]
+fn github_read_parity() {
+    let step = |payload: &'static str| Step {
+        hook: "github-read",
+        env: &[],
+        setup: none,
+        payload,
+    };
+    // Only writes the hook ignores: answering a request needs the binary, and
+    // the script then does nothing (Claude asks the user to run gh instead).
+    check(
+        "github-read",
+        &[
+            step(r#"{"tool_name":"Write","tool_input":{"file_path":"{dir}/src/main.rs"}}"#),
+            step(
+                r#"{"tool_name":"Write","tool_input":{"file_path":"{dir}/.claude/notes/github/answer.json"}}"#,
+            ),
+            step(
+                r#"{"tool_name":"Write","tool_input":{"file_path":"{dir}/sub/.claude/notes/github/request.json"}}"#,
+            ),
+            step("not json"),
+        ],
+    );
+}
+
+#[test]
+fn github_read_script_is_a_no_op() {
+    let dir = project();
+    let file = dir.path().join(ocgen::github::REQUEST);
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
+    fs::write(&file, r#"{"requests":[{"get":"repos/acme/widgets"}]}"#).unwrap();
+    let mut env = HashMap::new();
+    env.insert(
+        "CLAUDE_PROJECT_DIR".to_string(),
+        ocgen::paths::for_shell(dir.path()),
+    );
+    let payload = serde_json::json!({
+        "tool_name": "Write",
+        "tool_input": { "file_path": ocgen::paths::for_shell(&file) }
+    })
+    .to_string();
+    let (code, out, _) = sh(dir.path(), "github-read", &env, &payload);
+    assert_eq!((code, out.as_str()), (0, ""));
+    assert!(!dir.path().join(ocgen::github::ANSWER).exists());
+    assert!(ocgen::hooks::NAMES.contains(&"github-read"));
 }
 
 /// What the hook answers the user's word with, if anything: the prompt itself

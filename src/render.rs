@@ -953,6 +953,14 @@ impl Project {
         self.claude.workflow.inquire || self.claude.workflow.recap || self.writes_reading_copies()
     }
 
+    /// Whether the sandbox withholds the user's gh login from Claude's shell, so
+    /// `gh` can't run there and the `github-read` hook is Claude's only way to
+    /// read GitHub (elsewhere — no sandbox, as on native Windows or WSL1 — it is
+    /// the read-only way).
+    pub fn withholds_gh(&self) -> bool {
+        self.claude.sandbox.enabled && !self.claude.sandbox.allow_credentials
+    }
+
     /// Whether the word `note` or `notes` opens the ledgers.
     pub fn opens_notes_word(&self) -> bool {
         self.claude.workflow.inquire || self.writes_reading_copies()
@@ -1687,6 +1695,10 @@ impl Project {
             let body = templates::load_embedded("claude/hooks/recap-github.sh")?;
             components.push(("hooks/recap-github.sh".to_string(), body));
         }
+        // Claude's GitHub requests are answered by this hook, outside any sandbox,
+        // with or without one.
+        let body = templates::load_embedded("claude/hooks/github-read.sh")?;
+        components.push(("hooks/github-read.sh".to_string(), body));
         // Native Windows: the commands Claude runs are refused there.
         if self.claude.sandbox.enabled {
             let body = templates::load_embedded("claude/hooks/shell-sandbox.sh")?;
@@ -1768,6 +1780,7 @@ impl Project {
             fanout => self.claude.workflow.fanout,
             verify_todos => self.claude.workflow.verify_todos,
             prefer_explorer => self.prefers_explorer(),
+            gh_withheld => self.withholds_gh(),
             deliver => self.claude.workflow.deliver,
             inquire => self.claude.workflow.inquire,
             intent => self.claude.workflow.intent,
@@ -2572,6 +2585,17 @@ impl Project {
                 json!({ "matcher": "Write|Edit|MultiEdit", "hooks": [ command_hook(hook_cmd(prefix, dir, "recap-github.sh")) ] }),
             );
         }
+        // Claude writes a GitHub request; the hook reads it — read-only, the
+        // remotes' repositories only — with the user's own gh login, which the
+        // Bash sandbox withholds from Claude's shell. Without a sandbox (native
+        // Windows, WSL1) it is still the read-only way. Its gh calls get all
+        // but a minute of its timeout.
+        let mut read = command_hook(hook_cmd(prefix, dir, "github-read.sh"));
+        read["timeout"] = json!(crate::github::HOOK_TIMEOUT);
+        push(
+            "PostToolUse",
+            json!({ "matcher": "Write|Edit|MultiEdit", "hooks": [ read ] }),
+        );
         // Deterministic line for every WebFetch: HTTPS, trusted docs sites only.
         push(
             "PreToolUse",

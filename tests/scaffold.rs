@@ -1036,10 +1036,13 @@ fn claude_powerups_and_workflow_can_be_disabled() {
         serde_json::from_str(&read(dir.path(), ".claude/settings.json")).unwrap();
     assert_eq!(settings["model"], "opus");
     assert!(settings.get("permissions").is_none());
-    // Only the WebFetch guard, which every Claude project has.
+    // Only the WebFetch guard and the GitHub read, which every Claude project has.
     let hooks: Vec<&String> = settings["hooks"].as_object().unwrap().keys().collect();
-    assert_eq!(hooks, ["PreToolUse"]);
+    assert_eq!(hooks, ["PostToolUse", "PreToolUse"]);
     assert_eq!(settings["hooks"]["PreToolUse"][0]["matcher"], "WebFetch");
+    let post = settings["hooks"]["PostToolUse"].as_array().unwrap();
+    assert_eq!(post.len(), 1);
+    assert!(post[0].to_string().contains("ocgen hook github-read"));
     assert!(settings.get("outputStyle").is_none());
     assert!(settings.get("statusLine").is_none());
 }
@@ -1427,13 +1430,14 @@ fn claude_team_enabled_without_hook_stubs() {
     assert_eq!(s["env"]["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"], "1");
     assert_eq!(s["teammateMode"], "auto");
     // Hooks disabled → no team hook events, and no team hook scripts on disk
-    // (only the WebFetch guard, which every Claude project has)…
+    // (only the WebFetch guard and the GitHub read, which every Claude project has)…
     assert!(s["hooks"].get("TaskCreated").is_none());
-    let scripts: Vec<String> = std::fs::read_dir(dir.path().join(".claude/hooks"))
+    let mut scripts: Vec<String> = std::fs::read_dir(dir.path().join(".claude/hooks"))
         .unwrap()
         .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
         .collect();
-    assert_eq!(scripts, ["https-only-fetch.sh"]);
+    scripts.sort();
+    assert_eq!(scripts, ["github-read.sh", "https-only-fetch.sh"]);
     // …but the /team command is still emitted.
     assert!(dir.path().join(".claude/skills/team/SKILL.md").is_file());
 }
@@ -4705,7 +4709,7 @@ fn verify_flags_safety_gates_that_fail_open() {
     let gate = |extra: serde_json::Value| {
         let mut h = serde_json::json!({
             "type": "command",
-            "command": "if [ \"$(ocgen hook --check 2>/dev/null)\" = \"ocgen-hooks 18\" ]; then ocgen hook team-approval-gate; else sh \".claude/hooks/team-approval-gate.sh\"; fi",
+            "command": "if [ \"$(ocgen hook --check 2>/dev/null)\" = \"ocgen-hooks 19\" ]; then ocgen hook team-approval-gate; else sh \".claude/hooks/team-approval-gate.sh\"; fi",
             "shell": "bash"
         });
         for (k, v) in extra.as_object().unwrap() {
@@ -6157,7 +6161,7 @@ fn inquire_registers_the_notes_hook() {
     assert_eq!(notes["matcher"], "Write|Edit|MultiEdit");
     let cmd = notes["hooks"][0]["command"].as_str().unwrap();
     assert!(
-        cmd.contains("ocgen hook inquire-notes") && cmd.contains("ocgen-hooks 18"),
+        cmd.contains("ocgen hook inquire-notes") && cmd.contains("ocgen-hooks 19"),
         "{cmd}"
     );
     assert_eq!(notes["hooks"][0]["shell"], "bash");
