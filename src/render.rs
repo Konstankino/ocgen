@@ -888,6 +888,19 @@ impl Project {
         .context("rendering the commit and authorship rules")
     }
 
+    /// Where agents may write: inside the project only, unless the user allows
+    /// more. A section of the Claude workflow rule (always English, like the
+    /// rule), and part of every OpenCode agent's text (in the instruction
+    /// language), as the commit and authorship rules are.
+    fn workspace(&self, env: &Environment, language: &str) -> Result<String> {
+        env.render_str(
+            &templates::load("workspace.md.j2")?,
+            context! { language => canonical_language(language) },
+        )
+        .map(|n| n.trim().to_string())
+        .context("rendering where agents write")
+    }
+
     /// The language agents answer the user in: `response_language`, else the
     /// instruction language, else English.
     pub fn response_language(&self) -> &str {
@@ -1199,6 +1212,7 @@ impl Project {
         // OpenCode has no setting for commit attribution and no rule file every
         // agent loads, so each agent's text carries it.
         let authorship = self.authorship(&env, lang)?;
+        let workspace = self.workspace(&env, lang)?;
         for agent in &self.agents {
             // What ocgen adds to a coordinator goes at the end of its prompt file,
             // or of its body when it has none.
@@ -1215,6 +1229,7 @@ impl Project {
                     Some(n) => with_paragraph(text, n),
                     None => text.to_string(),
                 };
+                let text = with_paragraph(&text, &workspace);
                 let text = with_paragraph(&text, &authorship);
                 with_paragraph(&text, &mindset)
             };
@@ -1792,6 +1807,8 @@ impl Project {
             // Subagents and teammates load the rules too, so this reaches every
             // agent that writes a commit or a document.
             authorship => self.authorship(&env, "English")?,
+            // Where every agent may write, said once for all of them.
+            workspace => self.workspace(&env, "English")?,
         };
         components.push((
             "rules/ocgen-workflow.md".to_string(),

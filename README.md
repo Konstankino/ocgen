@@ -277,6 +277,36 @@ To change the wording, edit `authorship.md.j2` (see
 `claude/rules/ocgen-workflow.md.j2` from before this has no `{{ authorship }}` line, so its
 projects get no section until you add one.
 
+### Where agents write: the project only
+
+Every project ocgen sets up tells its agents to write only inside the project: the folder the
+session started in and everything under it, worktrees under `.claude/worktrees/` included.
+Outside it they create, change, move and delete nothing unless you have explicitly allowed that
+path or action in the conversation:
+- **Off limits:** your home folder, its dotfiles and tool config (`~/.config`, `~/.claude`,
+  `~/.gitconfig`, `~/.npmrc`), `/tmp` and every other temp folder (a scratchpad Claude Code
+  offers included), other repositories and projects, system folders, and global installs
+  (`npm install -g`, `pip install --user`, `cargo install`, `brew install`).
+- **Every tool:** Write and Edit, and every command: redirections, `cp`, `mv`, `tee`, `ln`,
+  `mkdir`, `touch`, output options (`-o`, `--out-dir`), `git clone` or `git worktree add` into
+  another folder, `git config --global`.
+- **Scratch files** go in the project's `.claude/scratch/`, which the agent creates with a
+  `.gitignore` holding `*`, and cleans up after itself.
+- **Builds and tests** run as usual, though their tools keep caches outside the project
+  (cargo, npm, pip); the agents never point output, installs or config elsewhere.
+- **Anything else** waits for you: the agent stops, says what it would write and where, and an
+  approval covers only what you named, for that task. An agent that doesn't get these
+  instructions (a built-in one such as Explore, Plan or general-purpose) gets the section in its
+  prompt from the agent that hands it the work.
+
+Where it lives, as with the commit rules: a "Where you write" section of
+`.claude/rules/ocgen-workflow.md` for Claude Code (in English, loaded by every session, subagent
+and teammate), and the same section in every OpenCode agent's text, in the instruction language.
+`ocgen doctor` adds it to an existing project. It is an instruction, not a fence: with the sandbox
+on, Claude Code's own limits on where commands may write still apply; Claude Code's own features
+that write under `~/.claude` (its memory, plan mode's plan file) count as outside the project too.
+To change the wording, edit `workspace.md.j2`.
+
 ### Other commands
 
 ```bash

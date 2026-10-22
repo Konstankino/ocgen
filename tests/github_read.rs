@@ -1128,7 +1128,8 @@ fn every_claude_code_project_gets_the_hook() {
     }
     assert!(rule.contains("\n\n## GitHub\n\nThe sandbox keeps my GitHub login out of your shell"));
     assert!(
-        rule.contains("git remotes:\n\n```json\n") && rule.contains("run it.\n\n## Shell commands")
+        rule.contains("git remotes:\n\n```json\n")
+            && rule.contains("run it.\n\n## Where you write")
     );
 
     // Without the sandbox — native Windows, WSL1 — or with the login lent to
