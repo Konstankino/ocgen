@@ -2125,8 +2125,14 @@ the archetype files.
 
 ```bash
 cargo test                       # library-level scaffold tests
+cargo nextest run                # the same, every test binary at once (faster; CI uses it)
 cargo run --example demo -- /tmp/out default English Ukrainian   # render without the wizard (instructions, answers)
 ```
+
+`cargo test` runs the test binaries one after another, so a few slow ones (the gate and verify
+hardening suites, which start thousands of processes) wait for each other — on Windows CI that
+was most of a 20-minute run. [cargo-nextest](https://nexte.st) runs every test in one pool;
+`.config/nextest.toml` holds the `ci` profile CI uses.
 
 The scaffolding logic lives in the library (`src/render.rs`). The wizard (`src/wizard/`: `mod.rs`
 plus `skill.rs` and `mcp.rs`) is a [dialoguer](https://docs.rs/dialoguer) layer on top, and all
