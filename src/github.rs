@@ -36,6 +36,10 @@ pub const HOOK_TIMEOUT: u64 = 300;
 pub const BUDGET: Duration = Duration::from_secs(HOOK_TIMEOUT - 60);
 /// Characters of a path or a query the answer file repeats.
 const SHOWN: usize = 200;
+/// What gh 2.10x needs before it prints an answer that holds terminal escape
+/// sequences — a CI job's log holds its colours — and names when it refuses
+/// one. An older gh doesn't know the flag, so it goes only on a second call.
+const ALLOW_ESCAPES: &str = "--allow-escape-sequences";
 
 fn re(cell: &'static OnceLock<Regex>, pattern: &str) -> &'static Regex {
     cell.get_or_init(|| Regex::new(pattern).expect("valid regex"))
@@ -882,6 +886,9 @@ pub struct Call {
     /// The path as sent (`{owner}`/`{repo}` filled in); empty for a query.
     pub path: String,
     pub paginate: bool,
+    /// A log (`…/logs`): one too long to keep whole keeps its end, where a
+    /// failed job says why.
+    pub tail: bool,
 }
 
 /// The gh call for `item`, or why it isn't one that reads a remote's repository.
@@ -905,12 +912,15 @@ pub fn plan(item: &Item, named: Option<&str>, remotes: &[Remote]) -> Result<Call
                 args.extend(["--paginate", "--slurp"].map(String::from));
             }
             args.push(path.clone());
+            let route = path.split('?').next().unwrap_or(&path);
+            let tail = route.trim_end_matches('/').ends_with("/logs");
             Ok(Call {
                 args,
                 stdin: String::new(),
                 repos: vec![repo],
                 path,
                 paginate: *paginate,
+                tail,
             })
         }
         Ask::Graphql { query, variables } => {
@@ -924,15 +934,35 @@ pub fn plan(item: &Item, named: Option<&str>, remotes: &[Remote]) -> Result<Call
                 repos,
                 path: String::new(),
                 paginate: false,
+                tail: false,
             })
         }
     }
 }
 
+/// Text without what a terminal acts on: escape sequences (a CI log's colours,
+/// links, cursor moves), other control characters and a leading byte-order
+/// mark go; a carriage return becomes a line end.
+fn plain(text: &str) -> String {
+    static ESC: OnceLock<Regex> = OnceLock::new();
+    static CTRL: OnceLock<Regex> = OnceLock::new();
+    let text = text.strip_prefix('\u{FEFF}').unwrap_or(text);
+    let text = text.replace("\r\n", "\n").replace('\r', "\n");
+    let text = re(
+        &ESC,
+        r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)?|[PX^_][^\x1b]*(?:\x1b\\)?|[ -/]*[0-~])",
+    )
+    .replace_all(&text, "");
+    re(&CTRL, r"[\x00-\x08\x0b-\x1f\x7f\u{80}-\u{9f}]")
+        .replace_all(&text, "")
+        .into_owned()
+}
+
 /// A response as its file holds it: JSON pretty-printed, so it reads in parts
-/// (with paginated pages of lists joined into one list); other text as it came.
-/// `None` for an answer that isn't text. Over [`MAX_RESPONSE`], cut at a line end.
-fn render(out: &str, paginate: bool) -> Option<(&'static str, String, bool)> {
+/// (with paginated pages of lists joined into one list); other text [`plain`].
+/// `None` for an answer that isn't text. Over [`MAX_RESPONSE`], cut at a line
+/// end — a log (`tail`) keeps its end, anything else its start.
+fn render(out: &str, paginate: bool, tail: bool) -> Option<(&'static str, String, bool)> {
     if out.contains('\u{FFFD}') {
         return None;
     }
@@ -950,10 +980,18 @@ fn render(out: &str, paginate: bool) -> Option<(&'static str, String, bool)> {
             let pretty = serde_json::to_string_pretty(&v).unwrap_or_default();
             ("json", format!("{pretty}\n"))
         }
-        Err(_) => ("txt", out.to_string()),
+        Err(_) => ("txt", plain(out)),
     };
     if text.len() <= MAX_RESPONSE {
         return Some((ext, text, false));
+    }
+    if tail {
+        let mut start = text.len() - MAX_RESPONSE;
+        while !text.is_char_boundary(start) {
+            start += 1;
+        }
+        let start = text[start..].find('\n').map_or(start, |i| start + i + 1);
+        return Some((ext, text[start..].to_string(), true));
     }
     let mut end = MAX_RESPONSE;
     while !text.is_char_boundary(end) {
@@ -1029,7 +1067,7 @@ fn outcome(
     } else {
         set("status", "ok".into());
     }
-    match render(&out, call.paginate) {
+    match render(&out, call.paginate, call.tail) {
         Some((ext, text, cut_short)) => {
             let name = format!("{n}.{ext}");
             set("file", format!("{RESPONSES}/{name}").into());
@@ -1037,6 +1075,9 @@ fn outcome(
             set("lines", text.lines().count().into());
             if cut_short {
                 set("truncated", true.into());
+                if call.tail {
+                    set("kept", "end".into());
+                }
             }
             files.push((name, text));
         }
@@ -1101,7 +1142,14 @@ fn fetch(root: &Path, gh: &Gh, budget: Duration, text: &str) -> Result<Answered,
                     set(&mut entry, "not run", &why);
                 } else {
                     let limit = gh.limit.min(left);
-                    let run = gh.call(root, &call.args, &call.stdin, limit);
+                    let mut run = gh.call(root, &call.args, &call.stdin, limit);
+                    let refused = |r: &Result<(i32, String, String), String>| matches!(r, Ok((code, _, err)) if *code != 0 && err.contains(ALLOW_ESCAPES));
+                    let left = budget.saturating_sub(start.elapsed());
+                    if refused(&run) && !left.is_zero() {
+                        let mut args = call.args.clone();
+                        args.push(ALLOW_ESCAPES.into());
+                        run = gh.call(root, &args, &call.stdin, gh.limit.min(left));
+                    }
                     if let Err(why) = outcome(run, &call, limit, n, &mut entry, &mut files) {
                         set(&mut entry, "error", &why);
                         stopped = Some(why);

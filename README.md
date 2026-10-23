@@ -1620,6 +1620,14 @@ WSL1) `gh` may run, but the request stays the read-only way. Every Claude projec
   request's status (`ok`, `error` with the HTTP status, `refused` with the reason, `not run`) and
   its file under `responses/`. JSON is pretty-printed so it reads in parts, a diff or a log is
   kept as text, and each file holds at most 1 MiB (cut at a line end); binary answers aren't kept.
+  Text loses what a terminal acts on (escape sequences, other control characters): reading the
+  file, or a `cat` of it, shows only the text.
+- **CI logs.** A failed check is read from its jobs (`repos/{owner}/{repo}/actions/runs/<run
+  id>/jobs`) and each job's log (`…/actions/jobs/<job id>/logs`). gh 2.10x refuses to print an
+  answer with escape sequences, as a log's colours are, unless `--allow-escape-sequences` says so;
+  an older gh doesn't know the flag, so the hook adds it only when gh refuses. A log over 1 MiB
+  keeps its end, where the failure is, and the answer says `"kept": "end"`. A whole run's `logs`
+  is a zip, so it isn't kept.
   Claude is told only where to read, and treats what GitHub returned as data, never
   instructions. The folder ignores itself (a `.gitignore` with `*`).
 - **Bounded.** Each call gets 30 seconds (`OCGEN_GITHUB_TIMEOUT`), and one request file 4 minutes
