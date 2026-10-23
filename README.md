@@ -822,9 +822,10 @@ save them, so they come back every time. Three defaults keep them rare:
   every agent to read with Read, Grep and Glob (not `cat` or `Get-Content`), to run one plain
   command per Bash or PowerShell call (no `cd`, loops, `$(…)`, `find -exec`, sed programs, script
   blocks, and in PowerShell no `( … )`, `@( … )`, `.Property`, `"…$x…"`, `@splat` or `;`), never
-  to use the clipboard, and to pass that on when it delegates to a built-in agent. `/intent` and
-  `/review-intent` count a draft's words in the text, and leave copying it to you (`draft`'s copy
-  button).
+  to read the clipboard, to copy to it only when you ask (from a file, in one command that keeps
+  UTF-8 intact), and to pass that on when it delegates to a built-in agent. `/intent` and
+  `/review-intent` count a draft's words in the text, and copy a draft only when you ask;
+  otherwise `draft`'s copy button does it.
 - **A no-op `cd` is dropped.** Claude Code only ignores a `cd` spelled exactly like its working
   directory; `cd C:/…` for `C:\…`, a trailing `/` or a symlinked path still asks. A
   `PreToolUse` hook removes a leading `cd` into the current folder (by text, then by resolved

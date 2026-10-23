@@ -136,9 +136,13 @@ directory: no `cd` (use relative paths or `git -C`), no `for`/`while` loops, `$(
 PowerShell script blocks `{ … }`, and no `;` between commands: Claude Code counts a plain `( … )`
 as a subexpression, so `(Get-Content x).Length` asks as `$(…)` does.
 Run independent commands as separate calls, in parallel. A command the permission parser can't
-analyse asks the user every time. Never use the clipboard (`Set-Clipboard`, `Get-Clipboard`,
-`clip`, `pbcopy`, `xclip`): the user copies what they need. When you delegate to a built-in agent
-(Explore, Plan, general-purpose), which doesn't read these rules, put this paragraph in its prompt.
+analyse asks the user every time. Never read the clipboard (`Get-Clipboard`, `pbpaste`). Copy to
+it only when the user asks, from a file and in one command:
+`Get-Content -Raw -Encoding utf8 <file> | Set-Clipboard` in PowerShell (without `-Encoding utf8`,
+Windows PowerShell reads a UTF-8 file with no BOM as ANSI; `clip` garbles non-ASCII text too),
+`pbcopy < <file>` on macOS, `wl-copy < <file>` or `xclip -selection clipboard < <file>` on Linux.
+When you delegate to a built-in agent (Explore, Plan, general-purpose), which doesn't read these
+rules, put this paragraph in its prompt.
 
 {{ authorship }}
 {% if fanout %}
