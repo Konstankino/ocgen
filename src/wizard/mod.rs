@@ -1227,7 +1227,7 @@ fn configure_intent(
                 if ask_confirm(
                     theme,
                     &format!("Keep the approvers in {found}?"),
-                    "ocgen adds a marked block for them (your lines stay) and links the file at .claude/CODEOWNERS. GitHub then asks them to review — and requires it once branch protection requires a review from code owners.",
+                    "ocgen adds a marked block for them (your lines stay), and the /intent skill names the file. GitHub then asks them to review — and requires it once branch protection requires a review from code owners.",
                     true,
                 )? {
                     s.codeowners = ocgen::render::check_codeowners_link(root, found)?;

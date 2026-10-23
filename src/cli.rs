@@ -541,8 +541,8 @@ pub struct IntentCli {
     #[arg(long, value_name = "HANDLE")]
     pub remove_approver: Vec<String>,
     /// Link the project's existing CODEOWNERS file (.github/CODEOWNERS, CODEOWNERS
-    /// or docs/CODEOWNERS): ocgen keeps its approvers block in it and a link to it
-    /// at .claude/CODEOWNERS. "off" unlinks it and removes the block.
+    /// or docs/CODEOWNERS): ocgen keeps its approvers block in it, and the /intent
+    /// skill names it. "off" unlinks it and removes the block.
     #[arg(long, value_name = "PATH")]
     pub codeowners: Option<String>,
     /// What the CODEOWNERS block covers: every file (the default), the intent directory, or nothing.

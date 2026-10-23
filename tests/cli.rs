@@ -1666,6 +1666,18 @@ fn edit_intent_manages_approvers() {
     assert_eq!(before, std::fs::read_to_string(&state).unwrap());
 }
 
+/// ocgen 0.7.1 and older kept a link at `.claude/CODEOWNERS`; the help no
+/// longer promises one.
+#[test]
+fn edit_intent_help_names_no_codeowners_link() {
+    ocgen()
+        .args(["edit", "intent", "--help"])
+        .assert()
+        .success()
+        .stdout(contains("the /intent skill names it"))
+        .stdout(contains(".claude/CODEOWNERS").not());
+}
+
 #[test]
 fn edit_intent_links_the_projects_codeowners() {
     let dir = tempdir().unwrap();
