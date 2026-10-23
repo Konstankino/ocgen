@@ -1700,19 +1700,17 @@ const INTENT_SKILL: &str = ".claude/skills/intent/SKILL.md";
 #[test]
 fn a_linked_codeowners_gets_the_approvers_block_and_the_intent_skill_names_it() {
     let dir = with_codeowners("co-link", OWNERS);
+    // By default the approvers review every change, not only the intent files.
     edit_intent(dir.path(), |s| {
         s.approvers = vec!["@alice".into(), "@org/architects".into()];
         s.codeowners = OWNERS.into();
     });
-    assert_eq!(
-        read(dir.path(), OWNERS),
-        block("/docs/adr/ @alice @org/architects")
-    );
+    assert_eq!(read(dir.path(), OWNERS), block("* @alice @org/architects"));
     // No link to it: the /intent skill names the file and its rule instead.
     assert!(fs::symlink_metadata(dir.path().join(".claude/CODEOWNERS")).is_err());
     let skill = read(dir.path(), INTENT_SKILL);
     assert!(
-        skill.contains("`.github/CODEOWNERS` (`/docs/adr/ @alice @org/architects`)"),
+        skill.contains("`.github/CODEOWNERS` (`* @alice @org/architects`)"),
         "{skill}"
     );
     // Nothing more to do on the next run.
@@ -1720,14 +1718,17 @@ fn a_linked_codeowners_gets_the_approvers_block_and_the_intent_skill_names_it() 
     let owners = plan.iter().find(|c| c.rel == OWNERS).unwrap();
     assert_eq!(owners.kind, ChangeKind::Unchanged);
 
-    // The scope `all`: every change.
+    // The scope `intents`: changes to the intent directory only.
     edit_intent(dir.path(), |s| {
-        s.codeowners_scope = ocgen::claude::CodeownersScope::All
+        s.codeowners_scope = ocgen::claude::CodeownersScope::Intents
     });
-    assert_eq!(read(dir.path(), OWNERS), block("* @alice @org/architects"));
+    assert_eq!(
+        read(dir.path(), OWNERS),
+        block("/docs/adr/ @alice @org/architects")
+    );
     let skill = read(dir.path(), INTENT_SKILL);
     assert!(
-        skill.contains("`.github/CODEOWNERS` (`* @alice @org/architects`)"),
+        skill.contains("`.github/CODEOWNERS` (`/docs/adr/ @alice @org/architects`)"),
         "{skill}"
     );
 }
@@ -1738,6 +1739,7 @@ fn the_codeowners_block_follows_the_approvers_and_leaves_your_lines() {
     edit_intent(dir.path(), |s| {
         s.approvers = vec!["@alice".into()];
         s.codeowners = OWNERS.into();
+        s.codeowners_scope = ocgen::claude::CodeownersScope::Intents;
     });
     // A rule of the user's after the block, which takes precedence over it.
     let path = dir.path().join(OWNERS);
@@ -1795,14 +1797,11 @@ fn a_root_codeowners_can_be_linked() {
         s.approvers = vec!["@alice".into()];
         s.codeowners = "CODEOWNERS".into();
     });
-    assert_eq!(read(dir.path(), "CODEOWNERS"), block("/docs/adr/ @alice"));
+    assert_eq!(read(dir.path(), "CODEOWNERS"), block("* @alice"));
     assert!(!dir.path().join(OWNERS).exists());
     assert!(fs::symlink_metadata(dir.path().join(".claude/CODEOWNERS")).is_err());
     let skill = read(dir.path(), INTENT_SKILL);
-    assert!(
-        skill.contains("`CODEOWNERS` (`/docs/adr/ @alice`)"),
-        "{skill}"
-    );
+    assert!(skill.contains("`CODEOWNERS` (`* @alice`)"), "{skill}");
 }
 
 /// ocgen 0.7.1 and older kept a symbolic link at `.claude/CODEOWNERS`: the next
@@ -1823,7 +1822,7 @@ fn an_old_codeowners_link_goes_and_yours_stays() {
         !notice.iter().any(|l| l.contains(".claude/CODEOWNERS")),
         "{notice:?}"
     );
-    assert_eq!(read(dir.path(), OWNERS), block("/docs/adr/ @alice"));
+    assert_eq!(read(dir.path(), OWNERS), block("* @alice"));
 
     // Not linked any more: an old link to the root CODEOWNERS goes too.
     symlink("../CODEOWNERS", &link).unwrap();
@@ -1961,6 +1960,7 @@ fn codeowners_files_nobody_owns_are_reported() {
     let notice = edit_intent(dir.path(), |s| {
         s.approvers = vec!["@alice".into()];
         s.codeowners = "CODEOWNERS".into();
+        s.codeowners_scope = ocgen::claude::CodeownersScope::Intents;
     });
     let unowned = notice
         .iter()
@@ -2050,6 +2050,7 @@ fn an_intent_folder_in_another_case_is_reported() {
     let link = |s: &mut ocgen::claude::IntentSettings| {
         s.approvers = vec!["@alice".into()];
         s.codeowners = OWNERS.into();
+        s.codeowners_scope = ocgen::claude::CodeownersScope::Intents;
     };
     let notice = edit_intent(dir.path(), link);
     assert!(!notice.iter().any(|l| l.contains("docs/ADR")), "{notice:?}");
@@ -2091,6 +2092,22 @@ fn an_old_state_without_approvers_loads() {
     assert!(p.claude.intent.codeowners.is_empty());
     assert_eq!(
         p.claude.intent.codeowners_scope,
+        ocgen::claude::CodeownersScope::All
+    );
+}
+
+/// The default scope became `all`; a project that saved `intents` keeps it.
+#[test]
+fn a_saved_intents_scope_is_kept() {
+    let dir = tempdir().unwrap();
+    claude("co-kept").scaffold(dir.path(), false).unwrap();
+    let mut state = json_at(dir.path(), STATE);
+    assert_eq!(state["claude"]["intent"]["codeowners_scope"], json!("all"));
+    state["claude"]["intent"]["codeowners_scope"] = json!("intents");
+    write_json(dir.path(), STATE, &state);
+    reload(dir.path()).scaffold(dir.path(), true).unwrap();
+    assert_eq!(
+        reload(dir.path()).claude.intent.codeowners_scope,
         ocgen::claude::CodeownersScope::Intents
     );
 }

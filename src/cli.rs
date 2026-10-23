@@ -163,11 +163,12 @@ pub enum Command {
         #[command(subcommand)]
         action: NotesAction,
     },
-    /// Open an /intent issue draft in your browser: edit it as formatted text or as
-    /// Markdown and save it back to the file, preview it the way GitHub shows it,
-    /// and copy it.
+    /// Open an issue or pull request draft in your browser: edit it as formatted text
+    /// or as Markdown and save it back to the file, preview it the way GitHub shows
+    /// it, and copy it.
     ///
-    /// /intent writes the GitHub issue description to .claude/intent/drafts/<name>.md.
+    /// /intent writes the GitHub issue description to .claude/intent/drafts/<name>.md,
+    /// and Claude writes each pull request it drafts there as pr-<slug>.md.
     /// With several drafts and no name, it opens their list to pick from, 10 a page,
     /// newest first. Typing `draft` on its own in Claude Code does the same, with the
     /// draft that session wrote last selected.
@@ -217,10 +218,11 @@ const DRAFT_EXAMPLES: &str = "Examples:
   ocgen draft ADR-0007                   by the intent it belongs to
   ocgen draft issue-retry-budget         by file name
   ocgen draft issue-review-feat-retry    a /review-intent draft, by file name
+  ocgen draft pr-retry-budget            a pull request's draft
 
 The editor is a local page (127.0.0.1, a secret token in its address). Save writes the
 .md file only if it hasn't changed since you opened it; the file is what
-`gh issue create --body-file` files.
+`gh issue create --body-file` files (`gh pr create --body-file` for a pr- draft).
 
 Environment:
   OCGEN_NOTES_OPEN=0     never open a browser
@@ -498,7 +500,7 @@ Examples:
   ocgen edit intent --trust-domain \"*.amazon.com\"          # every subdomain (not amazon.com itself)
   ocgen edit intent --approver @alice                      # who must sign off (repeatable)
   ocgen edit intent --codeowners .github/CODEOWNERS        # keep the approvers in your CODEOWNERS
-  ocgen edit intent --codeowners-scope all                 # approvers review every change, not just intents
+  ocgen edit intent --codeowners-scope intents             # approvers review only the intent files
   ocgen edit intent --issue-template                       # edit the issue structure in $EDITOR
   ocgen edit intent --reset-intent-template                # back to ocgen's default
   ocgen edit intent --disable                              # remove /intent from the project";
@@ -539,11 +541,11 @@ pub struct IntentCli {
     #[arg(long, value_name = "HANDLE")]
     pub remove_approver: Vec<String>,
     /// Link the project's existing CODEOWNERS file (.github/CODEOWNERS, CODEOWNERS
-    /// or docs/CODEOWNERS): ocgen keeps its approvers block in it and a link to it
-    /// at .claude/CODEOWNERS. "off" unlinks it and removes the block.
+    /// or docs/CODEOWNERS): ocgen keeps its approvers block in it, and the /intent
+    /// skill names it. "off" unlinks it and removes the block.
     #[arg(long, value_name = "PATH")]
     pub codeowners: Option<String>,
-    /// What the CODEOWNERS block covers: the intent directory, every file, or nothing.
+    /// What the CODEOWNERS block covers: every file (the default), the intent directory, or nothing.
     #[arg(long, value_name = "SCOPE")]
     pub codeowners_scope: Option<ocgen::claude::CodeownersScope>,
     /// Add /intent to the project.

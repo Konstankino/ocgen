@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="no-referrer">
-<meta name="generator" content="ocgen — the /intent issue draft editor; Save writes the .md file">
+<meta name="generator" content="ocgen — the /intent draft editor (an issue's or a pull request's); Save writes the .md file">
 <title>{{ name }} · {{ w.title }}</title>
 <style>
 {% include "page.css" %}
@@ -113,7 +113,7 @@ html[data-palette="white"] body.focus .zen-editor > :not(.is-current):not(.is-ne
 /* the Markdown source */
 .zen-source { display: block; width: 100%; min-height: 70vh; field-sizing: content; resize: none; border: 0; outline: none; padding: 0;
   background: transparent; color: var(--z-text); font: 15px/1.7 var(--z-mono); tab-size: 4; }
-/* the preview, close to how GitHub draws an issue */
+/* the preview, close to how GitHub draws an issue or a pull request */
 .zen .preview { font-family: var(--z-sans); }
 .markdown-body { font-size: 16px; line-height: 1.6; overflow-wrap: anywhere; }
 .markdown-body > :first-child { margin-top: 0; }
@@ -252,7 +252,7 @@ html[data-palette="white"] body.focus .zen-editor > :not(.is-current):not(.is-ne
     saveButton.classList.toggle("on", d);
   }
   function refresh() { clearTimeout(later); settle(); var t = text(); checkApprovers(t); checkWraps(t); }
-  // GitHub shows every newline in an issue as a line break: lines wrapped by
+  // GitHub shows every newline in an issue or a pull request as a line break: lines wrapped by
   // hand mid-sentence read as broken lines there (the same rule ocgen applies
   // after each write). Join them: only those newlines change.
   function checkWraps(t) {

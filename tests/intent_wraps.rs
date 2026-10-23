@@ -123,7 +123,7 @@ fn the_hook_tells_claude_to_join_lines_wrapped_by_hand_in_a_draft() {
             rel,
             "wrapped by hand",
             "lines 3, 4, 5, 8, 9, 10, 11, 19, 23",
-            "GitHub shows every newline in an issue as a line break",
+            "GitHub shows every newline in an issue or a pull request as a line break",
             "one line",
             "**Blocks prod?**",
         ] {
@@ -165,14 +165,16 @@ fn the_editor_points_out_wrapped_lines_and_offers_to_join_them() {
         "the banner shows"
     );
     assert!(page.contains(r#"<strong id="wraps-count">9</strong>"#));
-    assert!(page.contains("GitHub shows every newline in an issue as a line break"));
+    assert!(
+        page.contains("GitHub shows every newline in an issue or a pull request as a line break")
+    );
     assert!(page.contains(r#"<button type="button" id="join-lines">Join them</button>"#));
 
     let clean = draft::page("One line.\n", "d.md", "r", "n", "English", &[]).unwrap();
     assert!(clean.contains(r#"<div class="banner" id="wraps" role="status" hidden>"#));
 
     let uk = draft::page(WRAPPED, "d.md", "r", "n", "Ukrainian", &[]).unwrap();
-    assert!(uk.contains("GitHub показує кожен перенос рядка в задачі як розрив рядка"));
+    assert!(uk.contains("GitHub показує кожен перенос рядка в задачі чи PR як розрив рядка"));
     assert!(uk.contains("Об’єднати їх"));
 }
 

@@ -1,9 +1,11 @@
-//! The /intent issue draft's browser review. /intent writes the GitHub issue
-//! description to `.claude/intent/drafts/<name>.md`; `ocgen draft` — or the word
+//! The browser review of an issue or pull request draft. /intent writes the
+//! GitHub issue description to `.claude/intent/drafts/<name>.md`, and Claude
+//! writes each pull request it drafts there as `pr-<slug>.md` (the workflow
+//! rule); `ocgen draft` — or the word
 //! `draft` sent alone in Claude Code, caught by the `intent-draft` hook — opens
 //! it in a local editor run by the live viewer ([`super::viewer`]): the text
 //! formatted, with the Markdown syntax hidden (Milkdown, [`EDITOR_JS`]), the
-//! Markdown source, a preview drawn the way GitHub draws an issue, and buttons
+//! Markdown source, a preview drawn the way GitHub draws it, and buttons
 //! that copy it. Save writes the file back as plain Markdown: unedited, byte
 //! for byte; edited, with the original text of every block left untouched.
 //!
@@ -39,8 +41,11 @@ use super::words::{self, Words};
 use super::Shown;
 use crate::templates;
 
-/// Where /intent keeps issue drafts, relative to the project root.
+/// Where issue and pull request drafts are kept, relative to the project root.
 pub const DIR: &str = ".claude/intent/drafts";
+/// How a pull request's draft is named (`pr-<slug>.md`); any other draft is an
+/// issue's.
+pub const PR_PREFIX: &str = "pr-";
 /// The one-word prompt that opens the draft, or with several, their list.
 pub const WORD: &str = "draft";
 /// The editor page.
@@ -112,6 +117,21 @@ pub fn skipped_note(dir: &Path) -> Option<String> {
             if names.len() == 1 { "it" } else { "them" },
         )
     })
+}
+
+/// Whether the draft `name` (its stem, file name or path) is a pull request's.
+pub fn is_pull_request(name: &str) -> bool {
+    let file = name.rsplit(['/', '\\']).next().unwrap_or(name);
+    file.to_ascii_lowercase().starts_with(PR_PREFIX)
+}
+
+/// What the draft `name` is, for messages: "pull request draft" or "issue draft".
+pub fn kind_label(name: &str) -> &'static str {
+    if is_pull_request(name) {
+        "pull request draft"
+    } else {
+        "issue draft"
+    }
 }
 
 /// Whether a prompt is the one word that opens the draft (any case, nothing else).
@@ -192,7 +212,7 @@ pub fn find(dir: &Path, name: Option<&str>) -> Result<PathBuf> {
     let Some(name) = name.map(str::trim).filter(|n| !n.is_empty()) else {
         return all.into_iter().next().with_context(|| {
             format!(
-                "no issue drafts in {} yet — /intent and /review-intent write one when they draft a GitHub issue{skipped}",
+                "no drafts in {} yet — /intent and /review-intent write one when they draft a GitHub issue, and Claude writes one for each pull request or issue it drafts{skipped}",
                 dir.display()
             )
         });
@@ -206,7 +226,7 @@ pub fn find(dir: &Path, name: Option<&str>) -> Result<PathBuf> {
         return Ok(p.clone());
     }
     bail!(
-        "no issue draft matches '{name}' in {} (drafts: {}){skipped}",
+        "no draft matches '{name}' in {} (drafts: {}){skipped}",
         dir.display(),
         all.iter().map(|p| stem(p)).collect::<Vec<_>>().join(", ")
     )
@@ -242,7 +262,7 @@ fn ignore_self(dir: &Path) {
 // ------------------------------------------------------------- preview --
 
 /// Tags kept from a draft's raw HTML (attributes dropped): what GitHub renders
-/// in an issue and nothing that loads or runs anything.
+/// in an issue or a pull request and nothing that loads or runs anything.
 const ALLOWED_TAGS: &[&str] = &[
     "details",
     "summary",
@@ -426,7 +446,7 @@ pub fn page(
     // Escaped here: minijinja's own escaping also turns `/` into `&#x2f;`.
     let safe = |s: &str| Value::from_safe_string(escape(s));
     let ctx = minijinja::context! {
-        w => words_value(w),
+        w => words_value(w, is_pull_request(&name)),
         name => safe(&name),
         slug => safe(name.trim_end_matches(".md")),
         source => safe(source),
@@ -595,7 +615,7 @@ pub fn list_page(
     };
     let d = &w.draft;
     let ctx = minijinja::context! {
-        w => words_value(w),
+        w => words_value(w, false),
         page_of => safe(&fill(d.page_of)),
         count => safe(&fill(d.count)),
         rows => rows,
@@ -618,13 +638,16 @@ pub fn list_page(
     Ok(out)
 }
 
-fn words_value(w: &'static Words) -> Value {
+/// The page's words; a pull request's draft (`pr`) gets its own title, editor
+/// name and footer.
+fn words_value(w: &'static Words, pr: bool) -> Value {
     let d = &w.draft;
     let mut m: BTreeMap<&str, Value> = BTreeMap::new();
     m.insert("lang", Value::from(w.lang));
+    let pick = |issue, pull| if pr { pull } else { issue };
     for (k, v) in [
-        ("title", d.title),
-        ("editor", d.editor),
+        ("title", pick(d.title, d.pr_title)),
+        ("editor", pick(d.editor, d.pr_editor)),
         ("source", d.source),
         ("preview", d.preview),
         ("focus", d.focus),
@@ -653,7 +676,7 @@ fn words_value(w: &'static Words) -> Value {
         ("says_none", d.says_none),
         ("wrapped", d.wrapped),
         ("join_lines", d.join_lines),
-        ("footer", d.footer),
+        ("footer", pick(d.footer, d.pr_footer)),
         ("all_drafts", d.all_drafts),
         ("list_title", d.list_title),
         ("newer", d.newer),
@@ -704,7 +727,7 @@ pub fn gaps_of(md: &Path) -> crate::intent::Gaps {
 /// tab unless one already shows the draft.
 pub fn show(md: &Path, env: &HashMap<String, String>, explicit: bool) -> Result<Shown> {
     let Some(slug) = draft_target(&super::absolute(md).to_string_lossy()) else {
-        bail!("{} is not an /intent issue draft", md.display());
+        bail!("{} is not a draft in {DIR}/", md.display());
     };
     if !super::browser::decide(env, super::browser::this_os(), explicit) {
         return Ok(Shown::Off);

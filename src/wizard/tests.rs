@@ -404,7 +404,7 @@ fn edit_intent_offers_to_link_the_projects_codeowners() {
         "", "", "", "", "", "",       // /intent and its settings, as they are
         "@alice", // approvers
         "",       // keep them in .github/CODEOWNERS: yes
-        "all",    // what they review: every change
+        "",       // what they review: every change, the default
     ]);
     super::run_edit_intent(path, Default::default()).unwrap();
     assert_eq!(script_remaining(), 0);

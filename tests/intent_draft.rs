@@ -230,6 +230,58 @@ fn page_holds_the_editor_the_source_the_preview_and_the_controls() {
     }
 }
 
+/// A pull request's draft (`pr-<slug>.md`) sits beside the issue drafts: its
+/// page says what it is and which command opens it; what holds for both says so.
+#[test]
+fn a_pull_request_draft_is_named_as_one() {
+    let at = |name: &str, language: &str| {
+        let source = format!(".claude/intent/drafts/{name}");
+        markup(&draft::page("Text\n", &source, "r", "n", language, &[]).unwrap())
+    };
+    let pr = at("pr-cache.md", "English");
+    for part in [
+        "Pull request draft",
+        "Pull request description",
+        "the one gh pr create --body-file opens on GitHub",
+        "GitHub notifies only the people an issue or pull request @mentions",
+        "GitHub shows every newline in an issue or a pull request as a line break",
+    ] {
+        assert!(pr.contains(part), "the PR page misses {part}");
+    }
+    assert!(
+        !pr.contains("Issue draft") && !pr.contains("gh issue create"),
+        "{pr}"
+    );
+    for name in ["issue-cache.md", "adr-0001-cache.md", "prune-cache.md"] {
+        let issue = at(name, "English");
+        assert!(
+            issue.contains("Issue draft")
+                && issue.contains("gh issue create --body-file")
+                && !issue.contains("gh pr create"),
+            "{name}: {issue}"
+        );
+    }
+    let uk = at("pr-cache.md", "Ukrainian");
+    for part in [
+        "Чернетка GitHub pull request",
+        "Опис PR",
+        "gh pr create --body-file",
+    ] {
+        assert!(uk.contains(part), "the Ukrainian PR page misses {part}");
+    }
+    for letter in ['ы', 'э', 'ъ', 'ё', 'Ы', 'Э', 'Ъ', 'Ё'] {
+        assert!(!uk.contains(letter), "{letter} in the Ukrainian page");
+    }
+
+    // The list holds both kinds.
+    let dir = tempfile::tempdir().unwrap();
+    let drafts = dir.path().join(".claude/intent/drafts");
+    fs::create_dir_all(&drafts).unwrap();
+    fs::write(drafts.join("pr-cache.md"), "Text\n").unwrap();
+    let list = draft::list_page(&drafts, None, None, "./", "n").unwrap();
+    assert!(list.contains("Issue and pull request drafts"), "{list}");
+}
+
 #[test]
 fn page_carries_the_original_markdown_verbatim() {
     let page = draft::page(EVERYTHING, "d.md", "r", "n", "English", &[]).unwrap();
@@ -996,7 +1048,7 @@ fn draft_lists_the_drafts_with_the_one_this_session_wrote_selected() {
         opened[0]
     );
     assert!(
-        said.contains("list of 3 issue drafts")
+        said.contains("list of 3 drafts")
             && said.contains(".claude/intent/drafts/adr-0084-retry.md")
             && said.contains("this session last wrote"),
         "{said}"
@@ -1189,7 +1241,7 @@ fn ocgen_draft_lists_several_drafts_and_opens_one_by_name() {
     let info = p.info();
     assert_eq!(p.opened(), [info.list_url(None)]);
     let said = String::from_utf8_lossy(&out.stdout);
-    assert!(said.contains("2 issue drafts"), "{said}");
+    assert!(said.contains("2 drafts"), "{said}");
 
     // A name still opens that draft.
     p.draft(&["adr-0001"]);
@@ -1218,7 +1270,8 @@ fn ocgen_draft_warns_about_lines_wrapped_by_hand() {
     assert!(
         said.contains(
             "has 9 lines wrapped by hand mid-sentence (lines 3, 4, 5, 8, 9, 10, 11, 19, 23)"
-        ) && said.contains("GitHub shows every newline in an issue as a line break"),
+        ) && said
+            .contains("GitHub shows every newline in an issue or a pull request as a line break"),
         "{said}"
     );
     // The convention's own line breaks are meant: no warning.

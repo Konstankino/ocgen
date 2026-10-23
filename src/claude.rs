@@ -153,11 +153,11 @@ pub const OLD_CODEOWNERS_LINK: &str = ".claude/CODEOWNERS";
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "lowercase")]
 pub enum CodeownersScope {
-    /// The intent directory.
+    /// Every file (`*`): no pull request merges without their review.
     #[default]
-    Intents,
-    /// Every file (`*`).
     All,
+    /// The intent directory.
+    Intents,
     /// No block.
     Off,
 }
@@ -259,7 +259,7 @@ impl Default for IntentSettings {
             branch: String::new(),
             approvers: Vec::new(),
             codeowners: String::new(),
-            codeowners_scope: CodeownersScope::Intents,
+            codeowners_scope: CodeownersScope::All,
         }
     }
 }

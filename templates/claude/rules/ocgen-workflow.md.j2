@@ -116,6 +116,10 @@ this project's git remotes:
   (or `rateLimit`). Declared `$owner` and `$repo` are filled in; other values go in `variables`.
 - `{owner}`/`{repo}` and `$owner`/`$repo` mean the `origin` remote's repository; `"remote":
   "upstream"`, at the top or in one request, picks another.
+- **CI logs:** a failed check's jobs are `repos/{owner}/{repo}/actions/runs/<run id>/jobs`, and a
+  job's log is `repos/{owner}/{repo}/actions/jobs/<job id>/logs` — plain text, its colour codes
+  taken out; one too long to keep whole keeps its end, where the failure is (`"kept": "end"`). A
+  whole run's `…/runs/<run id>/logs` is a zip and isn't saved: ask for each job's log instead.
 - At most 20 requests per file. `.claude/notes/github/answer.json` lists each request's status and
   the file under `.claude/notes/github/responses/` that holds its answer. Read the answer file
   first (its `requested_at` is yours), then the responses: large ones in parts, or with Grep. A
@@ -227,4 +231,21 @@ To review a change and record what the review finds the same way, run `/review-i
 by default; or a pull request, a branch or a path): the project's agents review it in parallel, only
 findings another agent confirms reach the issue draft, and it writes an ADR only when asked. It never
 posts on a pull request.
+
+**Every pull request and issue you draft needs the approvers' sign-off**, not only `/intent`'s.
+Write its description with the Write tool to a draft: `.claude/intent/drafts/pr-<slug>.md` for a
+pull request, `.claude/intent/drafts/issue-<slug>.md` for an issue (structured by
+`.claude/intent/issue-template.md`), with a kebab-case `<slug>` no draft has yet; make sure
+`.claude/intent/drafts/.gitignore` exists and holds `*`. End it with a **Needs from** section:
+{% if approvers %}name the approvers in its heading (`## Needs from {{ approvers }}`), then one pending line
+per approver, as @mentions (`- [ ] @handle — pending`) — GitHub notifies them through those
+@mentions, and nobody is contacted any other way{% else %}"No approvers configured", and suggest
+`ocgen edit intent --approver @handle`{% endif %}. The approvers can change while you work: after every
+write, ocgen checks the draft against the project's current approvers and tells you who is missing —
+its list wins, so fix the draft at once. Write each paragraph and each list item on one line (GitHub
+shows every newline as a line break). Then tell me to type `draft` to review it in the browser, and
+give me the command that files it as it stands:
+`gh pr create --title "<title>" --body-file .claude/intent/drafts/pr-<slug>.md`, or
+`gh issue create --title "<title>" --body-file .claude/intent/drafts/issue-<slug>.md`. Never open the
+pull request or file the issue yourself.
 {% endif %}

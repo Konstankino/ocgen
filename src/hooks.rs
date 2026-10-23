@@ -1536,8 +1536,8 @@ impl<'a> Hook<'a> {
         }
     }
 
-    /// UserPromptSubmit: the word `draft`, sent on its own, opens the /intent
-    /// issue draft in the browser editor — or, with several, their list, with
+    /// UserPromptSubmit: the word `draft`, sent on its own, opens the draft (an
+    /// issue's or a pull request's) in the browser editor — or, with several, their list, with
     /// the one this session wrote last selected — from here, outside the Bash
     /// sandbox, where a local server can start, and answers the user in place of
     /// the prompt. Any other prompt passes untouched.
@@ -1584,8 +1584,9 @@ impl<'a> Hook<'a> {
         let all = draft::drafts(&dir);
         let answer = match all.as_slice() {
             [] => format!(
-                "`{}`: there is no issue draft in {}/ yet, so nothing was opened — /intent and \
-                 /review-intent write one when they draft a GitHub issue.",
+                "`{}`: there is no draft in {}/ yet, so nothing was opened — /intent and \
+                 /review-intent write one when they draft a GitHub issue, and Claude writes one for \
+                 each pull request or issue it drafts.",
                 draft::WORD,
                 draft::DIR
             ),
@@ -1804,7 +1805,7 @@ impl<'a> Hook<'a> {
         }
         format!(
             " Also: the draft {} — the project's approvers are now {}; GitHub notifies only the \
-             people an issue @mentions (the page shows the same warning).",
+             people an issue or pull request @mentions (the page shows the same warning).",
             gaps.describe(),
             draft::approvers_for(md).join(", ")
         )
@@ -1819,22 +1820,23 @@ impl<'a> Hook<'a> {
             md.file_name().unwrap_or_default().to_string_lossy()
         );
         let word = draft::WORD;
+        let kind = draft::kind_label(&rel);
         let terminal = "`ocgen draft` in a terminal opens it in your browser";
         let answer = match draft::show(md, self.env, true) {
             Ok(Shown::Off) => format!(
-                "`{word}`: opening a browser is switched off here (OCGEN_NOTES_OPEN=0). The issue \
-                 draft is {rel}; {terminal}."
+                "`{word}`: opening a browser is switched off here (OCGEN_NOTES_OPEN=0). The {kind} \
+                 is {rel}; {terminal}."
             ),
-            Ok(Shown::Reloaded(_) | Shown::Pending) => format!(
-                "`{word}`: the issue draft {rel} is already open in a tab of your browser."
-            ),
+            Ok(Shown::Reloaded(_) | Shown::Pending) => {
+                format!("`{word}`: the {kind} {rel} is already open in a tab of your browser.")
+            }
             Ok(_) => format!(
-                "`{word}`: ocgen opened the issue draft {rel} in your browser, where you can edit \
+                "`{word}`: ocgen opened the {kind} {rel} in your browser, where you can edit \
                  the raw Markdown and save it to that file, preview it the way GitHub shows it, and \
                  copy it."
             ),
             Err(e) => format!(
-                "`{word}`: ocgen could not open the issue draft {rel} in your browser ({e:#}); \
+                "`{word}`: ocgen could not open the {kind} {rel} in your browser ({e:#}); \
                  {terminal}."
             ),
         };
@@ -1851,7 +1853,7 @@ impl<'a> Hook<'a> {
         let answer = match draft::show_list(dir, mine.as_deref(), self.env, true) {
             Ok(Shown::Off) => format!(
                 "`{word}`: opening a browser is switched off here (OCGEN_NOTES_OPEN=0). \
-                 `ocgen draft` in a terminal opens the list of the {count} issue drafts in {}/ to \
+                 `ocgen draft` in a terminal opens the list of the {count} drafts in {}/ to \
                  pick from, and `ocgen draft <name>` opens one{}.",
                 draft::DIR,
                 rel.as_ref()
@@ -1859,7 +1861,7 @@ impl<'a> Hook<'a> {
                     .unwrap_or_default()
             ),
             Ok(Shown::Reloaded(_) | Shown::Pending) => format!(
-                "`{word}`: the list of {count} issue drafts is already open in a tab of your \
+                "`{word}`: the list of {count} drafts is already open in a tab of your \
                  browser, and ocgen moved it {}. Pick the draft there.",
                 match &rel {
                     Some(r) => format!("to {r}, the draft this session last wrote"),
@@ -1867,7 +1869,7 @@ impl<'a> Hook<'a> {
                 }
             ),
             Ok(_) => format!(
-                "`{word}`: ocgen opened the list of {count} issue drafts in your browser ({} a \
+                "`{word}`: ocgen opened the list of {count} drafts in your browser ({} a \
                  page, newest first), {}. Pick the one to open there, in the browser editor.",
                 draft::PER_PAGE,
                 match &rel {
@@ -1876,7 +1878,7 @@ impl<'a> Hook<'a> {
                 }
             ),
             Err(e) => format!(
-                "`{word}`: ocgen could not open the list of issue drafts in your browser ({e:#}); \
+                "`{word}`: ocgen could not open the list of drafts in your browser ({e:#}); \
                  `ocgen draft` in a terminal lists them and `ocgen draft <name>` opens one."
             ),
         };
@@ -1887,11 +1889,13 @@ impl<'a> Hook<'a> {
     }
 
     /// PostToolUse (Write|Edit|MultiEdit): after a write to a pending /intent file
-    /// or an issue draft, check it against the approvers in the project's state
-    /// now — not the list the session's /intent skill was generated with — and
-    /// tell Claude what is missing, so it fixes the file before anyone files it.
+    /// or a draft (an issue's or a pull request's), check it against the
+    /// approvers in the project's state now — not the list the session's /intent
+    /// skill was generated with — and tell Claude what is missing, so it fixes
+    /// the file before anyone files it.
     /// A draft is also checked for lines wrapped by hand ([`intent::hard_wraps`]):
-    /// GitHub shows each newline in an issue as a line break. Never fails a write.
+    /// GitHub shows each newline in an issue or a pull request as a line break.
+    /// Never fails a write.
     fn intent_approvers(&self) -> Outcome {
         use crate::intent;
         let path = self
@@ -1936,7 +1940,7 @@ impl<'a> Hook<'a> {
             };
             reasons.push(format!(
                 "ocgen: {rel} {} — but this project's approvers are now {} (`ocgen edit intent`; \
-                 the list can change while /intent runs, so trust this one over your \
+                 the list can change while a session runs, so trust this one over your \
                  instructions). {fix}, and drop \"{}\": their @mentions are how GitHub notifies \
                  them. Fix the file now.",
                 gaps.describe(),
@@ -1952,7 +1956,7 @@ impl<'a> Hook<'a> {
                 let at: Vec<String> = wraps.iter().map(usize::to_string).collect();
                 reasons.push(format!(
                     "ocgen: {rel} has lines wrapped by hand mid-sentence (lines {}): GitHub shows \
-                     every newline in an issue as a line break, so they read as broken lines \
+                     every newline in an issue or a pull request as a line break, so they read as broken lines \
                      there. Write each paragraph and each list item on one line, and keep a break \
                      only where the reader should see one (like the **Blocks prod?** and \
                      **Depends on…** lines). Fix the file now.",

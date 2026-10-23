@@ -1302,7 +1302,21 @@ fn intent_draft_opens_on_the_one_word_and_the_script_is_a_no_op() {
 
     // No draft yet: the model is told so, and nothing opens.
     let ctx = draft_context(&run("draft", &env));
-    assert!(ctx.contains("no issue draft"), "{ctx}");
+    assert!(
+        ctx.contains("no draft") && ctx.contains("pull request"),
+        "{ctx}"
+    );
+
+    // A pull request's draft is named as one.
+    let pr = dir.path().join(".claude/intent/drafts/pr-cache.md");
+    fs::create_dir_all(pr.parent().unwrap()).unwrap();
+    fs::write(&pr, ISSUE_DRAFT).unwrap();
+    let ctx = draft_context(&run("draft", &env));
+    assert!(
+        ctx.contains("The pull request draft is .claude/intent/drafts/pr-cache.md"),
+        "{ctx}"
+    );
+    fs::remove_file(&pr).unwrap();
 
     // One draft: the word (any case, surrounding space) opens it.
     write_draft(dir.path());
@@ -1322,7 +1336,7 @@ fn intent_draft_opens_on_the_one_word_and_the_script_is_a_no_op() {
     fs::write(&newer, ISSUE_DRAFT).unwrap();
     let ctx = draft_context(&run("draft", &env));
     assert!(
-        ctx.contains("2 issue drafts") && ctx.contains("ocgen draft <name>"),
+        ctx.contains("2 drafts") && ctx.contains("ocgen draft <name>"),
         "{ctx}"
     );
     // Only the word on its own.
@@ -1422,17 +1436,14 @@ fn intent_draft_remembers_the_draft_a_session_writes_and_names_it() {
     // `draft` names the session's own draft, whichever is newest.
     let ctx = said("s-1");
     assert!(
-        ctx.contains("2 issue drafts") && ctx.contains(".claude/intent/drafts/adr-0001-cache.md"),
+        ctx.contains("2 drafts") && ctx.contains(".claude/intent/drafts/adr-0001-cache.md"),
         "{ctx}"
     );
     let ctx = said("s-2");
     assert!(ctx.contains("issue-retry-budget.md"), "{ctx}");
     // A session that wrote none: the list, nothing named.
     let ctx = said("s-9");
-    assert!(
-        ctx.contains("2 issue drafts") && !ctx.contains(".md"),
-        "{ctx}"
-    );
+    assert!(ctx.contains("2 drafts") && !ctx.contains(".md"), "{ctx}");
 }
 
 #[test]
@@ -1454,7 +1465,7 @@ fn intent_draft_names_the_files_it_cannot_open() {
     // Nothing it can open, but the file is named, with the way out.
     let ctx = said();
     assert!(
-        ctx.contains("no issue draft") && ctx.contains("My Draft.md") && ctx.contains("rename"),
+        ctx.contains("no draft") && ctx.contains("My Draft.md") && ctx.contains("rename"),
         "{ctx}"
     );
     // Beside a draft it opens, too.

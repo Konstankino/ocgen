@@ -475,7 +475,7 @@ fn with_no_draft_yet_both_skills_are_named() {
     let dir = tempdir().unwrap();
     claude().scaffold(dir.path(), false).unwrap();
     let o = ocgen::hooks::run("intent-draft", r#"{"prompt":"draft"}"#, &env(dir.path()));
-    assert!(o.stdout.contains("no issue draft"), "{o:?}");
+    assert!(o.stdout.contains("no draft"), "{o:?}");
     assert!(o.stdout.contains("/review-intent"), "{o:?}");
 
     fs::create_dir_all(dir.path().join(".claude/intent/drafts")).unwrap();

@@ -235,7 +235,7 @@ fn run_draft(name: Option<&str>, path: &str) -> Result<()> {
     use ocgen::notes::{draft, Shown};
     let dir = draft::drafts_dir(std::path::Path::new(path)).ok_or_else(|| {
         anyhow::anyhow!(
-            "no {}/ above {path} — /intent writes the issue draft there",
+            "no {}/ above {path} — /intent writes its issue drafts there, and Claude its pull request drafts",
             draft::DIR
         )
     })?;
@@ -249,7 +249,7 @@ fn run_draft(name: Option<&str>, path: &str) -> Result<()> {
     if name.is_none() && all.len() > 1 {
         let env: std::collections::HashMap<String, String> = std::env::vars().collect();
         let count = all.len();
-        let at = format!("{count} issue drafts in {}/", draft::DIR);
+        let at = format!("{count} drafts in {}/", draft::DIR);
         match draft::show_list(&dir, None, &env, true)? {
             Shown::Off => {
                 println!("{at} (not opened: OCGEN_NOTES_OPEN=0) — name one: ocgen draft <name>")
@@ -287,7 +287,7 @@ fn run_draft(name: Option<&str>, path: &str) -> Result<()> {
     if !gaps.is_empty() {
         println!(
             "warning: {rel} {} — the project's approvers are {}. GitHub notifies only the people \
-             an issue @mentions: name each under \"Needs from\" with a pending sign-off line.",
+             an issue or pull request @mentions: name each under \"Needs from\" with a pending sign-off line.",
             gaps.describe(),
             draft::approvers_for(&md).join(", ")
         );
@@ -299,7 +299,7 @@ fn run_draft(name: Option<&str>, path: &str) -> Result<()> {
         let at: Vec<String> = wraps.iter().map(usize::to_string).collect();
         println!(
             "warning: {rel} has {} line{} wrapped by hand mid-sentence (line{} {}) — GitHub shows \
-             every newline in an issue as a line break. Join them in the editor (Join them), or \
+             every newline in an issue or a pull request as a line break. Join them in the editor (Join them), or \
              ask Claude to write each paragraph on one line.",
             wraps.len(),
             if wraps.len() == 1 { "" } else { "s" },

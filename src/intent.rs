@@ -135,7 +135,7 @@ fn mid_sentence(prev: &str, next: &str) -> bool {
 pub enum Kind {
     /// An intent file: `<dir>/<PREFIX>-<n>-<slug>.md` or `<dir>/<n>-<slug>.md`.
     Intent,
-    /// An issue draft: `.claude/intent/drafts/<name>.md`.
+    /// A draft, an issue's or a pull request's: `.claude/intent/drafts/<name>.md`.
     Draft,
 }
 
@@ -220,7 +220,7 @@ impl Stale {
     }
 }
 
-/// The pending intent files and the issue drafts of project `root` that fall
+/// The pending intent files and the drafts of project `root` that fall
 /// short of its current approvers, intent files first, each by name.
 pub fn stale(project: &Project, root: &Path) -> Vec<Stale> {
     let s = &project.claude.intent;

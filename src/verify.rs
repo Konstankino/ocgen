@@ -2338,13 +2338,11 @@ fn draft_review(p: &Probe) -> Check {
             Status::Pass,
             match &intent_word {
                 Some(w) => format!(
-                    "`draft` on its own opens the issue draft (or their list) in a browser editor, \
+                    "`draft` on its own opens the draft (or their list) in a browser editor, \
                      and `{w}` the intent files"
                 ),
-                None => {
-                    "`draft` on its own opens the issue draft (or their list) in a browser editor"
-                        .to_string()
-                }
+                None => "`draft` on its own opens the draft (or their list) in a browser editor"
+                    .to_string(),
             },
         )
     } else if !ocgen_hook_ok() {

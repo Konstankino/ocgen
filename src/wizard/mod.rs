@@ -1227,7 +1227,7 @@ fn configure_intent(
                 if ask_confirm(
                     theme,
                     &format!("Keep the approvers in {found}?"),
-                    "ocgen adds a marked block for them (your lines stay) and links the file at .claude/CODEOWNERS. GitHub then asks them to review — and requires it once branch protection requires a review from code owners.",
+                    "ocgen adds a marked block for them (your lines stay), and the /intent skill names the file. GitHub then asks them to review — and requires it once branch protection requires a review from code owners.",
                     true,
                 )? {
                     s.codeowners = ocgen::render::check_codeowners_link(root, found)?;
@@ -1237,13 +1237,13 @@ fn configure_intent(
         if !s.codeowners.is_empty() {
             use ocgen::claude::CodeownersScope;
             let scopes = [
-                CodeownersScope::Intents,
                 CodeownersScope::All,
+                CodeownersScope::Intents,
                 CodeownersScope::Off,
             ];
             let labels = [
-                format!("intents — changes to {}/", s.dir),
                 "all — every change".to_string(),
+                format!("intents — changes to {}/", s.dir),
                 "off — no block".to_string(),
             ];
             let at = scopes
@@ -1567,7 +1567,7 @@ fn print_intent(project: &Project, root: &Path) {
     let stale = ocgen::intent::stale(project, root);
     if !stale.is_empty() {
         ui::warning(&format!(
-            "{} file(s) don't name the approvers ({}) — GitHub notifies only the people an issue @mentions:",
+            "{} file(s) don't name the approvers ({}) — GitHub notifies only the people an issue or pull request @mentions:",
             stale.len(),
             s.approvers.join(", ")
         ));
