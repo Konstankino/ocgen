@@ -14,6 +14,12 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
 
+# A new push to a pull request cancels its run still in progress; runs on main
+# always finish.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   test:
     name: test (${{ matrix.name }})
@@ -39,6 +45,10 @@ jobs:
         with:
           toolchain: stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          # Only main writes the cache: pull requests restore it without the
+          # minutes saving takes, and can't evict main's.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Sandbox (bubblewrap with user namespaces)
         if: matrix.sandbox == 'bwrap'
         run: |
@@ -51,9 +61,13 @@ jobs:
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=1 || true
       - name: The hooks' sandbox, first
         run: cargo test --locked --test hook_sandbox -- --nocapture --test-threads=1
+      - uses: taiki-e/install-action@f7e5d7c961414b23f5b25b2da9294395d08513ad # v2.87.26
+        with:
+          tool: cargo-nextest@0.9.146
       - name: Test
-        # --no-fail-fast: report every failing test binary, not just the first.
-        run: cargo test --locked --all-targets --no-fail-fast
+        # Every test binary's tests in one pool (.config/nextest.toml), all but
+        # the hooks' sandbox, which ran above.
+        run: cargo nextest run --locked --all-targets --profile ci -E 'not binary(hook_sandbox)'
 
   lint:
     name: fmt + clippy (${{ matrix.os }})
@@ -72,6 +86,10 @@ jobs:
           toolchain: stable
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          # Only main writes the cache: pull requests restore it without the
+          # minutes saving takes, and can't evict main's.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: rustfmt
         if: runner.os == 'Linux'
         run: cargo fmt --all --check
@@ -98,12 +116,22 @@ jobs:
           toolchain: stable
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          # Only main writes the cache: pull requests restore it without the
+          # minutes saving takes, and can't evict main's.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install musl tools
         if: contains(matrix.target, 'linux-musl')
         run: sudo apt-get update && sudo apt-get install -y musl-tools
       - name: Build
+        # This only checks that a release build works, so without LTO and with
+        # parallel codegen: minutes faster. The release workflow builds with
+        # the full profile (fat LTO, one codegen unit), which is smaller.
+        env:
+          CARGO_PROFILE_RELEASE_LTO: "false"
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
         run: cargo build --release --locked --bin ocgen --target ${{ matrix.target }}
-      - name: Binary size
+      - name: Binary size (larger than a release's, which has LTO)
         shell: bash
         run: ls -l target/${{ matrix.target }}/release/ocgen${{ matrix.ext }}
       - name: Upload binary artifact
