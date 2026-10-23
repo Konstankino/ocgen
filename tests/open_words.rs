@@ -1060,7 +1060,7 @@ fn a_prefix_named_like_a_word_ocgen_has_leaves_that_word_alone() {
     fs::write(p.adr().join("DRAFT-0001-x.md"), intent("DRAFT-0001", "X")).unwrap();
     let said = p.say_off("intent-draft", "draft");
     assert!(
-        said.contains("no issue draft"),
+        said.contains("no draft"),
         "`draft` stays the drafts' word: {said}"
     );
 }

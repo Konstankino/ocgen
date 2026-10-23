@@ -163,11 +163,12 @@ pub enum Command {
         #[command(subcommand)]
         action: NotesAction,
     },
-    /// Open an /intent issue draft in your browser: edit it as formatted text or as
-    /// Markdown and save it back to the file, preview it the way GitHub shows it,
-    /// and copy it.
+    /// Open an issue or pull request draft in your browser: edit it as formatted text
+    /// or as Markdown and save it back to the file, preview it the way GitHub shows
+    /// it, and copy it.
     ///
-    /// /intent writes the GitHub issue description to .claude/intent/drafts/<name>.md.
+    /// /intent writes the GitHub issue description to .claude/intent/drafts/<name>.md,
+    /// and Claude writes each pull request it drafts there as pr-<slug>.md.
     /// With several drafts and no name, it opens their list to pick from, 10 a page,
     /// newest first. Typing `draft` on its own in Claude Code does the same, with the
     /// draft that session wrote last selected.
@@ -217,10 +218,11 @@ const DRAFT_EXAMPLES: &str = "Examples:
   ocgen draft ADR-0007                   by the intent it belongs to
   ocgen draft issue-retry-budget         by file name
   ocgen draft issue-review-feat-retry    a /review-intent draft, by file name
+  ocgen draft pr-retry-budget            a pull request's draft
 
 The editor is a local page (127.0.0.1, a secret token in its address). Save writes the
 .md file only if it hasn't changed since you opened it; the file is what
-`gh issue create --body-file` files.
+`gh issue create --body-file` files (`gh pr create --body-file` for a pr- draft).
 
 Environment:
   OCGEN_NOTES_OPEN=0     never open a browser

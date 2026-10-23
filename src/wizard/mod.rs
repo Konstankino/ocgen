@@ -1567,7 +1567,7 @@ fn print_intent(project: &Project, root: &Path) {
     let stale = ocgen::intent::stale(project, root);
     if !stale.is_empty() {
         ui::warning(&format!(
-            "{} file(s) don't name the approvers ({}) — GitHub notifies only the people an issue @mentions:",
+            "{} file(s) don't name the approvers ({}) — GitHub notifies only the people an issue or pull request @mentions:",
             stale.len(),
             s.approvers.join(", ")
         ));

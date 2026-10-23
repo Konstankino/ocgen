@@ -39,7 +39,7 @@ pub struct Words {
     /// The /intent reading copy's page.
     pub intent_original: &'static str,
     pub intent_footer: &'static str,
-    /// The issue draft's editor page.
+    /// A draft's editor page (an issue's or a pull request's) and their list.
     pub draft: DraftWords,
     /// The read-only pages: the lists of notes and of intent files, and an
     /// intent file's page. Their palette, pager and keys are the drafts'.
@@ -108,14 +108,18 @@ pub struct VersionWords {
     pub recap_footer: &'static str,
 }
 
-/// What the issue draft's editor page says by itself.
+/// What a draft's editor page says by itself. An issue's draft and a pull
+/// request's (`pr-<slug>.md`) differ only in the page's title, the editor's
+/// name and the footer, which names the command that files it.
 pub struct DraftWords {
     pub title: &'static str,
+    pub pr_title: &'static str,
     /// The formatted editor's name for screen readers.
     pub editor: &'static str,
+    pub pr_editor: &'static str,
     /// The Markdown source view.
     pub source: &'static str,
-    /// The preview drawn the way GitHub draws the issue.
+    /// The preview drawn the way GitHub draws the description.
     pub preview: &'static str,
     /// The Focus button: full screen, without the browser's toolbar. (The
     /// dimming — all but the block being edited and the one before and after
@@ -162,6 +166,7 @@ pub struct DraftWords {
     /// The button that joins them.
     pub join_lines: &'static str,
     pub footer: &'static str,
+    pub pr_footer: &'static str,
     /// The editor's link to the list of drafts.
     pub all_drafts: &'static str,
     /// The list of drafts: its title, its pager (`{page}`, `{pages}`) and its
@@ -217,7 +222,9 @@ pub static ENGLISH: Words = Words {
     intent_footer: "A reading copy rendered by ocgen from the Markdown next to this file. The intent file it renders is the record.",
     draft: DraftWords {
         title: "Issue draft",
+        pr_title: "Pull request draft",
         editor: "Issue text",
+        pr_editor: "Pull request description",
         source: "Source",
         preview: "GitHub preview",
         focus: "Focus",
@@ -244,13 +251,14 @@ pub static ENGLISH: Words = Words {
         keep_mine: "Keep my edits",
         overwrite: "Save mine anyway",
         offline: "Editor disconnected — saving won't work. Run <code>ocgen draft</code> to reconnect.",
-        missing: "GitHub notifies only the people an issue @mentions, and this draft doesn't mention these approvers — add a pending sign-off line for each under “Needs from”:",
+        missing: "GitHub notifies only the people an issue or pull request @mentions, and this draft doesn't mention these approvers — add a pending sign-off line for each under “Needs from”:",
         says_none: "It still says “No approvers configured”, but this project has approvers — remove that line.",
-        wrapped: "GitHub shows every newline in an issue as a line break. Lines wrapped by hand mid-sentence:",
+        wrapped: "GitHub shows every newline in an issue or a pull request as a line break. Lines wrapped by hand mid-sentence:",
         join_lines: "Join them",
         footer: "Save writes the file named above — the one gh issue create --body-file files on GitHub.",
+        pr_footer: "Save writes the file named above — the one gh pr create --body-file opens on GitHub.",
         all_drafts: "All drafts",
-        list_title: "Issue drafts",
+        list_title: "Issue and pull request drafts",
         newer: "‹ Newer",
         older: "Older ›",
         page_of: "Page {page} of {pages}",
@@ -260,7 +268,7 @@ pub static ENGLISH: Words = Words {
         list_keys: "<kbd>↑</kbd> <kbd>↓</kbd> choose · <kbd>Enter</kbd> opens · <kbd>←</kbd> <kbd>→</kbd> newer or older",
         list_footer: "Open a draft to edit it. The list follows the folder: it refreshes when a draft changes.",
         list_offline: "Editor disconnected — this list won’t refresh. Run <code>ocgen draft</code> to reconnect.",
-        none_yet: "No issue drafts yet.",
+        none_yet: "No drafts yet.",
         skipped: "Not listed, because ocgen can’t open these names — rename them to letters, digits, - and _ (at most 200 characters):",
     },
     docs: DocsWords {
@@ -351,7 +359,9 @@ pub static UKRAINIAN: Words = Words {
     intent_footer: "Переклад для читання, який ocgen створив із Markdown-файлу поруч. Чинний запис — англійський файл наміру.",
     draft: DraftWords {
         title: "Чернетка GitHub issue",
+        pr_title: "Чернетка GitHub pull request",
         editor: "Текст задачі",
+        pr_editor: "Опис PR",
         source: "Код Markdown",
         preview: "Як на GitHub",
         focus: "Фокус",
@@ -378,13 +388,14 @@ pub static UKRAINIAN: Words = Words {
         keep_mine: "Залишити мої зміни",
         overwrite: "Усе одно зберегти мої",
         offline: "Редактор від’єднано — зберегти не вийде. Щоб під’єднатися знову, виконайте <code>ocgen draft</code>.",
-        missing: "GitHub сповіщає лише тих, кого згадано через @ у задачі, а ця чернетка не згадує цих затверджувачів — додайте для кожного рядок погодження в розділі «Needs from»:",
+        missing: "GitHub сповіщає лише тих, кого згадано через @ у задачі чи PR, а ця чернетка не згадує цих затверджувачів — додайте для кожного рядок погодження в розділі «Needs from»:",
         says_none: "У чернетці досі написано «No approvers configured», але в проєкті є затверджувачі — приберіть цей рядок.",
-        wrapped: "GitHub показує кожен перенос рядка в задачі як розрив рядка. Рядків, перенесених вручну посеред речення:",
+        wrapped: "GitHub показує кожен перенос рядка в задачі чи PR як розрив рядка. Рядків, перенесених вручну посеред речення:",
         join_lines: "Об’єднати їх",
         footer: "Кнопка «Зберегти» записує файл, указаний вище, — саме його подає на GitHub команда gh issue create --body-file.",
+        pr_footer: "Кнопка «Зберегти» записує файл, указаний вище, — саме з нього команда gh pr create --body-file створює PR на GitHub.",
         all_drafts: "Усі чернетки",
-        list_title: "Чернетки GitHub issue",
+        list_title: "Чернетки GitHub issue і PR",
         newer: "‹ Новіші",
         older: "Старіші ›",
         page_of: "Сторінка {page} з {pages}",

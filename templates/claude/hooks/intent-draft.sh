@@ -1,6 +1,6 @@
 #!/bin/sh
 # Claude Code — UserPromptSubmit hook: the word `draft`, sent on its own, opens the
-# /intent issue draft (.claude/intent/drafts/<name>.md) in a local browser editor —
+# draft (.claude/intent/drafts/<name>.md: an issue's or a pull request's) in a local browser editor —
 # edit the Markdown, preview it as GitHub shows it, copy it. With several drafts it
 # opens their list, with the one this session wrote last selected. The intent
 # prefix in lowercase (`adr` for ADR) does the same for the intent files
