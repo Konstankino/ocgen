@@ -5985,16 +5985,21 @@ fn the_workflow_rule_steers_away_from_shell_that_always_prompts() {
         "`.Property` or `.Method()` on a result",
         "`\"…$x…\"` strings, `@splat` or PowerShell script blocks `{ … }`",
         "`(Get-Content x).Length` asks as `$(…)` does",
-        "Never use the clipboard (`Set-Clipboard`, `Get-Clipboard`, `clip`, `pbcopy`, `xclip`)",
+        "Never read the clipboard (`Get-Clipboard`, `pbpaste`)",
+        "Copy to it only when the user asks, from a file",
+        "`Get-Content -Raw -Encoding utf8 <file> | Set-Clipboard` in PowerShell",
+        "`pbcopy < <file>` on macOS",
     ] {
         assert!(flat.contains(want), "missing {want}: {flat}");
     }
+    // Copying is allowed when asked: a blanket ban made Claude refuse it.
+    assert!(!flat.contains("Never use the clipboard"), "{flat}");
 }
 
-/// /intent and /review-intent ask for a word count and show a draft the user
-/// copies: neither is a reason for a shell command or the clipboard.
+/// /intent and /review-intent ask for a word count, never through a shell
+/// command or the clipboard, and copy a draft only when the user asks.
 #[test]
-fn drafts_are_counted_in_the_text_and_never_copied_by_claude() {
+fn drafts_are_counted_in_the_text_and_copied_only_when_asked() {
     let dir = tempdir().unwrap();
     let mut p = claude_default("wc");
     p.claude.workflow.intent = true;
@@ -6004,10 +6009,11 @@ fn drafts_are_counted_in_the_text_and_never_copied_by_claude() {
         let flat = md.split_whitespace().collect::<Vec<_>>().join(" ");
         for want in [
             "count the words in the text you wrote, never with a shell command or the clipboard",
-            "Never copy a draft to the clipboard yourself",
+            "Copy a draft to the clipboard only when I ask, from its file",
         ] {
             assert!(flat.contains(want), "{skill}: missing {want}");
         }
+        assert!(!flat.contains("Never copy a draft"), "{skill}: {flat}");
     }
 }
 
