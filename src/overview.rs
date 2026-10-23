@@ -479,6 +479,12 @@ fn run_claude(root: &Path, project: &Project) -> Result<()> {
     if project.claude.workflow.refine {
         wf.push("/refine");
     }
+    if project.claude.workflow.fanout {
+        wf.push("/fanout");
+    }
+    if project.claude.workflow.workstreams {
+        wf.push("/workstreams");
+    }
     if project.claude.workflow.deliver {
         wf.push("/deliver");
     }

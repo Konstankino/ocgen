@@ -107,4 +107,5 @@ request too. Give me the `gh pr create … --body-file` command for it; I open t
 {% endif %}
 For several independent workstreams at once, run one `claude --worktree <name> --name <name>` session
 per workstream (each running `/deliver`) and coordinate via `/list-agents` + `SendMessage` — see the
-"Multi-session delivery" rule.
+"Multi-session delivery" rule{% if workstreams %} — or let `/workstreams` manage them: it keeps the board, starts the
+sessions where it can, and merges each branch once it is checked{% endif %}.

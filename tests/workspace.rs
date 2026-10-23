@@ -94,6 +94,7 @@ fn a_claude_project_with_nothing_else_turned_on_still_gets_it() {
         verify_todos: false,
         prefer_explorer: false,
         deliver: false,
+        workstreams: false,
         inquire: false,
         intent: false,
         recap: false,

@@ -784,9 +784,11 @@ pub const SECRET_READ_DENY: [&str; 6] = [
 /// second line behind the approval gate's pattern match. A `*` before the
 /// subcommand also covers options there (`pnpm -r publish`, `cargo +nightly
 /// publish`, `docker image push`).
-pub const HIGH_IMPACT_ASK: [&str; 40] = [
+pub const HIGH_IMPACT_ASK: [&str; 41] = [
     "Bash(git push:*)",
     "Bash(git commit:*)",
+    // A commit made inside another worktree (/workstreams seals a subagent's).
+    "Bash(git -C * commit*)",
     "Bash(git -c alias*)",
     "Bash(gh pr merge*)",
     "Bash(gh release*)",
@@ -882,12 +884,13 @@ impl Default for HooksExtra {
 
 /// The workflow skills ocgen generates (formerly `.claude/commands/`). A user
 /// skill with one of these names would collide with the generated one.
-pub const WORKFLOW_SKILLS: [&str; 12] = [
+pub const WORKFLOW_SKILLS: [&str; 13] = [
     "multi",
     "intake",
     "refine",
     "improve-prompt",
     "fanout",
+    "workstreams",
     "deliver",
     "inquire",
     "intent",
@@ -903,9 +906,10 @@ pub const CLAUDE_CODE_REVIEW_COMMANDS: [&str; 4] =
     ["review", "code-review", "security-review", "ultrareview"];
 
 /// Workflow skills with side effects: only the user starts them (`/name`).
-pub const USER_RUN_WORKFLOWS: [&str; 8] = [
+pub const USER_RUN_WORKFLOWS: [&str; 9] = [
     "multi",
     "fanout",
+    "workstreams",
     "deliver",
     "intent",
     "review-intent",
@@ -939,6 +943,28 @@ pub const RECAP_TOOLS: [&str; 16] = [
     "Bash(git config --get-all remote.origin.fetch)",
     "Bash(git fetch --prune --no-tags --no-recurse-submodules origin)",
     "Bash(git merge --ff-only --no-overwrite-ignore @{u})",
+];
+
+/// Tools /workstreams may use without asking while it runs (skill
+/// `allowed-tools`): reads of the repository from the main checkout, on full
+/// refs, and the board folder. Creating, merging, sealing (`git -C <worktree>
+/// add` and `commit`) and removing worktrees and branches are left out on
+/// purpose: their permission prompt is the user's confirmation.
+pub const WORKSTREAMS_TOOLS: [&str; 14] = [
+    "Read",
+    "Grep",
+    "Glob",
+    "Edit(./.claude/workstreams/**)",
+    "Bash(git rev-parse:*)",
+    "Bash(git worktree list:*)",
+    "Bash(git for-each-ref:*)",
+    "Bash(git log:*)",
+    "Bash(git diff:*)",
+    "Bash(git status:*)",
+    "Bash(git rev-list:*)",
+    "Bash(git merge-base:*)",
+    "Bash(git show:*)",
+    "Bash(git check-ignore:*)",
 ];
 
 /// One project MCP server (`.mcp.json` entry).
@@ -1159,6 +1185,12 @@ pub struct Workflow {
     /// Emit the `/deliver` end-to-end pipeline command + delivery/multi-session
     /// guidance.
     pub deliver: bool,
+    /// Emit the `/workstreams` board command: one main session plans a goal into
+    /// workstreams, each worked in its own worktree by a session or a subagent,
+    /// collects their reports, checks each branch and merges them in order; the
+    /// `workstreams-merge-gate` hook refuses a merge of a branch the board
+    /// hasn't marked ready (or that moved since). User-run only.
+    pub workstreams: bool,
     /// Emit the `/inquire` codebase-understanding loop (sharpen each question,
     /// answer with file:line evidence, end with one hint (not a question), keep a git-ignored
     /// ledger under `.claude/notes/`) and route `/deliver` "understand" goals to it.
@@ -1197,6 +1229,7 @@ impl Default for Workflow {
             verify_todos: true,
             prefer_explorer: true,
             deliver: true,
+            workstreams: true,
             inquire: true,
             intent: true,
             recap: true,

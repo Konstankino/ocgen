@@ -123,6 +123,66 @@ pub fn self_approval(command: &str) -> bool {
     )
 }
 
+/// A `git merge` call: `git`, its options, `merge`, then the arguments up to a
+/// shell operator or the end of the line. `{OPT}` as in [`HIGH_IMPACT_PARTS`].
+/// Kept in sync with `templates/claude/hooks/workstreams-merge-gate.sh` (a test
+/// compares them).
+pub const MERGE_CALL: &str = r"git{OPT}[[:space:]]+merge([[:space:]]+[^;&|)<>`]*)?([;&|)<>`]|$)";
+
+/// The merge-call pattern as both implementations use it.
+pub fn merge_pattern() -> String {
+    MERGE_CALL.replace("{OPT}", OPT)
+}
+
+/// The arguments of every `git merge` in `command`, one list per call: the
+/// words after `merge`, up to a shell operator, on the normalized line (quotes
+/// and backslashes stripped, continued lines joined, as in [`high_impact`]).
+/// Empty when nothing merges. A quoted value loses its quotes, so `-m "done"`
+/// reads as `-m done`: the gate that uses this counts `done` as a branch.
+pub fn merge_args(command: &str) -> Vec<Vec<String>> {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| {
+        // The arguments' group, named: `{OPT}` holds groups of its own.
+        let named = merge_pattern().replacen("merge(", "merge(?P<args>", 1);
+        Regex::new(&named).expect("merge pattern compiles")
+    });
+    // A carriage return reads as a space, as the script's `tr` makes it.
+    normalize(&command.replace("\\\n", ""))
+        .replace('\r', " ")
+        .split('\n')
+        .flat_map(|line| {
+            re.captures_iter(line)
+                .map(|c| {
+                    c.name("args")
+                        .map(|m| m.as_str())
+                        .unwrap_or("")
+                        .split_whitespace()
+                        .map(str::to_string)
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+/// A git command with a `merge` word that [`MERGE_CALL`] didn't read as a call —
+/// an option value with a space, as in `git -C "My Projects/x" merge …` once the
+/// quotes are gone. Kept in sync with the gate script's `UNREAD`.
+pub const UNREAD_MERGE: &str =
+    r"(^|[^[:alnum:]_./-])git[[:space:]].*[[:space:]]merge([[:space:]]|$)";
+
+/// Whether some line of `command` runs git with a `merge` word that
+/// [`merge_args`] didn't read as a call (see [`UNREAD_MERGE`]): the gate that
+/// uses this refuses it, fail closed.
+pub fn unread_merge(command: &str) -> bool {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| Regex::new(UNREAD_MERGE).expect("unread-merge pattern compiles"));
+    normalize(&command.replace("\\\n", ""))
+        .replace('\r', " ")
+        .split('\n')
+        .any(|line| re.is_match(line))
+}
+
 /// Whether `command` holds an ASCII control character other than tab, newline or
 /// carriage return. No ordinary command needs one, and it could hide a word from
 /// the pattern, so the gate treats such a command as high-impact (fail closed).
@@ -130,4 +190,60 @@ pub fn has_control(command: &str) -> bool {
     command
         .chars()
         .any(|c| c.is_ascii_control() && !matches!(c, '\t' | '\n' | '\r'))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::merge_args;
+
+    #[test]
+    fn merge_args_reads_each_git_merge_call() {
+        assert!(merge_args("git status").is_empty());
+        assert!(merge_args("git log --grep=merge").is_empty());
+        assert!(merge_args("echo merge").is_empty());
+        assert_eq!(merge_args("git merge"), vec![Vec::<String>::new()]);
+        assert_eq!(
+            merge_args("git merge --no-ff --no-edit refs/heads/x"),
+            vec![vec!["--no-ff", "--no-edit", "refs/heads/x"]]
+        );
+        assert_eq!(
+            merge_args("git -C wt merge refs/heads/x"),
+            vec![vec!["refs/heads/x"]]
+        );
+        assert_eq!(
+            merge_args("git merge refs/heads/x -m \"all done\""),
+            vec![vec!["refs/heads/x", "-m", "all", "done"]]
+        );
+        assert_eq!(
+            merge_args("git fetch origin && git merge refs/heads/x; git merge --abort"),
+            vec![vec!["refs/heads/x"], vec!["--abort"]]
+        );
+        assert_eq!(
+            merge_args("git merge refs/heads/x \\\n  refs/heads/y\ngit merge refs/heads/z"),
+            vec![vec!["refs/heads/x", "refs/heads/y"], vec!["refs/heads/z"]]
+        );
+        assert_eq!(
+            merge_args("(git merge refs/heads/x)"),
+            vec![vec!["refs/heads/x"]]
+        );
+        assert_eq!(
+            merge_args("git merge refs/heads/x\r"),
+            vec![vec!["refs/heads/x"]]
+        );
+    }
+
+    #[test]
+    fn a_merge_hidden_by_a_spaced_option_value_is_still_seen() {
+        use super::unread_merge;
+        let hidden = "git -C \"/Users/dev/My Projects/x\" merge refs/heads/y";
+        assert!(merge_args(hidden).is_empty());
+        assert!(unread_merge(hidden));
+        assert!(!unread_merge("git log --grep=merge"));
+        assert!(!unread_merge("echo merge"));
+        assert!(!unread_merge("git merge-base HEAD x"));
+        assert!(
+            unread_merge("git log --oneline merge"),
+            "a plain merge word: fail closed"
+        );
+    }
 }

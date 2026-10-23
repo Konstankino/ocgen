@@ -1009,6 +1009,7 @@ fn claude_powerups_and_workflow_can_be_disabled() {
         verify_todos: false,
         prefer_explorer: false,
         deliver: false,
+        workstreams: false,
         inquire: false,
         intent: false,
         recap: false,
@@ -1358,6 +1359,7 @@ fn claude_team_disabled_by_default_adds_nothing() {
     p.target = Target::ClaudeCode;
     p.project_name = "plain".into();
     p.claude.workflow.subagent_confidence = 0; // isolate team behavior from the SubagentStop gate
+    p.claude.workflow.workstreams = false; // the merge gate is independent of teams (tests/workstreams.rs)
     p.agents = agent::claude_default_pipeline("English").unwrap();
     let dir = tempdir().unwrap();
     p.scaffold(dir.path(), false).unwrap();
@@ -1421,6 +1423,7 @@ fn claude_team_enabled_without_hook_stubs() {
     p.claude.workflow.inquire = false; // nor is its notes-view hook
     p.claude.hooks_extra.drop_noop_cd = false; // nor is the no-op cd hook
     p.claude.workflow.recap = false; // nor is /recap's GitHub fetch
+    p.claude.workflow.workstreams = false; // nor is its merge gate
 
     let dir = tempdir().unwrap();
     p.scaffold(dir.path(), false).unwrap();
@@ -1510,6 +1513,7 @@ fn team_confidence_zero_disables_gate() {
     let mut p = base_project("English");
     p.target = Target::ClaudeCode;
     p.project_name = "noconf".into();
+    p.claude.workflow.workstreams = false; // its merge gate is a PreToolUse hook of its own
     p.claude.team = Team {
         enabled: true,
         mode: "in-process".into(),
@@ -2025,6 +2029,7 @@ fn subagent_confidence_gate_wires_independently_of_teams() {
     p2.target = Target::ClaudeCode;
     p2.project_name = "nosc".into();
     p2.claude.workflow.subagent_confidence = 0;
+    p2.claude.workflow.workstreams = false; // its merge gate has a loop-guard budget too
     p2.agents = agent::claude_default_pipeline("English").unwrap();
     let dir2 = tempdir().unwrap();
     p2.scaffold(dir2.path(), false).unwrap();
@@ -2386,6 +2391,7 @@ fn fanout_disabled_omits_command_but_keeps_include() {
     p.project_name = "nowt".into();
     p.claude.workflow.fanout = false;
     p.claude.workflow.deliver = false; // /deliver's multi-session flow also uses worktrees
+    p.claude.workflow.workstreams = false; // /workstreams keeps the base too (tests/workstreams.rs)
     p.agents = agent::claude_default_pipeline("English").unwrap();
     let dir = tempdir().unwrap();
     p.scaffold(dir.path(), false).unwrap();
@@ -2774,6 +2780,7 @@ fn loop_guard_renders_library_budget_turn_caps_and_discipline() {
     p.target = Target::ClaudeCode;
     p.project_name = "nolg".into();
     p.claude.workflow.subagent_confidence = 0;
+    p.claude.workflow.workstreams = false; // its merge gate sources the loop guard too
     p.agents = agent::claude_default_pipeline("English").unwrap();
     let dir2 = tempdir().unwrap();
     p.scaffold(dir2.path(), false).unwrap();
@@ -3945,6 +3952,7 @@ fn hooks_carry_their_claude_code_fields() {
     let dir = tempdir().unwrap();
     let mut p = claude_default("hf2");
     p.claude.workflow.subagent_confidence = 0;
+    p.claude.workflow.workstreams = false; // its merge gate sources the loop guard too
     p.scaffold(dir.path(), false).unwrap();
     let s = settings_of(dir.path());
     assert!(hook_groups(&s, "SessionEnd").is_empty(), "{s:#}");
@@ -4011,6 +4019,7 @@ fn workflow_commands_are_generated_as_skills() {
     for (name, user_only) in [
         ("deliver", true),
         ("fanout", true),
+        ("workstreams", true),
         ("multi", true),
         ("team", true),
         ("team-plan", true),
@@ -5012,7 +5021,7 @@ fn verify_flags_safety_gates_that_fail_open() {
     let gate = |extra: serde_json::Value| {
         let mut h = serde_json::json!({
             "type": "command",
-            "command": "if [ \"$(ocgen hook --check 2>/dev/null)\" = \"ocgen-hooks 19\" ]; then ocgen hook team-approval-gate; else sh \".claude/hooks/team-approval-gate.sh\"; fi",
+            "command": "if [ \"$(ocgen hook --check 2>/dev/null)\" = \"ocgen-hooks 20\" ]; then ocgen hook team-approval-gate; else sh \".claude/hooks/team-approval-gate.sh\"; fi",
             "shell": "bash"
         });
         for (k, v) in extra.as_object().unwrap() {
@@ -6577,7 +6586,7 @@ fn inquire_registers_the_notes_hook() {
     assert_eq!(notes["matcher"], "Write|Edit|MultiEdit");
     let cmd = notes["hooks"][0]["command"].as_str().unwrap();
     assert!(
-        cmd.contains("ocgen hook inquire-notes") && cmd.contains("ocgen-hooks 19"),
+        cmd.contains("ocgen hook inquire-notes") && cmd.contains("ocgen-hooks 20"),
         "{cmd}"
     );
     assert_eq!(notes["hooks"][0]["shell"], "bash");

@@ -597,6 +597,8 @@ repo used for a plugin's marketplace and release workflow; `--team` enables
 .claude/intent/intent-template.md    # /intent's intent-file (ADR) structure — yours, written once
 .claude/notes/github/                # Claude's read-only GitHub requests and their answers (git-ignored)
 .claude/skills/fanout/SKILL.md       # /fanout — worktree-isolated parallel writers (you run it)
+.claude/skills/workstreams/SKILL.md  # /workstreams — a board of worktree workstreams: plan the split, dispatch sessions or subagents, check and merge each branch in order (you run it)
+.claude/workstreams/                 # /workstreams' board, briefs and reports (git-ignored)
 .claude/skills/improve-prompt/SKILL.md
 .claude/skills/<name>/SKILL.md       # your own skills (`ocgen add skill`)
 .claude/settings.json                # $schema, model, attribution off, permissions (+ secret read-denies), sandbox, hooks, output style, statusline
@@ -703,7 +705,7 @@ name the agent `scope-guard` or `adversary` and its preset is picked.
 
 **Workflow commands are skills.** Claude Code merged commands into skills, so ocgen renders
 its workflows as `.claude/skills/<name>/SKILL.md`. You still type `/deliver`, `/inquire` and so on.
-- **You start the side-effecting ones:** `/multi`, `/fanout`, `/deliver`, `/intent`,
+- **You start the side-effecting ones:** `/multi`, `/fanout`, `/workstreams`, `/deliver`, `/intent`,
   `/review-intent`, `/recap`, `/team` and `/team-plan` carry `disable-model-invocation: true`, so Claude can't start them on
   its own.
 - **Claude may use the rest when relevant:** `/inquire`, `/intake`, `/refine` and
@@ -1504,6 +1506,69 @@ reaches both. While it runs, `/intent`'s read-only git and `gh` reads are pre-ap
 `git merge-base`, `git status`, `git ls-files` and `git rev-list`; nothing that writes, files or
 posts.
 
+#### Workstreams (`/workstreams`)
+
+**`/workstreams <goal>`** makes one session the manager of several pieces of work, each in its own
+git worktree (wizard: "Include the /workstreams board command?"; on by default). You start it;
+Claude can't. Use it when a goal splits into **independent pieces that each need their own
+commits and checks** — three tracker issues at once, a release in parts, a migration by module.
+For one piece it offers `/deliver` instead.
+
+1. **Plan.** It skims the code, interviews you, and splits the goal into workstreams that touch
+   disjoint files, each with a slug, a brief (goal, files, acceptance criteria, check command,
+   out of scope), an `After:` dependency and a worker kind. You approve the board before anything
+   starts.
+2. **Dispatch.** A **session worker** (anything with commits, a check it runs itself, or the
+   `/deliver` pipeline) runs in its own worktree: the Claude desktop app starts it from the
+   manager; in the CLI the manager prints `claude --worktree <slug> --name <slug>` for you to
+   run, with the brief to paste as that session's first message. A **subagent worker** (one edit
+   set, no commit) is the `implementer` with `isolation: worktree`, up to 20 at once.
+3. **Collect.** Every worker ends with a fixed report block (`Workstream:`, `Worktree:`,
+   `Branch:`, `Tip:`, `Check:`, `Changed:`, `Status:`, `Confidence:`) and writes it to
+   `.claude/scratch/workstream-report.md` in its worktree: the file is the record, a message is a
+   courtesy. The manager copies it under `.claude/workstreams/<slug>/` and seals a subagent's
+   worktree into a commit itself (`git -C <worktree> add -A -- . ':!.claude'`, then `commit`,
+   both asking first).
+4. **Check.** Before a branch may merge: confidence at the bar, the tip unchanged since the
+   report, nothing uncommitted in the worktree, only the brief's files touched (anything else is
+   a `Differs` for you to accept or reject), and nothing under `.claude/`, `.mcp.json` or
+   `CLAUDE.md` unless you confirm. Then the board line gets `Gate: ready`.
+5. **Integrate**, in dependency order, once every session worker has reported: an `Undo:` line
+   on the board first, then `git merge --no-ff --no-edit refs/heads/<branch>` and the project
+   check after each merge. A conflict is aborted and handed back to the worker (the desktop
+   app's sync tool, or `git merge <base>` in its worktree); a failed check is undone with
+   `git reset --keep` and handed back. The manager never resolves a conflict itself. With the
+   approval gate on, you run `ocgen approve` before this step: it holds every `git merge`.
+6. **Check the whole**: the scope-guard and adversary loops on the integrated change, with
+   reworks going back to the owning worker.
+7. **Close.** A coordinator-style report, subagent worktrees removed (`git worktree remove`,
+   then `git branch -d`, never forced), session worktrees left to their sessions, and the board
+   marked `Status: CLOSED`.
+
+The board, `.claude/workstreams/board.md`, holds one line per workstream — `- Workstream: <slug>
+— Worker: … — Branch: refs/heads/… — Worktree: … — Tip: <sha> — State: … — Gate: pending|ready —
+After: …` — plus a log. `/workstreams` with no arguments shows it, reconciles it with
+`git worktree list` and the branch tips, and continues, so the work survives a compaction or a
+new session. The folder keeps itself out of git with its own `.gitignore`.
+
+**The merge gate.** A fail-closed `PreToolUse` hook, `workstreams-merge-gate`, enforces the rule
+the skill text can only state: while a board is open (no `Status: CLOSED` line), every `git
+merge` from any tool must name exactly one branch, in full (`refs/heads/<name>`), that the board
+marks `Gate: ready`, at the recorded tip (it asks `git rev-parse`); `--abort`, `--continue` and
+`--quit` pass. A short name, a commit, two branches, a `-m` or `-s` value (it reads as a branch),
+a pending or merged line, a moved tip, a merge the pattern can't read (a `-C` path with a space)
+or a call that repeats the `command` key are refused with the reason, and the loop guard halts an
+agent that keeps trying. A board's first `Status:` line is the one that counts; a wrapped entry is
+read as one until the next `- ` line. Side effect: `/recap`'s fast-forward of the current branch is refused while a board
+is open. The gate is independent of Agent Teams; with the approval gate on, a workstream merge
+needs both `ocgen approve` and the ready mark. `ocgen verify` probes it ("workstreams merge gate
+holds unchecked branches"). Both twins, Rust and script, share the merge pattern and the
+messages.
+
+With `/workstreams` on, `settings.json` sets `worktree.baseRef: head` (as `/fanout` does), so
+workers branch from your current commit, and `Bash(git -C * commit*)` joins the ask list, so
+sealing a subagent's worktree asks even in auto mode.
+
 #### Daily recap (`/recap`)
 
 **`/recap`** catches you up on a repository in one command: it brings your branches up to date
@@ -1736,7 +1801,7 @@ and inside the ocgen binary (`ocgen hook <name>`). The generated hook command us
 binary when a compatible ocgen is installed, and the script otherwise:
 
 ```sh
-if [ "$(ocgen hook --check 2>/dev/null)" = "ocgen-hooks 19" ]; then ocgen hook team-approval-gate; else sh ".../team-approval-gate.sh"; fi
+if [ "$(ocgen hook --check 2>/dev/null)" = "ocgen-hooks 20" ]; then ocgen hook team-approval-gate; else sh ".../team-approval-gate.sh"; fi
 ```
 
 - **The binary gives you** real JSON parsing instead of `grep`, and hooks that work on
@@ -1780,6 +1845,7 @@ own block does:
 | Gate | Event | When it can't run |
 |---|---|---|
 | approval gate | `PreToolUse`, every tool | the tool call is blocked |
+| workstreams merge gate | `PreToolUse`, every tool | the tool call is blocked |
 | WebFetch guard | `PreToolUse`, WebFetch | the fetch is blocked |
 | `shell-sandbox` (native Windows) | `PreToolUse`, Bash and PowerShell | the command is blocked |
 | config audit | `ConfigChange` | Claude Code keeps the settings it loaded |
@@ -1861,7 +1927,8 @@ The old `touch .claude/team/execution-approved` file is no longer honoured, beca
 could create it. `ocgen verify` flags a leftover one.
 
 If you use `/fanout` with the gate on: its final `git merge` is gated too, so approve before
-the merge step.
+the merge step. `/workstreams` asks you to approve before it integrates, and integrates only once
+every session worker is idle: the approval covers every worktree of the repository.
 
 #### The check command: an objective gate
 
@@ -1990,8 +2057,8 @@ max turns with `ocgen edit agent`.
 #### Worktrees: `.claude/` in git or not
 
 A git worktree is a fresh checkout of **tracked** files. `claude --worktree <name>` sessions,
-desktop worktree sessions, ocgen's multi-session delivery and `isolation: worktree` subagents all
-start in one. A worktree session needs the project's settings, hooks and rules: without them
+desktop worktree sessions, ocgen's multi-session delivery, `/workstreams` workers and
+`isolation: worktree` subagents all start in one. A worktree session needs the project's settings, hooks and rules: without them
 there is no approval gate, no confidence gates or loop guard, no permission deny list, and the
 model is whatever your `~/.claude/settings.json` names. Agents, commands and skills are different:
 Claude Code loads them from the main checkout when a worktree has none. Skills need Claude Code
@@ -2016,9 +2083,10 @@ Committing `.claude/` is optional. Both ways work:
   `ocgen doctor` warn about any config file that is neither committed nor git-ignored, because no
   worktree gets it. With nothing committed, `ocgen doctor` fixes it. With `.claude/` committed, the
   warning names the files still to commit.
-- **Base branch:** with `/fanout` enabled, `settings.json` sets `"worktree": {"baseRef": "head"}`.
-  `/fanout` workers and `--worktree` sessions then branch from your current commit and include
-  unpushed work, instead of `origin`'s default branch.
+- **Base branch:** with `/fanout` or `/workstreams` enabled, `settings.json` sets
+  `"worktree": {"baseRef": "head"}`. `/fanout` and `/workstreams` workers and `--worktree`
+  sessions then branch from your current commit and include unpushed work, instead of `origin`'s
+  default branch.
 - **Study in the main checkout:** `/inquire` is read-only. Notes written inside a worktree are
   lost when it's removed, and the isolation checks stop a worktree session from writing to the
   main checkout. `/inquire` warns if you run it in a worktree.
@@ -2048,7 +2116,7 @@ defaults to `.`.
 
 | Command | What it does |
 |---|---|
-| `ocgen new [dir] --target claude` | Scaffold a new Claude project (agents, `/multi` `/intake` `/refine` `/deliver` `/inquire` `/intent` `/review-intent` `/recap`, `CLAUDE.md`, `settings.json`). |
+| `ocgen new [dir] --target claude` | Scaffold a new Claude project (agents, `/multi` `/intake` `/refine` `/fanout` `/workstreams` `/deliver` `/inquire` `/intent` `/review-intent` `/recap`, `CLAUDE.md`, `settings.json`). |
 | `ocgen new [dir] --target claude --output plugin` | Emit a distributable plugin instead of the project tree. |
 | `ocgen new [dir] --target claude --output both --repo <owner/repo>` | Emit both the project **and** a plugin (marketplace + release workflow). |
 | `ocgen new [dir] --target claude --team` | Also enable Agent Teams (env flag + `/team` + hooks + guidance). With the approval gate on, the sandbox question defaults to yes (macOS, Linux/WSL2). |
@@ -2134,9 +2202,9 @@ still get the old team until you add the `scope-guard` and `adversary` entries t
 shipped order (archetypes need no copy: a missing one comes from the binary).
 
 **What can't be overridden.** Hook scripts, the statusline script (`claude/statusline.sh`) and
-the gate-protocol templates (`claude/commands/team.md.j2`, `team-plan.md.j2`, `fanout.md.j2` and
-`claude/rules/ocgen-team.md.j2`, which teach the plan, owner, check and confidence lines the
-hooks parse) always come from the ocgen binary. Each hook has a Rust twin stamped with the
+the gate-protocol templates (`claude/commands/team.md.j2`, `team-plan.md.j2`, `fanout.md.j2`,
+`workstreams.md.j2` and `claude/rules/ocgen-team.md.j2`, which teach the plan, owner, check,
+confidence and board lines the hooks parse) always come from the ocgen binary. Each hook has a Rust twin stamped with the
 hook protocol, so an override would either bring a fixed bug back after an upgrade or take
 effect only on machines without ocgen. `templates init` doesn't copy them, `templates edit`
 refuses them, and a copy left by an older ocgen is marked `[embedded; override ignored]` in
@@ -2156,7 +2224,7 @@ opencode/commands/multi.md.j2     # a command that fans out to the subagents
 seeds.toml               # blank-agent seed text (body + external prompt)
 claude/agent.md.j2              # one generic Claude subagent
 claude/CLAUDE.md.j2             # project instructions + roster
-claude/commands/*.md.j2         # multi / intake / refine / deliver / inquire / intent / review-intent / recap… (rendered as skills)
+claude/commands/*.md.j2         # multi / intake / refine / fanout / workstreams / deliver / inquire / intent / review-intent / recap… (rendered as skills)
 claude/intent/*.md              # default /intent issue and intent-file templates (copied into new projects)
 claude/intent/*.md.j2           # /intent's shared text (writing standard, tone check, numbering, reading copy,
                                 # browser review), included by /intent and /review-intent

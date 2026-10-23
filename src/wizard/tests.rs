@@ -520,7 +520,8 @@ fn new_claude_answers<'a>(sandbox: &[&'a str]) -> Vec<&'a str> {
         "", // CLAUDE.md
         "", // power-user defaults
         "", "", // extra hooks, formatter
-        "", "", "", "", "", "", "", "", // intake … inquire, recap
+        "", "", "", "", "", "", "", "",
+        "", // intake … fanout, workstreams … inquire, recap
         "", "", "", "", "", "", "", // /intent, its settings and approvers
         "", "", "", // subagent confidence, check command, loop guard
         "", "", "", "", "", "", "", // Agent Teams and its gates
@@ -588,10 +589,11 @@ fn new_with_the_gate_on_sandboxes_by_default() {
 #[test]
 fn new_can_leave_out_recap() {
     // Seven answers before the workflow group, then intake, improve-prompt,
-    // fanout, verify-todos, prefer-explorer, deliver, inquire — then recap.
+    // fanout, workstreams, verify-todos, prefer-explorer, deliver, inquire — then
+    // recap.
     let mut answers = new_claude_answers(&[""]);
-    assert_eq!(answers[14], "");
-    answers[14] = "n";
+    assert_eq!(answers[15], "");
+    answers[15] = "n";
     script(&answers);
     let p = build_new(true, false);
     assert_eq!(script_remaining(), 0);

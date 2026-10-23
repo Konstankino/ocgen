@@ -539,6 +539,326 @@ fn the_script_and_the_binary_share_one_pattern() {
     );
 }
 
+// ------------------------------------------------------ workstreams gate --
+
+/// Run git in `dir` with a throwaway identity; the trimmed stdout.
+fn git_in(dir: &Path, args: &[&str]) -> String {
+    let o = Command::new("git")
+        .args([
+            "-c",
+            "user.name=par",
+            "-c",
+            "user.email=par@example.invalid",
+        ])
+        .args(["-c", "commit.gpgsign=false"])
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    assert!(o.status.success(), "git {args:?}: {o:?}");
+    String::from_utf8_lossy(&o.stdout).trim().to_string()
+}
+
+fn write_board(dir: &Path, tip: &str, status: &str) {
+    let d = ocgen::paths::for_shell(dir);
+    fs::create_dir_all(dir.join(".claude/workstreams")).unwrap();
+    fs::write(
+        dir.join(".claude/workstreams/board.md"),
+        format!(
+            "# Workstreams — demo\nStatus: {status}\nBase: refs/heads/main @ {tip}\n\n## Workstreams\n\
+             - Workstream: a — Worker: session a — Branch: refs/heads/worktree-a — Worktree: {d}/.claude/worktrees/a — Tip: {tip} — State: checked — Gate: ready — After: none\n\
+             - Workstream: b — Worker: subagent x — Branch: refs/heads/worktree-b — Worktree: — — Tip: — — State: reported — Gate: pending — After: a\n"
+        ),
+    )
+    .unwrap();
+}
+
+/// A board with `worktree-a` ready at its tip and `worktree-b` pending, in the
+/// project's own repository (`project()` ran `git init`).
+fn open_board(dir: &Path) {
+    git_in(dir, &["commit", "-q", "--allow-empty", "-m", "base"]);
+    git_in(dir, &["branch", "worktree-a"]);
+    git_in(dir, &["branch", "worktree-b"]);
+    let tip = git_in(dir, &["rev-parse", "refs/heads/worktree-a"]);
+    write_board(dir, &tip, "APPROVED session=s");
+}
+
+/// The worker kept committing after the check: `worktree-a` moves past its tip.
+fn move_a(dir: &Path) {
+    git_in(dir, &["commit", "-q", "--allow-empty", "-m", "more"]);
+    git_in(dir, &["update-ref", "refs/heads/worktree-a", "HEAD"]);
+}
+
+/// The same board written the ways an editor or a formatter might leave it.
+fn reshape_board(dir: &Path) {
+    let board = dir.join(".claude/workstreams/board.md");
+    let tip = git_in(dir, &["rev-parse", "refs/heads/worktree-a"]);
+    let text = format!(
+        "# Workstreams — demo\r\nStatus: APPROVED session=s\r\nStatus: CLOSED 2026-01-01\r\n\r\n## Workstreams\r\n\
+         - Workstream: a0 — Worker: session a — Branch: refs/heads/worktree-a — Tip: 0000000 — State: integrated — Gate: merged\r\n\
+         - Workstream: a — Worker: session a — Branch: refs/heads/worktree-a — Worktree: x\r\n\
+           — Tip: {tip} — State: checked\r\n\
+           — Gate: ready — After: none\r\n\
+         - Workstream: b — Worker: subagent x — Branch: refs/heads/worktree-b — Tip: — — State: reported — Gate: pending\r\n"
+    );
+    fs::write(board, text).unwrap();
+}
+
+fn restore_board(dir: &Path) {
+    let tip = git_in(dir, &["rev-parse", "refs/heads/worktree-a"]);
+    write_board(dir, &tip, "APPROVED session=s");
+}
+
+fn close_board(dir: &Path) {
+    let board = dir.join(".claude/workstreams/board.md");
+    let text = fs::read_to_string(&board).unwrap();
+    fs::write(
+        &board,
+        text.replace("Status: APPROVED session=s", "Status: CLOSED 2026-10-24"),
+    )
+    .unwrap();
+}
+
+const WS: &[(&str, &str)] = &[("LOOP_GUARD_MAX_BLOCKS", "30")];
+const WS_NO_JQ: &[(&str, &str)] = &[("LOOP_GUARD_MAX_BLOCKS", "30"), ("OCGEN_NO_JQ", "1")];
+
+fn ws(
+    env: &'static [(&'static str, &'static str)],
+    setup: fn(&Path),
+    command: &'static str,
+) -> Step {
+    // The payload holds the command verbatim, so a test quotes it as JSON would.
+    let payload: &'static str = Box::leak(
+        format!(r#"{{"session_id":"s","tool_name":"Bash","tool_input":{{"command":{command}}}}}"#)
+            .into_boxed_str(),
+    );
+    Step {
+        hook: "workstreams-merge-gate",
+        env,
+        setup,
+        payload,
+    }
+}
+
+/// The merge-gate scenario, for a given environment.
+fn workstreams_scenario(env: &'static [(&'static str, &'static str)]) -> Vec<Step> {
+    vec![
+        // No board: nothing to gate.
+        ws(env, none, r#""git merge refs/heads/worktree-a""#),
+        // An open board: ordinary commands pass …
+        ws(env, open_board, r#""git status""#),
+        ws(env, none, r#""echo merge""#),
+        ws(env, none, r#""git log --grep=merge""#),
+        Step {
+            hook: "workstreams-merge-gate",
+            env,
+            setup: none,
+            payload: r#"{"session_id":"s","tool_name":"Read","tool_input":{"file_path":"x"}}"#,
+        },
+        // … and so does the ready branch, by its full name, at its recorded tip.
+        ws(
+            env,
+            none,
+            r#""git merge --no-ff --no-edit refs/heads/worktree-a""#,
+        ),
+        ws(env, none, r#""git -C . merge refs/heads/worktree-a""#),
+        ws(
+            env,
+            none,
+            r#""git fetch origin && git merge refs/heads/worktree-a""#,
+        ),
+        ws(env, none, r#""git merge --abort""#),
+        // Everything else is refused.
+        ws(env, none, r#""git merge refs/heads/worktree-b""#),
+        ws(env, none, r#""git merge worktree-a""#),
+        ws(
+            env,
+            none,
+            r#""git merge 0123456789abcdef0123456789abcdef01234567""#,
+        ),
+        ws(
+            env,
+            none,
+            r#""git merge refs/heads/worktree-a refs/heads/worktree-b""#,
+        ),
+        ws(
+            env,
+            none,
+            r#""git merge --no-ff refs/heads/worktree-a -m \"done\"""#,
+        ),
+        ws(env, none, r#""git merge""#),
+        ws(env, none, r#""git merge refs/heads/nope""#),
+        ws(
+            env,
+            none,
+            r#""git merge --ff-only --no-overwrite-ignore @{u}""#,
+        ),
+        ws(
+            env,
+            none,
+            r#""git merge refs/heads/worktree-a; git merge refs/heads/worktree-b""#,
+        ),
+        ws(env, none, r#""git \"merge\" worktree-b""#),
+        ws(env, none, r#""git status\u0007""#),
+        ws(
+            env,
+            none,
+            r#""git -C \"/Users/dev/My Projects/x\" merge refs/heads/worktree-a""#,
+        ),
+        ws(env, none, r#""git merge -s ours refs/heads/worktree-a""#),
+        Step {
+            hook: "workstreams-merge-gate",
+            env,
+            setup: none,
+            payload: r#"{"session_id":"s","tool_name":"Bash","tool_input":{"command":"git status","command":"git merge refs/heads/worktree-b"}}"#,
+        },
+        // A board saved with CRLF, an entry wrapped over two lines, a later
+        // `Status:` line that doesn't count, and a merged line beside the ready one.
+        ws(env, reshape_board, r#""git merge refs/heads/worktree-a""#),
+        ws(env, none, r#""git merge refs/heads/worktree-b""#),
+        ws(env, restore_board, r#""git merge refs/heads/worktree-a""#),
+        // The worker kept committing: the tip moved.
+        ws(env, move_a, r#""git merge refs/heads/worktree-a""#),
+        // A closed board stands down.
+        ws(env, close_board, r#""git merge refs/heads/worktree-b""#),
+    ]
+}
+
+#[test]
+fn workstreams_merge_gate_parity() {
+    check("workstreams", &workstreams_scenario(WS));
+}
+
+#[test]
+fn workstreams_merge_gate_parity_without_jq() {
+    check("workstreams-no-jq", &workstreams_scenario(WS_NO_JQ));
+}
+
+#[test]
+fn workstreams_merge_gate_halts_after_its_budget() {
+    const TIGHT: &[(&str, &str)] = &[("LOOP_GUARD_MAX_BLOCKS", "2")];
+    check(
+        "workstreams-budget",
+        &[
+            ws(TIGHT, open_board, r#""git merge refs/heads/worktree-b""#),
+            ws(TIGHT, none, r#""git merge refs/heads/worktree-b""#),
+            ws(TIGHT, none, r#""git merge refs/heads/worktree-b""#),
+            // The ready branch still merges: the guard counts, it doesn't widen.
+            ws(TIGHT, none, r#""git merge refs/heads/worktree-a""#),
+        ],
+    );
+}
+
+#[test]
+fn the_merge_gate_script_and_the_binary_share_one_pattern() {
+    let script = ocgen::templates::load("claude/hooks/workstreams-merge-gate.sh").unwrap();
+    let line = script
+        .lines()
+        .find(|l| l.starts_with("MERGE='"))
+        .expect("the script defines MERGE");
+    assert_eq!(
+        line,
+        format!("MERGE='{}'", ocgen::risk::merge_pattern()),
+        "regenerate the script's pattern from ocgen::risk::merge_pattern()"
+    );
+}
+
+#[test]
+fn the_merge_gate_blocks_and_allows_as_the_board_says() {
+    // Beyond parity: the verdicts themselves, through the Rust hook.
+    let dir = project();
+    open_board(dir.path());
+    let d = ocgen::paths::for_shell(dir.path());
+    let env: HashMap<String, String> = [("CLAUDE_PROJECT_DIR", d.as_str())]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+    let run = |c: &str| {
+        ocgen::hooks::run(
+            "workstreams-merge-gate",
+            &serde_json::json!({ "tool_name": "Bash", "tool_input": { "command": c } }).to_string(),
+            &env,
+        )
+    };
+    assert_eq!(
+        run("git merge --no-ff --no-edit refs/heads/worktree-a").code,
+        0
+    );
+    assert_eq!(run("git merge --abort").code, 0);
+    assert_eq!(run("git status").code, 0);
+    let pending = run("git merge refs/heads/worktree-b");
+    assert_eq!(pending.code, 2);
+    assert_eq!(
+        pending.stderr.lines().next().unwrap(),
+        "BLOCKED by the workstreams merge gate: refs/heads/worktree-b is not marked ready (Gate: pending)"
+    );
+    let short = run("git merge worktree-a");
+    assert!(
+        short.stderr.contains("is not a full branch name"),
+        "{short:?}"
+    );
+    let two = run("git merge refs/heads/worktree-a refs/heads/worktree-b");
+    assert!(two.stderr.contains("name exactly one branch"), "{two:?}");
+    let message = run("git merge refs/heads/worktree-a -m \"done\"");
+    assert!(
+        message.stderr.contains("name exactly one branch"),
+        "{message:?}"
+    );
+    assert!(run("git merge refs/heads/nope")
+        .stderr
+        .contains("is not on the board"));
+    let hidden = run("git -C \"/Users/dev/My Projects/x\" merge refs/heads/worktree-a");
+    assert_eq!(
+        hidden.stderr.lines().next().unwrap(),
+        "BLOCKED by the workstreams merge gate: a git merge the gate can't read"
+    );
+    let strategy = run("git merge -s ours refs/heads/worktree-a");
+    assert!(
+        strategy
+            .stderr
+            .contains("an option's value counts as a branch"),
+        "{strategy:?}"
+    );
+    let twice = ocgen::hooks::run(
+        "workstreams-merge-gate",
+        r#"{"tool_name":"Bash","tool_input":{"command":"git status","command":"git merge refs/heads/worktree-b"}}"#,
+        &env,
+    );
+    assert_eq!(
+        twice.stderr.lines().next().unwrap(),
+        "BLOCKED by the workstreams merge gate: the call repeats the command key"
+    );
+    // CRLF, a wrapped entry, a second Status line, a merged line beside the ready one.
+    reshape_board(dir.path());
+    assert_eq!(
+        run("git merge refs/heads/worktree-a").code,
+        0,
+        "the ready entry wins"
+    );
+    assert_eq!(
+        run("git merge refs/heads/worktree-b").code,
+        2,
+        "still open: the first Status counts"
+    );
+    restore_board(dir.path());
+    move_a(dir.path());
+    let moved = run("git merge refs/heads/worktree-a");
+    assert_eq!(
+        moved.stderr.lines().next().unwrap(),
+        "BLOCKED by the workstreams merge gate: refs/heads/worktree-a moved since it was checked"
+    );
+    assert!(moved
+        .stderr
+        .lines()
+        .nth(1)
+        .unwrap()
+        .starts_with("board tip "));
+    close_board(dir.path());
+    assert_eq!(run("git merge refs/heads/worktree-b").code, 0);
+    assert!(ocgen::hooks::NAMES.contains(&"workstreams-merge-gate"));
+    assert!(ocgen::hooks::FAIL_CLOSED.contains(&"workstreams-merge-gate"));
+}
+
 #[test]
 fn format_and_audit_parity() {
     check(
@@ -1086,7 +1406,7 @@ fn inquire_notes_renders_the_view_and_the_script_is_a_no_op() {
     assert_eq!(o.code, 0);
     assert!(o.stderr.starts_with("inquire-notes:"), "{o:?}");
     assert!(ocgen::hooks::NAMES.contains(&"inquire-notes"));
-    assert_eq!(ocgen::hooks::PROTOCOL, "ocgen-hooks 19");
+    assert_eq!(ocgen::hooks::PROTOCOL, "ocgen-hooks 20");
 }
 
 // ---------------------------------------------------------- intent-draft --

@@ -459,6 +459,7 @@ fn with_a_current_ocgen_every_probe_of_a_fresh_project_passes() {
         "hook commands run",
         "effective settings",
         "approval gate blocks git push",
+        "workstreams merge gate holds unchecked branches",
         "WebFetch guard",
         "no-op cd",
         "notes view",
