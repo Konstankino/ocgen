@@ -707,7 +707,8 @@ its workflows as `.claude/skills/<name>/SKILL.md`. You still type `/deliver`, `/
   `/review-intent`, `/recap`, `/team` and `/team-plan` carry `disable-model-invocation: true`, so Claude can't start them on
   its own.
 - **Claude may use the rest when relevant:** `/inquire`, `/intake`, `/refine` and
-  `/improve-prompt`.
+  `/improve-prompt`. Each has a `when_to_use` line saying when, so Claude picks it for the right
+  requests; ocgen's own check holds them to it like your skills.
 - **Upgrading:** `ocgen doctor` removes the old generated `.claude/commands/*.md`. Files you
   wrote yourself are kept.
 - **Reserved names:** a skill of your own can't take a workflow name. A skill made before its
@@ -722,7 +723,10 @@ of them ever block Claude):
   languages differ, it also tells Claude which language version is missing, and holds the end of a
   turn once while one is (see [Languages](#languages)).
 - **Re-inject context after compaction** (on by default): when a conversation is compacted,
-  Claude is re-pointed at `.claude/rules/` and any `/inquire` notes in `.claude/notes/`.
+  Claude is re-pointed at `.claude/rules/` and any `/inquire` notes in `.claude/notes/`. Claude
+  Code keeps only the first 5,000 tokens of a skill through compaction, and `/intent` and
+  `/review-intent` are longer, so Claude is also told to read the `SKILL.md` of a skill it was
+  running in full before going on.
 - **Drop a no-op `cd`** (on by default): `cd <the folder Claude is in> && …` becomes `…`
   (see **Fewer read-block prompts** below). It never allows, asks or blocks; the
   shorter command is permission-checked as usual. Claude Code runs it only for a command with a
@@ -803,7 +807,9 @@ and autocomplete it.
 - `memory`: `project` is committed under `.claude/agent-memory/`, `local` is git-ignored,
   `user` spans every project.
 - `background`.
-- preloaded `skills`.
+- preloaded `skills`. Claude Code never preloads a user-run-only skill
+  (`disable-model-invocation`), and since v2.1.295 preloads at most 32; `landscape` warns about
+  both.
 - the **MCP servers** it may use.
 
 **Fewer read-block prompts.** With `permissions.blockReadsOutsideWorkingDirectories` on, Claude
@@ -872,8 +878,10 @@ ocgen edit skill [name] -p ./my-team
   on a miss, at most twice.
 - `knowledge`: conventions or domain rules Claude applies automatically when relevant: principles
   with their reasons, applied with judgment.
-- `forked-research`: heavy reading in an isolated `Explore` subagent; you get a summary back. It
-  checks each claim against the file it cites before summarizing.
+- `forked-research`: heavy reading in an isolated subagent; you get a summary back. It forks into
+  the project's `explorer` where research goes there (the project then denies `Explore`, which
+  skips CLAUDE.md and the rules), else into the built-in `Explore`. It checks each claim against
+  the file it cites before summarizing.
 - `improve-prompt`: rewrites a prompt on request.
 - blank.
 
@@ -887,13 +895,25 @@ shows the same checks for existing skills.
   what it does *and when* ("Use when …"), in the words you'd type. It's flagged if empty, under
   40 characters, over the 1024-character limit, or missing a "when" (user-run skills are exempt).
 - **A valid name:** lowercase letters, digits and hyphens, up to 64 characters (`tf-plan-review`).
-- **Keep `SKILL.md` short.** Over 500 lines is flagged. Put long reference in `reference.md`
-  and deterministic logic in `scripts/`. `add skill` can create stubs for both, and ocgen never
-  rewrites them. A rename carries them to the new folder.
+  `synced` and `anthropic-skills` are refused: Claude Code keeps them for skills synced from
+  claude.ai and never loads a project skill by those names.
+- **Keep `SKILL.md` short.** Over 500 lines is flagged, and so is a body over about 5,000 tokens:
+  after compaction Claude Code keeps only that much of a skill, so the rules that must always hold
+  go first. Put long reference in `reference.md` and deterministic logic in `scripts/`. `add
+  skill` can create stubs for both, and ocgen never rewrites them. A rename carries them to the new
+  folder.
 - **Grant the fewest tools.** `allowed-tools` run without asking, so an unscoped `Bash` is
   flagged; scope it as `Bash(git status:*)`. A skill that can start on its own **and**
   pre-approves `Write`/`Edit`/`Bash` is flagged too: make it user-run only, or drop those tools.
+  A rule for the skill's own script, such as `Bash(scripts/check.sh:*)`, never matches, because
+  Claude runs it from the session's folder: write `Bash(${CLAUDE_SKILL_DIR}/scripts/check.sh:*)`
+  and have the body run `${CLAUDE_SKILL_DIR}/scripts/check.sh`. Claude Code fills in the skill's
+  folder in both places.
 - **Fork heavy reading** (`context: fork`), so the research doesn't flood your conversation.
+  The fork's `agent` must be built in (`Explore`, `Plan`, `general-purpose`) or one of the
+  project's agents: Claude Code runs a fork whose agent it can't find on `general-purpose`, with
+  every tool, and says so only in its debug log. A fork into `Explore` is flagged where the
+  project sends research to `explorer`.
 - **No contradictions:** user-run only *and* hidden from the `/` menu means nobody can invoke it.
 
 Three more rules cover the files beside `SKILL.md`. They're yours, so ocgen reports them (in
@@ -923,19 +943,39 @@ Newer skill controls are prompted too, each optional:
 - **`arguments`:** named arguments (`plan_file` → `$plan_file`).
 - **`disallowed-tools`:** tools removed while the skill runs.
 - **`effort`:** how hard Claude thinks during the skill.
-- **`background`:** for forked skills.
+- **`background: false`:** for forked skills, wait for the result in the same turn. A forked
+  skill otherwise runs in the background (Claude Code's default since v2.1.218), where its
+  subagent gets a smaller tool set, without `AskUserQuestion`. Before, ocgen offered
+  `background: true`, which is that default; a skill saved with it keeps the line.
 
 The tool picker multi-selects the built-in tools and accepts `Bash(cmd:*)` / `mcp__server__tool`
 patterns, warning (not rejecting) on unrecognized names. The full `SKILL.md` frontmatter is
 exposed: `description`, `when_to_use`, `argument-hint`, `allowed-tools`,
 `disable-model-invocation`, `user-invocable`, `context: fork` + `agent`, and `model`.
 
-**After creating it:** test that it triggers by running the **skill-creator** skill on it in
-Claude Code. Most skills that "don't work" never trigger. Test it on each model you'll run it with:
+A value YAML would misread is written in double quotes, in a skill's frontmatter and in a
+subagent's `description`: unquoted, ` #` starts a comment that cuts a description short,
+`[issue]` is a list (Claude Code shows the hint as `issue`), `No` is a boolean, `42` a number,
+`2025-01-31` may be a date, and `[file] [format]` doesn't parse at all. Every other value is
+written as typed, and so is one you already quoted (`"[issue]"`).
+
+Not offered, on purpose: skill `hooks` (they start only once the skill is invoked, while ocgen's
+gates must hold the whole session, so they live in `settings.json`); `shell` (it only matters for
+`` !`command` `` lines, and left unset Claude Code falls back to PowerShell where Git Bash is
+missing, while `shell: bash` fails there); and `metadata`, `license` and `compatibility`, which
+Claude Code accepts but ignores.
+
+**After creating it:** a running Claude Code session picks it up at once, since it watches
+`.claude/skills/`; if it doesn't, type `/reload-skills`. Test that it triggers by running the
+**skill-creator** skill on it in Claude Code. Most skills that "don't work" never trigger. For a
+baseline, run the same prompts with the skill set to `"off"` in `skillOverrides` (the `/skills`
+menu writes it to `.claude/settings.local.json`). Test it on each model you'll run it with:
 smaller models need explicit numbered steps, while the strongest do worse when over-prescribed. If
-it only works well on one, pin it with `model`. Change it later with `ocgen edit skill`,
-not by hand: `ocgen doctor` rewrites `SKILL.md` from saved state. `reference.md` and `scripts/`
-are yours.
+it only works well on one, pin it with `model`. `ocgen verify` runs `claude plugin validate` on
+`.claude/skills/` (Claude Code v2.1.233 or later), which finds a frontmatter that doesn't parse
+(such a skill loads with no fields set), and `/skill-doctor` (v2.1.252 or later) shows what each
+skill costs in context and how often it runs. Change it later with `ocgen edit skill`, not by hand: `ocgen doctor` rewrites `SKILL.md`
+from saved state. `reference.md` and `scripts/` are yours.
 
 #### Delivering and understanding code (`/deliver`, `/inquire`)
 

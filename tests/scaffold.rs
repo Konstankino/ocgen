@@ -1888,7 +1888,8 @@ fn claude_skill_renders_full_frontmatter() {
     let sk = read(dir.path(), ".claude/skills/deploy/SKILL.md");
     assert!(sk.contains("name: deploy"));
     assert!(sk.contains("when_to_use: When the user says ship it"));
-    assert!(sk.contains("argument-hint: [env]"));
+    // Quoted: unquoted, YAML reads `[env]` as a list and Claude Code shows `env`.
+    assert!(sk.contains("argument-hint: \"[env]\""));
     assert!(sk.contains("allowed-tools: Bash(npm run build), Bash(npm run deploy)"));
     assert!(sk.contains("disable-model-invocation: true"));
     assert!(sk.contains("model: sonnet"));
@@ -2890,6 +2891,15 @@ fn skill_issues_flag_each_rule() {
     // Name: lowercase letters, digits, hyphens, ≤ 64.
     assert!(has(&with(&|s| s.name = "Tf_Plan".into()), "name"));
     assert!(has(&with(&|s| s.name = "a".repeat(65)), "name"));
+    // Names Claude Code keeps for skills synced from claude.ai never load.
+    for reserved in ["synced", "anthropic-skills"] {
+        assert!(
+            has(&with(&|s| s.name = reserved.into()), "reserved"),
+            "{reserved}"
+        );
+        assert!(ocgen::validate::skill_name(reserved).is_err(), "{reserved}");
+    }
+    assert!(ocgen::validate::skill_name("synced-notes").is_ok());
     // The description is the trigger.
     assert!(has(&with(&|s| s.description.clear()), "description"));
     assert!(has(
@@ -2919,6 +2929,11 @@ fn skill_issues_flag_each_rule() {
         &with(&|s| s.body = "line\n".repeat(501)),
         "reference.md"
     ));
+    // Compaction keeps only a skill's first 5,000 tokens (about 20,000 characters).
+    assert!(has(&with(&|s| s.body = "word ".repeat(4_100)), "5,000"));
+    assert!(!has(&with(&|s| s.body = "word ".repeat(3_900)), "5,000"));
+    // Cyrillic takes more tokens per character than English.
+    assert!(has(&with(&|s| s.body = "слово ".repeat(1_900)), "5,000"));
     // Fewest tools.
     assert!(has(
         &with(&|s| s.allowed_tools = "Read, Bash".into()),
@@ -2927,6 +2942,26 @@ fn skill_issues_flag_each_rule() {
     assert!(has(
         &with(&|s| s.allowed_tools = "Read, Write".into()),
         "user-run"
+    ));
+    // A script path relative to the skill's folder never matches: Claude runs it
+    // from the project's.
+    for rule in [
+        "Bash(scripts/check.sh:*)",
+        "Bash(./scripts/check.sh *)",
+        "Bash(python scripts/check.py:*)",
+        "Bash(sh ./scripts/check.sh *)",
+    ] {
+        assert!(
+            has(
+                &with(&|s| s.allowed_tools = format!("Read, {rule}")),
+                "${CLAUDE_SKILL_DIR}"
+            ),
+            "{rule}"
+        );
+    }
+    assert!(!has(
+        &with(&|s| s.allowed_tools = "Read, Bash(${CLAUDE_SKILL_DIR}/scripts/check.sh:*)".into()),
+        "CLAUDE_SKILL_DIR"
     ));
     assert!(!has(
         &with(&|s| {
@@ -2943,6 +2978,103 @@ fn skill_issues_flag_each_rule() {
         }),
         "nobody"
     ));
+}
+
+/// YAML would misread these as a comment, a list, a boolean or a number, or
+/// not parse them at all; quoted, each stays the text that was typed.
+#[test]
+fn frontmatter_values_yaml_would_misread_are_quoted() {
+    use ocgen::claude::yaml_scalar;
+    for (typed, written) in [
+        ("Review plans #fast", "\"Review plans #fast\""),
+        ("Deploy: the app", "\"Deploy: the app\""),
+        ("ends with a colon:", "\"ends with a colon:\""),
+        ("[issue]", "\"[issue]\""),
+        ("[file] [format]", "\"[file] [format]\""),
+        ("*bold* first", "\"*bold* first\""),
+        ("'quoted' start", "\"'quoted' start\""),
+        ("No", "\"No\""),
+        ("on", "\"on\""),
+        ("null", "\"null\""),
+        ("~", "\"~\""),
+        ("1.5", "\"1.5\""),
+        ("42", "\"42\""),
+        (" padded", "\" padded\""),
+        ("two\nlines", "\"two\\nlines\""),
+        ("\"quoted\" and \\", "\"\\\"quoted\\\" and \\\\\""),
+        ("", "\"\""),
+        ("Підсумуй зміни: коротко", "\"Підсумуй зміни: коротко\""),
+        // YAML 1.1 dates and numbers, which some parsers read as such.
+        ("2025-01-31", "\"2025-01-31\""),
+        ("1_000", "\"1_000\""),
+        ("0b101", "\"0b101\""),
+        ("+1", "\"+1\""),
+        (".inf", "\".inf\""),
+        // Quotes inside a value that isn't one quoted scalar.
+        ("\"a\" b \"c\"", "\"\\\"a\\\" b \\\"c\\\"\""),
+        ("\"half", "\"\\\"half\""),
+    ] {
+        assert_eq!(yaml_scalar(typed), written, "{typed:?}");
+    }
+    // Everything else is written exactly as typed.
+    for plain in [
+        "Review a Terraform plan for S3/KMS misconfigurations. Use when asked to check a plan.",
+        "Read, Grep, Bash(terraform show:*)",
+        "Bash(${CLAUDE_SKILL_DIR}/scripts/check.sh *)",
+        "Use for C# code, not C++",
+        "opus",
+        "issue-number",
+        "Підсумуй зміни коротко",
+        "2 files at most",
+        // Already one quoted scalar, as a value typed before ocgen quoted
+        // (`"[issue]"`, the form its own workflow skills use): YAML reads it as meant.
+        "\"[issue]\"",
+        "\"Deploy: the app \\\"now\\\"\"",
+        "'it''s [here]'",
+    ] {
+        assert_eq!(yaml_scalar(plain), plain, "{plain:?}");
+    }
+}
+
+#[test]
+fn skill_and_agent_frontmatter_quote_what_yaml_would_misread() {
+    let dir = tempdir().unwrap();
+    let mut p = claude_default("yq");
+    let mut s = good_skill();
+    s.description = "Review plans #fast. Use when asked to check a plan".into();
+    s.when_to_use = "yes".into();
+    s.argument_hint = "[file] [format]".into();
+    p.skills.push(s);
+    let mut plain = good_skill();
+    plain.name = "plain".into();
+    plain.argument_hint = "file format".into();
+    p.skills.push(plain);
+    let i = p.agents.iter().position(|a| a.name == "reviewer").unwrap();
+    p.agents[i].description = "Reviews code: strict #no-mercy".into();
+    p.scaffold(dir.path(), false).unwrap();
+
+    let md = read(dir.path(), ".claude/skills/tf-plan-review/SKILL.md");
+    for line in [
+        "\ndescription: \"Review plans #fast. Use when asked to check a plan\"\n",
+        "\nwhen_to_use: \"yes\"\n",
+        "\nargument-hint: \"[file] [format]\"\n",
+        "\nallowed-tools: Read, Grep, Bash(terraform show:*)\n",
+    ] {
+        assert!(md.contains(line), "missing {line:?} in:\n{md}");
+    }
+    // A value YAML reads as typed stays unquoted, so existing skills don't change.
+    let md = read(dir.path(), ".claude/skills/plain/SKILL.md");
+    for line in [
+        format!("\ndescription: {}\n", good_skill().description),
+        "\nargument-hint: file format\n".to_string(),
+    ] {
+        assert!(md.contains(&line), "missing {line:?} in:\n{md}");
+    }
+    let md = read(dir.path(), ".claude/agents/reviewer.md");
+    assert!(
+        md.contains("\ndescription: \"Reviews code: strict #no-mercy\"\n"),
+        "{md}"
+    );
 }
 
 #[test]
@@ -3008,6 +3140,13 @@ fn skill_extras_are_created_once_and_survive_regeneration() {
     );
     let readme = fs::read_to_string(&scripts).unwrap();
     assert!(readme.contains("install"), "{readme}");
+    // Named by the skill's folder, a script runs (and is pre-approved) from
+    // wherever the session is.
+    assert!(
+        readme.contains("`${CLAUDE_SKILL_DIR}/scripts/check.sh`")
+            && readme.contains("Bash(${CLAUDE_SKILL_DIR}/scripts/check.sh:*)"),
+        "{readme}"
+    );
     // good_skill's body links reference.md, so the stubs pass the checks.
     assert!(
         p.skill_file_issues(dir.path()).is_empty(),
@@ -3598,6 +3737,12 @@ fn compaction_reinjects_context_by_default() {
         cmd.contains(".claude/notes") && cmd.contains("rules"),
         "{cmd}"
     );
+    // Claude Code keeps only the first 5,000 tokens of a skill through compaction,
+    // and /intent and /review-intent are longer: the one running is read again.
+    assert!(
+        cmd.contains(".claude/skills/<name>/SKILL.md") && cmd.contains("in full"),
+        "{cmd}"
+    );
 }
 
 #[test]
@@ -3914,6 +4059,22 @@ fn workflow_skills_follow_the_skill_rules() {
         );
         let issues = ocgen::claude::skill_file_issues(&skill, &md);
         assert!(issues.is_empty(), "{}: {issues:?}", skill.display());
+        // One Claude may start on its own says when, like a skill of yours must.
+        let field = |key: &str| {
+            md.lines()
+                .find_map(|l| l.strip_prefix(&format!("{key}: ")))
+                .unwrap_or_default()
+                .to_string()
+        };
+        let as_skill = Skill {
+            name: field("name"),
+            description: field("description"),
+            when_to_use: field("when_to_use"),
+            disable_model_invocation: field("disable-model-invocation") == "true",
+            ..Default::default()
+        };
+        let issues = ocgen::claude::skill_issues(&as_skill);
+        assert!(issues.is_empty(), "{}: {issues:?}", skill.display());
     }
     // The files /intent and /review-intent tell Claude to read are short enough
     // to be read whole, and link nothing further.
@@ -3999,7 +4160,7 @@ fn full_skill_frontmatter_renders_and_is_checked() {
     s.effort = "high".into();
     s.context_fork = true;
     s.agent = "Explore".into();
-    s.background = true;
+    s.background = Some(false);
     p.skills.push(s.clone());
     p.scaffold(dir.path(), false).unwrap();
     let md = read(dir.path(), ".claude/skills/tf-plan-review/SKILL.md");
@@ -4008,7 +4169,8 @@ fn full_skill_frontmatter_renders_and_is_checked() {
         "arguments: plan_file",
         "disallowed-tools: Write",
         "effort: high",
-        "background: true",
+        // A forked skill runs in the background unless it says otherwise.
+        "context: fork\nagent: Explore\nbackground: false\n",
     ] {
         assert!(md.contains(line), "missing {line:?} in:\n{md}");
     }
@@ -4022,6 +4184,147 @@ fn full_skill_frontmatter_renders_and_is_checked() {
         has(&issues, "background") && has(&issues, "effort"),
         "{issues:?}"
     );
+}
+
+fn forked(agent: &str) -> Skill {
+    let mut s = good_skill();
+    s.name = "dig".into();
+    s.allowed_tools = "Read, Grep".into();
+    s.context_fork = true;
+    s.agent = agent.into();
+    s
+}
+
+fn skill_warnings(p: &Project) -> Vec<String> {
+    p.issues()
+        .into_iter()
+        .filter(|i| i.starts_with("skill 'dig'"))
+        .collect()
+}
+
+/// Claude Code runs a fork whose agent it can't find on general-purpose, which
+/// has every tool, and logs that only in its debug output.
+#[test]
+fn a_fork_into_an_agent_claude_code_cannot_find_is_flagged() {
+    for agent in ["explorr", "Reviewer"] {
+        let mut p = claude_default("fk");
+        p.skills.push(forked(agent));
+        let w = skill_warnings(&p);
+        assert!(
+            has(&w, &format!("agent '{agent}'")) && has(&w, "general-purpose"),
+            "{agent}: {w:?}"
+        );
+    }
+    for agent in [
+        "",
+        "Plan",
+        "general-purpose",
+        "reviewer",
+        "explorer",
+        "my-plugin:helper",
+    ] {
+        let mut p = claude_default("fk");
+        p.skills.push(forked(agent));
+        assert!(
+            skill_warnings(&p).is_empty(),
+            "{agent}: {:?}",
+            skill_warnings(&p)
+        );
+    }
+}
+
+/// Where research goes to the project's `explorer`, a skill forks into it too: a
+/// forked Explore skips CLAUDE.md and the rules, the reason Explore is denied.
+#[test]
+fn research_skills_fork_into_the_projects_explorer() {
+    let mut p = claude_default("fx");
+    assert!(p.prefers_explorer());
+    assert_eq!(p.fork_agent_default(), "explorer");
+    p.skills.push(forked("Explore"));
+    let w = skill_warnings(&p);
+    assert!(has(&w, "Explore") && has(&w, "agent: explorer"), "{w:?}");
+
+    // The preset follows the project.
+    let preset = ocgen::claude::skill_presets()
+        .unwrap()
+        .into_iter()
+        .find(|x| x.name == "forked-research")
+        .unwrap();
+    assert_eq!(p.seed_skill(&preset, "dig").agent, "explorer");
+
+    // Without the explorer, Explore is the read-only default and is fine.
+    p.claude.workflow.prefer_explorer = false;
+    assert_eq!(p.fork_agent_default(), "Explore");
+    assert_eq!(p.seed_skill(&preset, "dig").agent, "Explore");
+    assert!(skill_warnings(&p).is_empty(), "{:?}", skill_warnings(&p));
+}
+
+/// Claude Code never preloads a skill Claude may not invoke, and preloads at
+/// most 32: the rest is dropped without a word.
+#[test]
+fn preloading_a_skill_claude_code_never_preloads_is_flagged() {
+    let mut p = claude_default("pl");
+    let mut user_run = good_skill();
+    user_run.name = "ship".into();
+    user_run.disable_model_invocation = true;
+    p.skills.push(user_run);
+    p.skills.push(good_skill());
+    let i = p
+        .agents
+        .iter()
+        .position(|a| a.name == "implementer")
+        .unwrap();
+    p.agents[i].preload_skills = "ship, deliver, tf-plan-review".into();
+    let w: Vec<String> = p
+        .issues()
+        .into_iter()
+        .filter(|i| i.starts_with("agent 'implementer'"))
+        .collect();
+    assert!(has(&w, "'ship'") && has(&w, "'deliver'"), "{w:?}");
+    assert!(!has(&w, "tf-plan-review"), "{w:?}");
+
+    p.agents[i].preload_skills = (0..33)
+        .map(|n| format!("s{n}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    assert!(
+        p.issues()
+            .iter()
+            .any(|i| i.contains("33") && i.contains("32")),
+        "{:?}",
+        p.issues()
+    );
+}
+
+/// `background: true` is what Claude Code does with a forked skill anyway, so
+/// the wizard offers only waiting; a skill saved with `true` keeps its line.
+#[test]
+fn a_forked_skill_runs_in_the_background_unless_it_waits() {
+    let saved: Skill = serde_json::from_value(serde_json::json!({
+        "name": "dig",
+        "description": "Dig through the logs for errors. Use when asked why a job failed.",
+        "body": "1. Read the logs.",
+        "context_fork": true,
+        "agent": "Explore",
+        "background": true
+    }))
+    .unwrap();
+    assert_eq!(saved.background, Some(true));
+    let mut unset = saved.clone();
+    unset.name = "dig-unset".into();
+    unset.background = None;
+    let dir = tempdir().unwrap();
+    let mut p = claude_default("bg");
+    p.skills.push(saved);
+    p.skills.push(unset);
+    p.scaffold(dir.path(), false).unwrap();
+    let md = read(dir.path(), ".claude/skills/dig/SKILL.md");
+    assert!(
+        md.contains("context: fork\nagent: Explore\nbackground: true\n---"),
+        "{md}"
+    );
+    let md = read(dir.path(), ".claude/skills/dig-unset/SKILL.md");
+    assert!(md.contains("context: fork\nagent: Explore\n---"), "{md}");
 }
 
 // ------------------------------------------------------------- statusline -----

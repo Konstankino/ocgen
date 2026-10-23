@@ -1313,6 +1313,11 @@ impl Project {
     fn render_claude(&self) -> Result<Vec<(PathBuf, String)>> {
         let mut env = Environment::new();
         env.set_keep_trailing_newline(true);
+        // Frontmatter values the user typed, written so YAML reads them back as typed.
+        env.add_filter("yaml", |s: String| crate::claude::yaml_scalar(&s));
+        env.add_filter("yaml_quoted", |s: String| {
+            serde_json::Value::from(s).to_string()
+        });
         let lang = &self.language;
 
         let subs: Vec<SubCtx> = self
@@ -2328,6 +2333,53 @@ impl Project {
                 .any(|a| a.name == "explorer" && a.mode == "subagent")
     }
 
+    /// The agent a forked skill runs in by default: the project's `explorer` where
+    /// research goes there (and Explore is denied), else Claude Code's read-only Explore.
+    pub fn fork_agent_default(&self) -> &'static str {
+        if self.prefers_explorer() {
+            "explorer"
+        } else {
+            "Explore"
+        }
+    }
+
+    /// A preset's seed skill for this project: one that forks into Explore forks
+    /// into [`Self::fork_agent_default`] instead.
+    pub fn seed_skill(&self, preset: &crate::claude::SkillPreset, name: &str) -> Skill {
+        let mut s = preset.to_skill(name, &self.language);
+        if s.context_fork && s.agent == "Explore" {
+            s.agent = self.fork_agent_default().into();
+        }
+        s
+    }
+
+    /// Where a forked skill runs, checked against the project's agents. Claude Code
+    /// runs a fork whose agent it can't find on general-purpose, with every tool.
+    pub fn skill_fork_issues(&self, s: &Skill) -> Vec<String> {
+        const BUILT_IN: [&str; 3] = ["Explore", "Plan", "general-purpose"];
+        let agent = s.agent.trim();
+        if !s.context_fork || agent.is_empty() {
+            return Vec::new();
+        }
+        if agent == "Explore" && self.prefers_explorer() {
+            return vec!["forks into Explore, which this project denies so that research goes to `explorer` — a forked Explore skips CLAUDE.md and the project rules; set agent: explorer".into()];
+        }
+        let known = BUILT_IN.contains(&agent)
+            // A plugin's agent (`plugin:agent`), which ocgen can't see.
+            || agent.contains(':')
+            || self
+                .agents
+                .iter()
+                .any(|a| a.mode != "primary" && a.name == agent);
+        if known {
+            return Vec::new();
+        }
+        vec![format!(
+            "forks into agent '{agent}', which is neither built in ({}) nor one of this project's agents — Claude Code runs a fork it can't find on general-purpose, with every tool; fine for one of your personal agents, otherwise fix the name",
+            BUILT_IN.join(", ")
+        )]
+    }
+
     /// The permission defaults (the `permissions` power-up).
     fn default_permissions(&self) -> PermissionRules {
         if !self.claude.powerups.permissions {
@@ -2511,7 +2563,7 @@ impl Project {
         if x.compact_context {
             push(
                 "SessionStart",
-                json!({ "matcher": "compact", "hooks": [ command_hook("echo 'Context was just compacted. Re-read the project rules in .claude/rules/ (workflow, team, loop discipline). If an /inquire study session is active, re-read its ledger resume point in .claude/notes/ before continuing.'") ] }),
+                json!({ "matcher": "compact", "hooks": [ command_hook("echo 'Context was just compacted. Re-read the project rules in .claude/rules/ (workflow, team, loop discipline). If an /inquire study session is active, re-read its ledger resume point in .claude/notes/ before continuing. If you were running a skill (such as /deliver, /intent or /review-intent), compaction kept only the start of its instructions: Read .claude/skills/<name>/SKILL.md in full before continuing; its $ARGUMENTS are what the user typed after /<name>.'") ] }),
             );
         }
         if x.notify {
@@ -3574,6 +3626,7 @@ impl Project {
                 ));
             }
             w.extend(Self::agent_field_issues(a));
+            w.extend(self.preload_issues(a));
             for s in crate::claude::split_list(&a.mcp_servers) {
                 if !self.claude.mcp_servers.iter().any(|m| m.name == s) {
                     w.push(format!(
@@ -3604,7 +3657,10 @@ impl Project {
                     s.name, s.name
                 ));
             }
-            for issue in crate::claude::skill_issues(s) {
+            for issue in crate::claude::skill_issues(s)
+                .into_iter()
+                .chain(self.skill_fork_issues(s))
+            {
                 w.push(format!("skill '{}': {issue}", s.name));
             }
         }
@@ -3625,6 +3681,34 @@ impl Project {
             for issue in crate::claude::skill_file_issues(&dir, &s.body) {
                 w.push(format!("skill '{}': {issue}", s.name));
             }
+        }
+        w
+    }
+
+    /// Skills an agent preloads that Claude Code won't: a user-run-only one (it is
+    /// never preloaded), and more than [`crate::claude::PRELOAD_SKILLS_MAX`].
+    fn preload_issues(&self, a: &Agent) -> Vec<String> {
+        let names = crate::claude::split_list(&a.preload_skills);
+        let mut w = Vec::new();
+        for n in &names {
+            let user_run = match self.skills.iter().find(|s| s.name == *n) {
+                Some(s) => s.disable_model_invocation,
+                None => crate::claude::USER_RUN_WORKFLOWS.contains(&n.as_str()),
+            };
+            if user_run {
+                w.push(format!(
+                    "agent '{}' preloads skill '{n}', which is user-run only (disable-model-invocation) — Claude Code never preloads it",
+                    a.name
+                ));
+            }
+        }
+        let max = crate::claude::PRELOAD_SKILLS_MAX;
+        if names.len() > max {
+            w.push(format!(
+                "agent '{}' preloads {} skills — Claude Code preloads at most {max}; with the Skill tool the agent can still invoke the rest",
+                a.name,
+                names.len()
+            ));
         }
         w
     }
@@ -3838,9 +3922,11 @@ impl Project {
         if scripts {
             stub(
                 "scripts/README.md",
-                "# Scripts\n\nDeterministic helpers SKILL.md tells Claude to run (e.g. `scripts/check.sh`),\n\
-                 so the same logic isn't re-derived every time. Scope them in allowed-tools as\n\
-                 Bash(scripts/check.sh:*).\n\n\
+                "# Scripts\n\nDeterministic helpers SKILL.md tells Claude to run, so the same logic isn't\n\
+                 re-derived every time. Name each by the skill's folder, which Claude Code fills in\n\
+                 wherever the session is: SKILL.md says run `${CLAUDE_SKILL_DIR}/scripts/check.sh`,\n\
+                 and allowed-tools pre-approves exactly that, Bash(${CLAUDE_SKILL_DIR}/scripts/check.sh:*).\n\
+                 A relative scripts/check.sh resolves against the session's folder, not this one.\n\n\
                  Never assume a tool is installed: next to each step that runs a script, SKILL.md\n\
                  says what it needs and how to install it (e.g. \"needs jq: `brew install jq` or\n\
                  `apt-get install jq`\").\n",

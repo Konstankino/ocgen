@@ -914,6 +914,9 @@ pub const USER_RUN_WORKFLOWS: [&str; 8] = [
     "team-plan",
 ];
 
+/// Most skills Claude Code preloads into one subagent (its `skills` field).
+pub const PRELOAD_SKILLS_MAX: usize = 32;
+
 /// Tools /recap may use without asking while it runs (skill `allowed-tools`).
 /// The fetch and the current branch's fast-forward are pinned to one exact
 /// command each, so no prefix can carry `+`, `--force` or `--upload-pack`. The
@@ -1230,6 +1233,75 @@ pub const SKILL_DESCRIPTION_MAX: usize = 1024;
 /// Claude Code truncates `description` + `when_to_use` beyond this in the skill listing.
 pub const SKILL_LISTING_MAX: usize = 1536;
 
+/// How much of an invoked skill Claude Code carries through compaction: its
+/// first 5,000 tokens.
+pub const SKILL_COMPACTION_TOKENS: usize = 5_000;
+/// A rough token count: about 4 characters of English per token, and UTF-8's
+/// 2 bytes per Cyrillic letter land near Ukrainian's rate too.
+const BYTES_PER_TOKEN: usize = 4;
+
+/// Skill names Claude Code keeps for skills synced from claude.ai: a project
+/// skill with one of them never loads.
+pub const RESERVED_SKILL_NAMES: [&str; 2] = ["synced", "anthropic-skills"];
+
+/// A frontmatter value as YAML reads it back unchanged: as typed when YAML
+/// takes it as that text, otherwise double-quoted. Unquoted, ` #` starts a
+/// comment that cuts the value short, `[issue]` is a list, `No` a boolean, `42`
+/// a number, and `a: b` or `[a] [b]` don't parse (Claude Code then loads the
+/// file only through its own fallback quoting). A value that is already one
+/// quoted scalar is written as it is.
+pub fn yaml_scalar(s: &str) -> String {
+    if quoted_scalar(s) {
+        return s.to_string();
+    }
+    let lower = s.to_ascii_lowercase();
+    let reserved = matches!(
+        lower.as_str(),
+        "true" | "false" | "yes" | "no" | "y" | "n" | "on" | "off" | "null" | "~"
+    );
+    // Numbers, and what YAML 1.1 parsers also read as one or as a date
+    // (`1_000`, `0b101`, `+1`, `.inf`, `2025-01-31`).
+    let numeric = s.parse::<f64>().is_ok()
+        || (!s.contains(char::is_whitespace)
+            && s.starts_with(|c: char| c.is_ascii_digit() || c == '+' || c == '.'));
+    let risky = s.is_empty()
+        || reserved
+        || numeric
+        || s.starts_with(|c: char| c.is_whitespace() || "-?:,[]{}#&*!|>'\"%@`".contains(c))
+        || s.ends_with(|c: char| c.is_whitespace() || c == ':')
+        || s.contains(": ")
+        || s.contains(" #")
+        || s.chars().any(char::is_control);
+    if risky {
+        // A JSON string is a valid YAML double-quoted scalar.
+        serde_json::Value::from(s).to_string()
+    } else {
+        s.to_string()
+    }
+}
+
+/// Whether `s` is already one YAML-quoted scalar, such as a value typed as
+/// `"[issue]"` before ocgen quoted: written as it is, YAML reads what was meant.
+fn quoted_scalar(s: &str) -> bool {
+    if s.len() < 2 || s.chars().any(char::is_control) {
+        return false;
+    }
+    if let Some(inner) = s.strip_prefix('"').and_then(|r| r.strip_suffix('"')) {
+        // Every inner `"` is escaped, and no `\` escapes the closing quote.
+        let mut chars = inner.chars();
+        while let Some(c) = chars.next() {
+            if c == '"' || (c == '\\' && chars.next().is_none()) {
+                return false;
+            }
+        }
+        return true;
+    }
+    // Inside single quotes, a quote is written twice.
+    s.strip_prefix('\'')
+        .and_then(|r| r.strip_suffix('\''))
+        .is_some_and(|inner| !inner.replace("''", "").contains('\''))
+}
+
 /// Whether `name` follows the skill naming rule: lowercase letters, digits and
 /// hyphens, starting with a letter or digit, at most [`SKILL_NAME_MAX`] chars.
 pub fn is_valid_skill_name(name: &str) -> bool {
@@ -1251,6 +1323,11 @@ pub fn skill_issues(s: &Skill) -> Vec<String> {
     if !is_valid_skill_name(&s.name) {
         w.push(format!(
             "name must be lowercase letters, digits and hyphens (≤ {SKILL_NAME_MAX} chars)"
+        ));
+    } else if RESERVED_SKILL_NAMES.contains(&s.name.as_str()) {
+        w.push(format!(
+            "'{}' is reserved for skills synced from claude.ai — Claude Code never loads a skill by that name; rename it",
+            s.name
         ));
     }
 
@@ -1286,6 +1363,12 @@ pub fn skill_issues(s: &Skill) -> Vec<String> {
     if s.body.lines().count() > 500 {
         w.push("body is over 500 lines — move reference detail to reference.md".into());
     }
+    let tokens = s.body.len() / BYTES_PER_TOKEN;
+    if tokens > SKILL_COMPACTION_TOKENS {
+        w.push(format!(
+            "body is about {tokens} tokens — after compaction Claude Code keeps only a skill's first 5,000; put the rules that must always hold first, and move detail to reference.md"
+        ));
+    }
 
     // Fewest tools that work.
     let tools: Vec<&str> = s
@@ -1300,6 +1383,17 @@ pub fn skill_issues(s: &Skill) -> Vec<String> {
                 .into(),
         );
     }
+    // Claude runs a skill's script from the session's folder, never the skill's.
+    if let Some(rule) = tools.iter().find(|t| {
+        t.strip_prefix("Bash(").is_some_and(|cmd| {
+            cmd.split_whitespace()
+                .any(|w| w.starts_with("scripts/") || w.starts_with("./scripts/"))
+        })
+    }) {
+        w.push(format!(
+            "allowed-tools {rule} never matches: Claude runs the script from the session's folder — write Bash(${{CLAUDE_SKILL_DIR}}/scripts/…) and run it as ${{CLAUDE_SKILL_DIR}}/scripts/… in the body"
+        ));
+    }
     // Scoped Bash(cmd:*) patterns are the recommended least-privilege form; only
     // file edits and an unscoped Bash are broad side effects.
     let side_effects = tools
@@ -1312,7 +1406,7 @@ pub fn skill_issues(s: &Skill) -> Vec<String> {
     if s.disable_model_invocation && s.hidden_from_menu {
         w.push("user-run only AND hidden from the / menu — nobody can invoke it".into());
     }
-    if s.background && !s.context_fork {
+    if s.background.is_some() && !s.context_fork {
         w.push("background only applies to a forked skill (context: fork)".into());
     }
     let effort = s.effort.trim();
@@ -1478,6 +1572,9 @@ pub struct Skill {
     pub disallowed_tools: String,
     /// Effort for the skill's turn (low/medium/high/xhigh/max; empty = inherit).
     pub effort: String,
-    /// With `context: fork`, run the forked skill in the background.
-    pub background: bool,
+    /// With `context: fork`: `Some(false)` waits for the fork's result in the
+    /// invoking turn. Claude Code otherwise runs it in the background, with the
+    /// smaller tool set background subagents get; `Some(true)` says so explicitly
+    /// (what ocgen offered before), `None` leaves it to that default.
+    pub background: Option<bool>,
 }
