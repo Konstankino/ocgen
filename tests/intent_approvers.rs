@@ -230,6 +230,14 @@ fn the_hook_tells_claude_the_current_approvers_on_every_stale_write() {
     let r = reason(&hook(dir.path(), "docs/adr/ADR-0001-cache.md"));
     assert!(r.contains("@alice") && r.contains("Sign-off"), "{r}");
 
+    // A pull request's draft, written outside /intent, is held to the same list.
+    write(dir.path(), ".claude/intent/drafts/pr-cache.md", STALE_DRAFT);
+    let r = reason(&hook(dir.path(), ".claude/intent/drafts/pr-cache.md"));
+    assert!(
+        r.contains("@org/arch") && r.contains("Needs from") && r.contains("while a session runs"),
+        "{r}"
+    );
+
     // Fixed, decided, or not an intent file at all: nothing to say.
     write(
         dir.path(),

@@ -1693,9 +1693,10 @@ fn edit_intent_links_the_projects_codeowners() {
         .args(["--approver", "@alice", "--codeowners", ".github/CODEOWNERS"])
         .assert()
         .success();
+    // By default the approvers review every change.
     let text = std::fs::read_to_string(&owners).unwrap();
     assert!(text.starts_with("* @owner\n"), "{text}");
-    assert!(text.contains("/docs/adr/ @alice"), "{text}");
+    assert!(text.contains("\n* @alice\n"), "{text}");
     assert_eq!(intent_state(dir.path())["codeowners"], ".github/CODEOWNERS");
     // No link to it in .claude/: the state and the /intent skill name it.
     assert!(std::fs::symlink_metadata(dir.path().join(".claude/CODEOWNERS")).is_err());
@@ -1705,16 +1706,16 @@ fn edit_intent_links_the_projects_codeowners() {
         .assert()
         .success()
         .stdout(contains(".github/CODEOWNERS"))
-        .stdout(contains("intents"))
+        .stdout(contains("scope all"))
         .stdout(contains(".claude/CODEOWNERS").not());
 
     ocgen()
-        .args(["edit", "intent", "--codeowners-scope", "all", "-p"])
+        .args(["edit", "intent", "--codeowners-scope", "intents", "-p"])
         .arg(dir.path())
         .assert()
         .success();
     let text = std::fs::read_to_string(&owners).unwrap();
-    assert!(text.contains("\n* @alice\n"), "{text}");
+    assert!(text.contains("/docs/adr/ @alice"), "{text}");
     ocgen()
         .args(["edit", "intent", "--codeowners-scope", "off", "-p"])
         .arg(dir.path())

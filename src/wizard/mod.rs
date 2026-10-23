@@ -1237,13 +1237,13 @@ fn configure_intent(
         if !s.codeowners.is_empty() {
             use ocgen::claude::CodeownersScope;
             let scopes = [
-                CodeownersScope::Intents,
                 CodeownersScope::All,
+                CodeownersScope::Intents,
                 CodeownersScope::Off,
             ];
             let labels = [
-                format!("intents — changes to {}/", s.dir),
                 "all — every change".to_string(),
+                format!("intents — changes to {}/", s.dir),
                 "off — no block".to_string(),
             ];
             let at = scopes

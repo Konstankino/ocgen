@@ -498,7 +498,7 @@ Examples:
   ocgen edit intent --trust-domain \"*.amazon.com\"          # every subdomain (not amazon.com itself)
   ocgen edit intent --approver @alice                      # who must sign off (repeatable)
   ocgen edit intent --codeowners .github/CODEOWNERS        # keep the approvers in your CODEOWNERS
-  ocgen edit intent --codeowners-scope all                 # approvers review every change, not just intents
+  ocgen edit intent --codeowners-scope intents             # approvers review only the intent files
   ocgen edit intent --issue-template                       # edit the issue structure in $EDITOR
   ocgen edit intent --reset-intent-template                # back to ocgen's default
   ocgen edit intent --disable                              # remove /intent from the project";
@@ -543,7 +543,7 @@ pub struct IntentCli {
     /// at .claude/CODEOWNERS. "off" unlinks it and removes the block.
     #[arg(long, value_name = "PATH")]
     pub codeowners: Option<String>,
-    /// What the CODEOWNERS block covers: the intent directory, every file, or nothing.
+    /// What the CODEOWNERS block covers: every file (the default), the intent directory, or nothing.
     #[arg(long, value_name = "SCOPE")]
     pub codeowners_scope: Option<ocgen::claude::CodeownersScope>,
     /// Add /intent to the project.

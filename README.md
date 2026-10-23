@@ -591,7 +591,7 @@ repo used for a plugin's marketplace and release workflow; `--team` enables
 .claude/skills/review-intent/SKILL.md # /review-intent — a change reviewed by your agents in parallel, each finding checked by another, recorded as an issue draft; an ADR on request (you run it)
 .claude/skills/recap/SKILL.md        # /recap — fast-forward your branches, then a per-branch report of what changed since the last recap, plus new GitHub comments and reviews (you run it)
 .claude/intent/issue-template.md     # /intent's GitHub issue structure — yours, written once
-.claude/intent/drafts/<name>.md      # /intent's issue draft — type `draft` to edit, preview and copy it in your browser (git-ignored)
+.claude/intent/drafts/<name>.md      # an issue or pull request draft (/intent's, or any Claude writes) — type `draft` to edit, preview and copy it in your browser (git-ignored)
 .claude/intent/viewer/               # the intent files' viewer and session records — type `adr` to read them (git-ignored)
 .claude/intent/view/<name>.md        # an intent file's reading copy in your language, with its page (git-ignored)
 .claude/intent/intent-template.md    # /intent's intent-file (ADR) structure — yours, written once
@@ -952,7 +952,9 @@ register for your approval; researches in parallel (re-planning if findings cont
 plan); executes with a stated `Confidence: NN%` per decision and no deploys/pushes without
 your approval; checks the result against the plan's success criteria before reporting (the scope
 guard does it when the team has one, otherwise a **final check** runs the tests and loops back);
-and summarizes. Small, clear goals collapse the interview and plan into a one-paragraph brief.
+and summarizes — for a goal that came from an `/intent`, with a pull request draft that asks the
+approvers to review the change ([details](#from-findings-to-a-github-issue-intent)). Small, clear
+goals collapse the interview and plan into a one-paragraph brief.
 
 **`/inquire <topic or question>`** is a read-only loop for learning a codebase by asking
 questions — and for getting better at asking them:
@@ -1285,7 +1287,7 @@ was told:
 
 | When | What checks | What happens |
 |---|---|---|
-| Claude writes a pending intent file or an issue draft | the `intent-approvers` hook (`PostToolUse`) | Claude is told who is missing, and that this list wins over its instructions; it fixes the file then (for a draft, also any lines wrapped by hand) |
+| Claude writes a pending intent file or a draft (an issue's or a pull request's) | the `intent-approvers` hook (`PostToolUse`) | Claude is told who is missing, and that this list wins over its instructions; it fixes the file then (for a draft, also any lines wrapped by hand) |
 | You review a draft | the `draft` editor, `ocgen draft`, the `draft` note | A banner (live, as you type) or a warning names the approvers it doesn't @mention |
 | The approvers change | `ocgen edit intent` (and `--show`) | Lists every pending intent and draft that misses one, and how to fix it (`/intent ADR-0007`) |
 | Any time, CI | `ocgen verify` | "/intent approvers in drafts" warns with the files |
@@ -1303,12 +1305,26 @@ issue that links either) that isn't Accepted with every approver approved, it li
 pending and stops — and if you insist, it says plainly that this bypasses the approvers' sign-off
 and waits for your explicit confirmation.
 
+**Every pull request and issue Claude drafts asks for their sign-off**, not only `/intent`'s. The
+project rule has Claude write each one as a draft — `.claude/intent/drafts/pr-<slug>.md` for a pull
+request, `issue-<slug>.md` for an issue — that ends in a **Needs from** section naming the
+approvers, with one `- [ ] @handle — pending` line each. So the checks above hold it to the current
+approvers, `draft` opens it in your browser, and Claude gives you the `gh pr create --body-file …`
+(or `gh issue create`) command: you open the pull request or file the issue, never Claude. An
+`issue-<slug>` draft is an intent without an intent file, so `/deliver` waits for its sign-off like
+any other. When `/deliver` finishes an intent, it drafts the pull request that delivers it as
+`pr-<the intent's draft name>.md`: `Closes #<number>`, links to the intent file and to each
+approver's recorded sign-off, and a pending line for each approver's review of the pull request —
+approving the intent doesn't approve the change.
+
 Inside Claude this rule is enforced by the skills' instructions only. The hard enforcement is
 GitHub's: link the project's **existing** CODEOWNERS with `ocgen edit intent --codeowners
 .github/CODEOWNERS` (or `CODEOWNERS`, `docs/CODEOWNERS` — wherever GitHub reads it; ocgen never
-creates one). ocgen keeps a marked block in it that makes the approvers code owners — of the
-intent directory (`--codeowners-scope intents`, the default), of every file (`all`), or of nothing
-(`off`; the block also goes when there are no approvers or you unlink with `--codeowners off`). The
+creates one). ocgen keeps a marked block in it that makes the approvers code owners — of every
+file (`--codeowners-scope all`, the default, so every pull request needs their review), of the
+intent directory only (`intents`), or of nothing (`off`; the block also goes when there are no
+approvers or you unlink with `--codeowners off`). ocgen 0.9.4 and older defaulted to `intents`; a
+project that saved it keeps it until you change it. The
 `/intent` skill names the file and its rule, and tells Claude never to edit the block; nothing in
 `.claude/` links to it (the next run removes the `.claude/CODEOWNERS` symbolic link that ocgen
 0.7.1 and older kept there). Your own lines are never touched. CODEOWNERS takes the **last**
@@ -1338,7 +1354,7 @@ ocgen follows GitHub's rules for CODEOWNERS, and says when the project doesn't:
 - **Own the CODEOWNERS file.** GitHub's advice is that someone you trust owns the CODEOWNERS file
   (`/.github/CODEOWNERS @owner` or `/.github/ @owner`), so a pull request can't change who reviews
   without their review. ocgen warns when nothing owns the linked file, or a place GitHub reads before
-  it, and names the lines to add (with `--codeowners-scope all` the approvers own them).
+  it, and names the lines to add (with the scope `all`, the default, the approvers own them).
 - **Under 3 MB.** GitHub doesn't load a bigger file; ocgen warns.
 - **What ocgen can't check:** the approvers need explicit write access to the repository (a team
   must also be visible), or GitHub assigns them nothing; the block works only once it's on a pull
@@ -1354,7 +1370,7 @@ ocgen edit intent --max-words 150 --branch develop       # shorter issues; numbe
 ocgen edit intent --trust-domain docs.example.org        # same as `ocgen edit docs --trust` (the project-wide list)
 ocgen edit intent --approver @alice --approver @org/architects  # who must sign off (--remove-approver to drop)
 ocgen edit intent --codeowners .github/CODEOWNERS        # keep the approvers in your CODEOWNERS (off to unlink)
-ocgen edit intent --codeowners-scope all                 # approvers review every change (intents | all | off)
+ocgen edit intent --codeowners-scope intents             # approvers review only the intent files (all | intents | off)
 ocgen edit intent --issue-template                       # edit the issue structure in $EDITOR
 ocgen edit intent --reset-intent-template                # restore ocgen's default
 ```
@@ -2006,7 +2022,7 @@ for a plugin; `--team` is off by default. (The `--base-url` flag is OpenCode-onl
 | Command | What it does |
 |---|---|
 | `ocgen add skill [dir]` | Author a new skill → `.claude/skills/<name>/SKILL.md` (name, description, allowed-tools, body). |
-| `ocgen edit intent -p <dir> [--prefix --digits --dir --max-words --branch --trust-domain/--untrust-domain --approver/--remove-approver --codeowners <path\|off> --codeowners-scope intents\|all\|off --enable/--disable --issue-template --intent-template --reset-…-template --show]` | Configure `/intent` (and `/review-intent`, which shares its settings): intent-file prefix, number width and directory, the issue word limit, the branch checked for taken numbers, the approvers who must sign off (GitHub handles), the project's existing CODEOWNERS it keeps their block in, and the project's issue / intent-file templates. No flags = interactive. |
+| `ocgen edit intent -p <dir> [--prefix --digits --dir --max-words --branch --trust-domain/--untrust-domain --approver/--remove-approver --codeowners <path\|off> --codeowners-scope all\|intents\|off --enable/--disable --issue-template --intent-template --reset-…-template --show]` | Configure `/intent` (and `/review-intent`, which shares its settings): intent-file prefix, number width and directory, the issue word limit, the branch checked for taken numbers, the approvers who must sign off (GitHub handles), the project's existing CODEOWNERS it keeps their block in, and the project's issue / intent-file templates. No flags = interactive. |
 | `ocgen edit docs -p <dir> [--trust/--untrust <host>]… [--show]` | The documentation sites agents may fetch, one list for every agent, skill and team member (both targets). Claude: the WebFetch guard blocks every other site, and trusted ones never ask. OpenCode: each fetch asks, and the agents are told the list. No flags = show. |
 | `ocgen edit permissions -p <dir> --list` | What `settings.json` actually holds, list by list in the order Claude Code checks them, each rule marked ocgen's or yours; flags yours that have no effect (`no effect: ocgen's ask rule wins`) or replace a generated one. Writes nothing. |
 | `ocgen edit permissions -p <dir> [--allow/--ask/--deny/--remove <RULE>]…` | Add or remove your own permission rules. They are saved in the state file and merged with ocgen's in `settings.json` by strictness, deny > ask > allow, so each rule sits in one list: a rule stricter than a generated one takes its place (`--deny "Bash(git push:*)"` moves it from ask to deny), a looser one has no effect, and both are warned about. Generated rules (including the approval-gate guards) can't be removed; removing your stricter rule restores ocgen's. No flags = interactive. |

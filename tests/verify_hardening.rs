@@ -1282,8 +1282,12 @@ fn verify_reports_the_linked_codeowners() {
     // GitHub assigns no code owner without explicit write access.
     assert!(c.detail.contains("write access"), "{c:?}");
 
-    // Nothing owns the CODEOWNERS file itself: GitHub's advice is to.
+    assert!(c.detail.contains("review every change"), "{c:?}");
+
+    // Nothing owns the CODEOWNERS file itself: GitHub's advice is to (with the
+    // scope `all` the approvers own it, so only a narrower scope can miss it).
     fs::write(&owners, "/src/ @dev\n").unwrap();
+    p.claude.intent.codeowners_scope = ocgen::claude::CodeownersScope::Intents;
     p.scaffold(dir.path(), true).unwrap();
     let unowned = verify_lib(dir.path());
     let c = named(&unowned, "CODEOWNERS");

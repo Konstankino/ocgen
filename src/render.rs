@@ -1800,6 +1800,7 @@ impl Project {
             inquire => self.claude.workflow.inquire,
             intent => self.claude.workflow.intent,
             intent_dir => self.claude.intent.dir.trim_end_matches('/'),
+            approvers => self.claude.intent.approvers.join(", "),
             subagent_confidence => self.claude.workflow.subagent_confidence,
             loop_guard_max => self.claude.workflow.loop_guard_max,
             check_cmd => self.claude.workflow.check_cmd.trim(),

@@ -5806,6 +5806,80 @@ fn deliver_waits_for_the_approvers_sign_off() {
     assert!(!read(dir.path(), ".claude/skills/deliver/SKILL.md").contains("sign-off"));
 }
 
+/// Every pull request and issue Claude drafts asks the approvers to sign off,
+/// not only /intent's: it is written as a draft, so the `intent-approvers` hook
+/// checks it against the current approvers, and the user opens it from there.
+#[test]
+fn every_pr_and_issue_draft_asks_the_approvers_to_sign_off() {
+    let flat_rule = |p: Project| {
+        let dir = tempdir().unwrap();
+        p.scaffold(dir.path(), false).unwrap();
+        let rule = read(dir.path(), ".claude/rules/ocgen-workflow.md");
+        rule.split_whitespace().collect::<Vec<_>>().join(" ")
+    };
+    let mut p = claude_default("prsign");
+    p.claude.intent.approvers = vec!["@alice".into(), "@org/architects".into()];
+    let rule = flat_rule(p);
+    for want in [
+        "**Every pull request and issue you draft needs the approvers' sign-off**, not only `/intent`'s",
+        "`.claude/intent/drafts/pr-<slug>.md` for a pull request",
+        "`.claude/intent/drafts/issue-<slug>.md` for an issue",
+        "`## Needs from @alice, @org/architects`",
+        "`- [ ] @handle — pending`",
+        "its list wins",
+        "`gh pr create --title \"<title>\" --body-file .claude/intent/drafts/pr-<slug>.md`",
+        "Never open the pull request or file the issue yourself",
+    ] {
+        assert!(rule.contains(want), "missing {want}: {rule}");
+    }
+
+    let rule = flat_rule(claude_default("prsign-none"));
+    assert!(
+        rule.contains("pr-<slug>.md") && rule.contains("\"No approvers configured\""),
+        "{rule}"
+    );
+
+    let mut p = claude_default("prsign-off");
+    p.claude.workflow.intent = false;
+    assert!(!flat_rule(p).contains("pr-<slug>.md"));
+}
+
+/// The pull request that delivers an intent links the intent and its sign-offs,
+/// and asks the approvers to review the change itself.
+#[test]
+fn deliver_drafts_the_pull_request_of_an_intent_for_the_approvers() {
+    let dir = tempdir().unwrap();
+    let mut p = claude_default("prdeliver");
+    p.claude.intent.approvers = vec!["@alice".into()];
+    p.scaffold(dir.path(), false).unwrap();
+    let md = read(dir.path(), ".claude/skills/deliver/SKILL.md");
+    let synth = md.split("## 6. Synthesize").nth(1).unwrap();
+    // A paragraph of its own, not run into the scope check's.
+    assert!(
+        synth.contains("follow-ups.\n\nIf the goal came from an intent")
+            && synth.contains("I open the pull request.\n\nFor several"),
+        "{synth}"
+    );
+    let flat = synth.split_whitespace().collect::<Vec<_>>().join(" ");
+    for want in [
+        "`.claude/intent/drafts/pr-<the intent's draft name>.md`",
+        "`Closes #<number>`",
+        "each approver's recorded sign-off",
+        "**Needs from** section",
+        "(@alice)",
+        "Their approval of the intent doesn't approve the change",
+        "--body-file",
+    ] {
+        assert!(flat.contains(want), "missing {want}: {flat}");
+    }
+
+    let dir = tempdir().unwrap();
+    let mut p = claude_default("prdeliver-off");
+    p.claude.workflow.intent = false;
+    p.scaffold(dir.path(), false).unwrap();
+    assert!(!read(dir.path(), ".claude/skills/deliver/SKILL.md").contains("pr-<"));
+}
+
 #[test]
 fn trusted_domains_are_https_only() {
     use ocgen::validate::trusted_domain;

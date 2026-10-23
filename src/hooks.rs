@@ -1887,9 +1887,10 @@ impl<'a> Hook<'a> {
     }
 
     /// PostToolUse (Write|Edit|MultiEdit): after a write to a pending /intent file
-    /// or an issue draft, check it against the approvers in the project's state
-    /// now — not the list the session's /intent skill was generated with — and
-    /// tell Claude what is missing, so it fixes the file before anyone files it.
+    /// or a draft (an issue's or a pull request's), check it against the
+    /// approvers in the project's state now — not the list the session's /intent
+    /// skill was generated with — and tell Claude what is missing, so it fixes
+    /// the file before anyone files it.
     /// A draft is also checked for lines wrapped by hand ([`intent::hard_wraps`]):
     /// GitHub shows each newline in an issue as a line break. Never fails a write.
     fn intent_approvers(&self) -> Outcome {
@@ -1936,7 +1937,7 @@ impl<'a> Hook<'a> {
             };
             reasons.push(format!(
                 "ocgen: {rel} {} — but this project's approvers are now {} (`ocgen edit intent`; \
-                 the list can change while /intent runs, so trust this one over your \
+                 the list can change while a session runs, so trust this one over your \
                  instructions). {fix}, and drop \"{}\": their @mentions are how GitHub notifies \
                  them. Fix the file now.",
                 gaps.describe(),

@@ -95,6 +95,15 @@ unresolved, not done. If a coordinator session is named, report status to it wit
 {% if scope_guard %}From the scope check, report the plan coverage (anything still missing, as not done), the blast radius,
 every cut (reverted, or kept with its reason), every Differs for me to accept or reject, and the Defer list as
 follow-ups.
+{% endif %}{% if intent %}
+If the goal came from an intent, draft the pull request that delivers it as
+`.claude/intent/drafts/pr-<the intent's draft name>.md` (the intent's issue draft is
+`.claude/intent/drafts/<the intent's draft name>.md`), by the project rule **Every pull request and issue
+you draft needs the approvers' sign-off**: what changed and how it was checked, `Closes #<number>` from the
+intent's issue link, a link to its intent file, and each approver's recorded sign-off on the intent, with
+its link — then the **Needs from** section, one pending line per approver for their review of this pull
+request{% if approvers %} ({{ approvers }}){% endif %}. Their approval of the intent doesn't approve the change: they review the pull
+request too. Give me the `gh pr create … --body-file` command for it; I open the pull request.
 {% endif %}
 For several independent workstreams at once, run one `claude --worktree <name> --name <name>` session
 per workstream (each running `/deliver`) and coordinate via `/list-agents` + `SendMessage` — see the
