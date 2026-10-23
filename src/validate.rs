@@ -147,6 +147,10 @@ pub fn skill_name(s: &str) -> Result<(), String> {
         Err(format!(
             "'{s}' is one of ocgen's generated workflow skills — pick another name"
         ))
+    } else if crate::claude::RESERVED_SKILL_NAMES.contains(&s) {
+        Err(format!(
+            "'{s}' is reserved for skills synced from claude.ai: Claude Code never loads a skill by that name"
+        ))
     } else if crate::claude::is_valid_skill_name(s) {
         Ok(())
     } else {

@@ -276,7 +276,8 @@ const CLAUDE_FIELDS: &[Field] = &[
                  allowed-tools (scope Bash as Bash(cmd:*)), and make anything with side effects \
                  user-run only. `ocgen add skill` checks these and `ocgen landscape` reports them. \
                  Optional: paths (globs that limit activation), arguments ($name), \
-                 disallowed-tools, effort, background (forked skills). ocgen's own workflows \
+                 disallowed-tools, effort, background: false (a forked skill that waits for its \
+                 result). ocgen's own workflows \
                  (/deliver, /inquire, …) are skills too, so their names are reserved.",
         example: "commit",
     },

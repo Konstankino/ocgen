@@ -75,7 +75,7 @@ pub fn run_add_skill(path_arg: Option<String>) -> Result<()> {
         0,
     )?;
     let seed = if idx < presets.len() {
-        presets[idx].to_skill("", &project.language)
+        project.seed_skill(&presets[idx], "")
     } else {
         Skill {
             body: "Describe the steps this skill performs.\n".to_string(),
@@ -85,7 +85,8 @@ pub fn run_add_skill(path_arg: Option<String>) -> Result<()> {
 
     let skill = check_and_revise(
         &theme,
-        configure_skill(&theme, seed, false, &taken)?,
+        &project,
+        configure_skill(&theme, &project, seed, false, &taken)?,
         false,
         &taken,
     )?;
@@ -137,12 +138,14 @@ fn report_file_issues(target: &Path, skill: &Skill) {
 /// to revise (re-running the prompts seeded with the current values).
 fn check_and_revise(
     theme: &ColorfulTheme,
+    project: &Project,
     mut s: Skill,
     allow_rename: bool,
     taken: &[String],
 ) -> Result<Skill> {
     loop {
-        let issues = ocgen::claude::skill_issues(&s);
+        let mut issues = ocgen::claude::skill_issues(&s);
+        issues.extend(project.skill_fork_issues(&s));
         if issues.is_empty() {
             ui::success("skill checks passed");
             return Ok(s);
@@ -159,12 +162,14 @@ fn check_and_revise(
         )? {
             return Ok(s);
         }
-        s = configure_skill(theme, s, allow_rename, taken)?;
+        s = configure_skill(theme, project, s, allow_rename, taken)?;
     }
 }
 
 fn skill_next_steps(name: &str) {
-    ui::tip("test that it triggers: in Claude Code, run the skill-creator skill on it — most skills that \"don't work\" never trigger");
+    ui::tip("a running Claude Code session picks it up at once (it watches .claude/skills/); if it doesn't, type /reload-skills there");
+    ui::tip("test that it triggers: in Claude Code, run the skill-creator skill on it — most skills that \"don't work\" never trigger. For a baseline, run the same prompts with it set to \"off\" in skillOverrides");
+    ui::tip("`ocgen verify` runs `claude plugin validate` on it (a skill whose frontmatter doesn't parse loads with no fields set); /skill-doctor in Claude Code shows what each skill costs and how often it runs");
     ui::tip("test it on each model you'll run it with: smaller models need explicit numbered steps, the strongest do worse when over-prescribed");
     ui::tip(&format!(
         "change it with `ocgen edit skill {name}` — `ocgen doctor` rewrites SKILL.md from saved state; reference.md and scripts/ are yours"
@@ -216,8 +221,8 @@ pub fn run_edit_skill(path: String, name_arg: Option<String>) -> Result<()> {
         .filter(|(i, _)| *i != idx)
         .map(|(_, s)| s.name.clone())
         .collect();
-    let edited = configure_skill(&theme, project.skills[idx].clone(), true, &taken)?;
-    let edited = check_and_revise(&theme, edited, true, &taken)?;
+    let edited = configure_skill(&theme, &project, project.skills[idx].clone(), true, &taken)?;
+    let edited = check_and_revise(&theme, &project, edited, true, &taken)?;
     let new_name = edited.name.clone();
     project.skills[idx] = edited;
     let written = project.scaffold(&target, true)?;
@@ -234,6 +239,7 @@ pub fn run_edit_skill(path: String, name_arg: Option<String>) -> Result<()> {
 
 fn configure_skill(
     theme: &ColorfulTheme,
+    project: &Project,
     mut s: Skill,
     allow_rename: bool,
     taken: &[String],
@@ -302,23 +308,29 @@ fn configure_skill(
         s.agent = ask(
             theme,
             "  Fork into agent",
-            "Subagent type, e.g. Explore / Plan / general-purpose.",
+            "Subagent type: one of this project's agents, or Explore / Plan / general-purpose. A name Claude Code can't find runs on general-purpose, with every tool.",
             Some(if s.agent.is_empty() {
-                "Explore"
+                project.fork_agent_default()
             } else {
                 &s.agent
             }),
             true,
         )?;
-        s.background = ask_confirm(
+        let wait = ask_confirm(
             theme,
-            "  Run the fork in the background?",
-            "You keep working while it runs; its summary arrives when done.",
-            s.background,
+            "  Wait for its result in the same turn (background: false)?",
+            "No: it runs in the background, you keep working, and its summary arrives when done; a background fork gets a smaller tool set (no AskUserQuestion). Yes: the turn waits, with every tool.",
+            s.background == Some(false),
         )?;
+        // A "no" keeps an explicit `background: true` saved before; it's the default.
+        s.background = match (wait, s.background) {
+            (true, _) => Some(false),
+            (false, Some(true)) => Some(true),
+            (false, _) => None,
+        };
     } else {
         s.agent = String::new();
-        s.background = false;
+        s.background = None;
     }
     s.model = ask(
         theme,
@@ -402,7 +414,7 @@ fn pick_tools(theme: &ColorfulTheme, current: &str) -> Result<String> {
     let custom = ask(
         theme,
         "  Extra tool patterns (comma-separated; empty = none)",
-        "e.g. Bash(git commit:*), mcp__github__create_pr",
+        "e.g. Bash(git commit:*), Bash(${CLAUDE_SKILL_DIR}/scripts/check.sh:*) for the skill's own script, mcp__github__create_pr",
         Some(&custom_seed),
         true,
     )?;

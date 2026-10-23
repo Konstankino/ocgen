@@ -1,20 +1,20 @@
 ---
 name: {{ skill.name }}
-description: {{ skill.description }}
+description: {{ skill.description | yaml }}
 {% if skill.when_to_use -%}
-when_to_use: {{ skill.when_to_use }}
+when_to_use: {{ skill.when_to_use | yaml }}
 {% endif -%}
 {% if skill.argument_hint -%}
-argument-hint: {{ skill.argument_hint }}
+argument-hint: {{ skill.argument_hint | yaml }}
 {% endif -%}
 {% if skill.arguments -%}
-arguments: {{ skill.arguments }}
+arguments: {{ skill.arguments | yaml }}
 {% endif -%}
 {% if skill.allowed_tools -%}
-allowed-tools: {{ skill.allowed_tools }}
+allowed-tools: {{ skill.allowed_tools | yaml }}
 {% endif -%}
 {% if skill.disallowed_tools -%}
-disallowed-tools: {{ skill.disallowed_tools }}
+disallowed-tools: {{ skill.disallowed_tools | yaml }}
 {% endif -%}
 {% if skill.disable_model_invocation -%}
 disable-model-invocation: true
@@ -23,23 +23,25 @@ disable-model-invocation: true
 user-invocable: false
 {% endif -%}
 {% if skill.model -%}
-model: {{ skill.model }}
+model: {{ skill.model | yaml }}
 {% endif -%}
 {% if skill.effort -%}
-effort: {{ skill.effort }}
+effort: {{ skill.effort | yaml }}
 {% endif -%}
 {% if paths -%}
 paths:
-{% for p in paths %}  - "{{ p }}"
+{% for p in paths %}  - {{ p | yaml_quoted }}
 {% endfor -%}
 {% endif -%}
 {% if skill.context_fork -%}
 context: fork
 {% if skill.agent -%}
-agent: {{ skill.agent }}
+agent: {{ skill.agent | yaml }}
 {% endif -%}
-{% if skill.background -%}
+{% if skill.background is true -%}
 background: true
+{% elif skill.background is false -%}
+background: false
 {% endif -%}
 {% endif -%}
 ---
