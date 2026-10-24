@@ -1234,6 +1234,14 @@ fn write_ledger(dir: &Path) {
     fs::write(notes.join("flow.md"), FLOW_LEDGER).unwrap();
 }
 
+fn write_open_board(dir: &Path) {
+    write_board(
+        dir,
+        "0123456789abcdef0123456789abcdef01234567",
+        "APPROVED session=s",
+    );
+}
+
 #[test]
 fn inquire_notes_parity() {
     let step = |payload: &'static str, setup: fn(&Path)| Step {
@@ -1257,6 +1265,11 @@ fn inquire_notes_parity() {
             step(
                 r#"{"tool_name":"Edit","tool_input":{"file_path":"{dir}/.claude/notes/flow.html"}}"#,
                 none,
+            ),
+            // The /workstreams board gets its page the same way: silently.
+            step(
+                r#"{"tool_name":"Write","tool_input":{"file_path":"{dir}/.claude/workstreams/board.md"}}"#,
+                write_open_board,
             ),
             // A prompt that isn't the word passes untouched.
             step(
@@ -1406,7 +1419,7 @@ fn inquire_notes_renders_the_view_and_the_script_is_a_no_op() {
     assert_eq!(o.code, 0);
     assert!(o.stderr.starts_with("inquire-notes:"), "{o:?}");
     assert!(ocgen::hooks::NAMES.contains(&"inquire-notes"));
-    assert_eq!(ocgen::hooks::PROTOCOL, "ocgen-hooks 20");
+    assert_eq!(ocgen::hooks::PROTOCOL, "ocgen-hooks 21");
 }
 
 // ---------------------------------------------------------- intent-draft --

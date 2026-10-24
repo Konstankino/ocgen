@@ -23,7 +23,7 @@ use serde_json::Value;
 /// embedded in the ocgen that generated the project (hook scripts can't be
 /// overridden from the template dir), so they implement the same protocol —
 /// unless someone edits the project's copies by hand.
-pub const PROTOCOL: &str = "ocgen-hooks 20";
+pub const PROTOCOL: &str = "ocgen-hooks 21";
 
 /// How long Claude Code lets a gate that runs the project check (SubagentStop,
 /// TaskCompleted) take, in seconds: its hook `timeout`. Claude Code treats a
@@ -1396,8 +1396,10 @@ impl<'a> Hook<'a> {
 
     /// PostToolUse (Write|Edit|MultiEdit): when an /inquire ledger was written,
     /// render its HTML view and show it (refresh an open tab, else open one), and
-    /// remember it as the session's. Never blocks — the ledger is already
-    /// written; problems are one stderr line.
+    /// remember it as the session's. A /recap report and an /intent reading
+    /// copy get their read-only page the same way, opened once as a file; the
+    /// /workstreams board's is live, through the viewer for its folder. Never
+    /// blocks — the document is already written; problems are one stderr line.
     ///
     /// UserPromptSubmit: the word `note` or `notes`, sent on its own, opens the
     /// ledger there is — or, with several, their list, with the one this session
@@ -1521,6 +1523,9 @@ impl<'a> Hook<'a> {
                     None => notes::show_file_page(&md, self.env, false),
                 }
             }
+            // The board's page is live through the viewer for its folder, or
+            // a file once without one.
+            notes::versions::Kind::Board => notes::board::show(&md, self.env, false),
             _ if first => notes::show_file_page(&md, self.env, false),
             _ => Ok(notes::Shown::Off),
         };

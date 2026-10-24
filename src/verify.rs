@@ -1917,7 +1917,7 @@ fn notes_view(p: &Probe) -> Check {
         return check(
             name,
             Status::Skip,
-            "/inquire, /recap and reading copies not enabled",
+            "/inquire, /recap, /workstreams and reading copies not enabled",
         );
     };
     if let Some(what) = p.hand_edited(&event, &group, &cmd) {

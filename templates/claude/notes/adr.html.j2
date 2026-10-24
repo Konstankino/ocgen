@@ -66,6 +66,160 @@ body.intent-file { background: var(--bg); color: var(--z-text);
 .markdown-body hr { border: 0; border-top: 1px solid var(--border); margin: 24px 0; }
 .markdown-body kbd { font: 12px ui-monospace, Menlo, Consolas, monospace; padding: 2px 5px; border: 1px solid var(--border-strong);
   border-bottom-width: 2px; border-radius: 6px; background: var(--surface-2); }
+/* the /workstreams board: one row per workstream, nothing split mid-word — the
+   page is wider, and a table wider still scrolls sideways */
+.intent-file.board main { max-width: 90rem; }
+.markdown-body table.board { font-size: 14px; }
+.markdown-body table.board th, .markdown-body table.board td { vertical-align: top; white-space: nowrap;
+  overflow-wrap: normal; word-break: normal; }
+.markdown-body table.board td.more { white-space: normal; }
+.markdown-body table.board td.more .pair { white-space: nowrap; }
+.markdown-body table.board td.slug .files { display: block; font-size: 12.5px; color: var(--muted); }
+.markdown-body table.board .gate-ready { color: var(--accent); font-weight: 600; }
+.markdown-body table.board .gate-pending { color: var(--c-orange); }
+.markdown-body table.board .gate-merged, .markdown-body table.board .state-integrated { color: var(--muted); }
+/* the summary above the table: one segment per workstream, and the counts */
+.intent-file.board .board-summary { margin: 0 0 14px; }
+.intent-file.board .board-strip { display: flex; gap: 3px; height: 8px; margin: 2px 0 10px; }
+.intent-file.board .board-strip .seg { flex: 1 1 0; border-radius: 4px; background: var(--border-strong); transform-origin: left; animation: board-grow .5s ease-out; }
+.intent-file.board .board-stats { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 0; padding: 0; list-style: none; font-size: 13.5px; color: var(--muted); }
+.intent-file.board .board-stats b { font-size: 17px; font-weight: 600; color: var(--text); margin-right: 2px; }
+.intent-file.board .seg, .intent-file.board .board-stats li { --c: var(--border-strong); }
+.intent-file.board .state-planned { --c: var(--faint); }
+.intent-file.board .state-dispatched, .intent-file.board .state-reported { --c: var(--c-orange); }
+.intent-file.board .state-checked, .intent-file.board .gate-ready { --c: var(--accent); }
+.intent-file.board .state-integrated { --c: color-mix(in oklab, var(--accent) 55%, var(--muted)); }
+.intent-file.board .board-strip .seg { background: var(--c); }
+.intent-file.board .board-stats li::before { content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--c); margin-right: 6px; vertical-align: 1px; }
+/* where each workstream is on its way: five steps, the done ones filled */
+.markdown-body table.board .track { display: flex; gap: 4px; margin: 5px 0 0; padding: 0; list-style: none; }
+.markdown-body table.board .track li { width: 7px; height: 7px; border-radius: 50%; border: 1px solid var(--border-strong); animation: board-step .3s ease-out both; animation-delay: calc(var(--i, 0) * 60ms); }
+.markdown-body table.board .track li.done { background: var(--accent); border-color: var(--accent); opacity: .55; }
+.markdown-body table.board .track li.now { opacity: 1; box-shadow: 0 0 0 2px color-mix(in oklab, var(--accent) 35%, transparent); }
+/* the gate: a dot that is filled when the branch may merge, a tick once it has */
+.markdown-body table.board .gate::before { content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: 0; border: 1.5px solid currentColor; }
+.markdown-body table.board .gate-ready::before { background: currentColor; }
+.markdown-body table.board .gate-merged::before { content: "✓"; width: auto; height: auto; border: 0; border-radius: 0; font-size: 12px; line-height: 1; }
+/* a dependency links to its row, which lights up when followed */
+.markdown-body table.board a.after { color: var(--accent); text-decoration: none; }
+.markdown-body table.board a.after::before { content: "↳ "; color: var(--muted); }
+.markdown-body table.board a.after:hover { text-decoration: underline; }
+.markdown-body table.board tr:target > td { background: color-mix(in oklab, var(--accent) 18%, transparent); }
+/* panes: every section folds, with a chevron that turns */
+.intent-file.board details.pane > summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 8px; margin: 24px 0 16px; padding-bottom: .3em; border-bottom: 1px solid var(--border); }
+.intent-file.board details.pane > summary::-webkit-details-marker { display: none; }
+.intent-file.board details.pane > summary h2 { margin: 0; padding: 0; border: 0; }
+.intent-file.board details.pane > summary .count { font-size: 13.5px; color: var(--muted); }
+.intent-file.board details.pane > summary::before { content: ""; width: 10px; height: 10px; flex: none; border-right: 2px solid var(--muted); border-bottom: 2px solid var(--muted); transform: rotate(-45deg); transition: transform .25s ease; margin: 0 4px 2px 2px; }
+.intent-file.board details.pane[open] > summary::before { transform: rotate(45deg); }
+.intent-file.board details.pane:not([open]) > summary { opacity: .75; }
+/* the agents: a card per worker — who, on what, where it is, what needs an eye */
+.intent-file.board .agents { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; margin: 0 0 16px; padding: 0; }
+.intent-file.board .agents > details { margin: 0; padding: 10px 14px; border: 1px solid var(--border); border-left: 4px solid var(--border-strong); border-radius: 10px; background: var(--surface); }
+.intent-file.board .agents > details.has-issues { border-left-color: var(--c-orange); }
+.intent-file.board .agents > details.agent-unassigned { border-left-color: var(--faint); border-style: dashed; }
+.intent-file.board .agents > details[hidden] { display: none; }
+.intent-file.board .agent-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; cursor: pointer; list-style: none; }
+.intent-file.board .agent-head::-webkit-details-marker { display: none; }
+.intent-file.board .agent-head .ico { flex: none; }
+.intent-file.board .agent-head > .ico:last-child { margin-left: auto; width: 16px; height: 16px; }
+.intent-file.board .agent-body { margin-top: 2px; }
+/* icons: a worker at it turns, a tick draws itself, a warning nods */
+.intent-file.board .ico-session, .intent-file.board .ico-subagent, .intent-file.board .ico-worker, .intent-file.board .ico-unassigned { color: var(--muted); }
+.intent-file.board .ico-working { color: var(--accent); animation: board-turn 1.6s linear infinite; }
+.intent-file.board .ico-clock { color: var(--faint); }
+.intent-file.board .ico-tick { color: var(--accent); }
+.intent-file.board .ico-tick path { stroke-dasharray: 1; stroke-dashoffset: 1; animation: board-draw .6s ease-out .15s forwards; }
+.intent-file.board .ico-warn { color: var(--c-orange); animation: board-nod .9s ease-in-out .3s 2; }
+.markdown-body table.board .gate-merged .ico { width: 12px; height: 12px; margin-left: 4px; vertical-align: -1px; }
+.markdown-body table.board .gate-merged::before { content: none; }
+/* the selection: one workstream, its agents, its row, its log lines */
+.intent-file.board .selection { margin: 0 0 12px; font-size: 13.5px; color: var(--muted); }
+.intent-file.board .selection[hidden] { display: none; }
+.intent-file.board .selection b { color: var(--text); }
+.intent-file.board .selection button { font: inherit; color: var(--accent); background: transparent; border: 1px solid var(--border); border-radius: 999px; padding: 2px 10px; margin-left: 6px; cursor: pointer; }
+.intent-file.board .selection button:hover { background: var(--surface-2); }
+.intent-file.board .selection button::before { content: "× "; color: var(--muted); }
+.intent-file.board table.board tbody tr[data-slug]:not([data-slug=""]) { cursor: pointer; }
+.intent-file.board table.board tbody tr[data-slug]:not([data-slug=""]):hover > td { background: color-mix(in oklab, var(--accent) 7%, transparent); }
+.intent-file.board .pick { color: var(--text); font-weight: 600; text-decoration: none; }
+.intent-file.board .pick:hover { color: var(--accent); }
+.intent-file.board .board-strip .seg[data-slug]:not([data-slug=""]) { cursor: pointer; }
+.intent-file.board table.board tr > td, .intent-file.board .board-strip .seg { transition: opacity .25s ease, background-color .25s ease; }
+.intent-file.board.selected table.board tr.dim > td, .intent-file.board.selected .board-strip .seg.dim { opacity: .35; }
+.intent-file.board.selected table.board tr.hit > td { background: color-mix(in oklab, var(--accent) 14%, transparent); }
+.intent-file.board.selected .markdown-body li.hit { font-weight: 600; }
+/* a line that no longer belongs folds away instead of vanishing */
+.intent-file.board .sec[data-sec="log"] li, .intent-file.board .sec[data-sec="differs"] li { max-height: 12em; transition: max-height .3s ease, opacity .2s ease, margin .3s ease; }
+.intent-file.board .sec[data-sec="log"] li.gone, .intent-file.board .sec[data-sec="differs"] li.gone { max-height: 0; opacity: 0; margin: 0; overflow: hidden; pointer-events: none; }
+.intent-file.board .agents > details { transition: opacity .25s ease, transform .25s ease, border-color .25s ease; }
+.intent-file.board .agents > details.dim { opacity: .45; }
+.intent-file.board .agents > details.hit { border-color: var(--accent); }
+/* a change on disk is swapped in, so the scroll stays; the entrance animations
+   are for the first look, not for every change */
+.intent-file.board.swapped .board-strip .seg, .intent-file.board.swapped table.board .track li, .intent-file.board.swapped .ico-tick path { animation: none; stroke-dashoffset: 0; }
+::view-transition-old(root), ::view-transition-new(root) { animation-duration: .25s; }
+@media (prefers-reduced-motion: no-preference) { html:has(body.board) { scroll-behavior: smooth; } }
+.intent-file.board .agents .text { margin: 10px 0 0; font-size: 13px; }
+.intent-file.board .agents .text > summary { cursor: pointer; color: var(--muted); }
+.intent-file.board .agents .text pre { margin: 6px 0 0; padding: 10px 12px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12.5px; }
+.intent-file.board .agent-head .kind { font-size: 11.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); border: 1px solid var(--border); border-radius: 999px; padding: 1px 8px; }
+.intent-file.board .agent-head .name { font-weight: 600; }
+.intent-file.board .agent-head .on { color: var(--muted); }
+.intent-file.board .agent-head .on a { color: var(--accent); text-decoration: none; }
+.intent-file.board .agent-head .on a:hover { text-decoration: underline; }
+.intent-file.board .agent-head .state, .intent-file.board .agent-head .gate { font-size: 13px; white-space: nowrap; }
+.intent-file.board .agents .goal { margin: 8px 0 0; font-size: 14px; color: var(--z-text); }
+.intent-file.board .agents .facts { display: grid; grid-template-columns: max-content 1fr; gap: 2px 10px; margin: 10px 0 0; font-size: 13px; }
+.intent-file.board .agents .facts dt { color: var(--muted); }
+.intent-file.board .agents .facts dd { margin: 0; overflow-wrap: anywhere; }
+.intent-file.board .agents .facts.none { margin: 10px 0 0; color: var(--faint); font-style: italic; }
+.intent-file.board .agents .ok { margin: 10px 0 0; font-size: 13px; color: var(--muted); }
+.intent-file.board .agents .ok::before { content: "✓ "; color: var(--accent); }
+.intent-file.board .agents .issues { margin: 10px 0 0; padding: 0 0 0 20px; font-size: 13.5px; list-style: none; }
+.intent-file.board .agents .issues li { position: relative; color: var(--text); }
+.intent-file.board .agents .issues li::before { content: "!"; position: absolute; left: -20px; top: 0; width: 14px; text-align: center; font-weight: 700; color: var(--on-color); background: var(--c-orange); border-radius: 4px; font-size: 11px; line-height: 16px; }
+.intent-file.board .escalations-note { margin: 4px 0 6px; font-size: 13.5px; color: var(--muted); }
+.intent-file.board .escalations { margin: 0 0 16px; padding-left: 14px; border-left: 3px solid var(--c-red); list-style: none; font-size: 13.5px; }
+.intent-file.board .board-stats li.issues { --c: var(--c-orange); }
+/* what to do next, and a report posted but not yet collected */
+.intent-file.board .next { margin: 0 0 16px; padding-left: 1.6em; font-size: 14.5px; }
+.intent-file.board .next li { margin: 0 0 6px; }
+.intent-file.board .next li::marker { color: var(--accent); font-weight: 600; }
+.intent-file.board .agents .posted { margin: 8px 0 0; font-size: 12.5px; color: var(--c-orange); }
+.intent-file.board .agents .posted::before { content: "●"; margin-right: 6px; animation: board-breathe 1.8s ease-in-out infinite; }
+/* the log as a timeline, the differs as flags */
+.intent-file.board .sec[data-sec="log"] ul { list-style: none; padding-left: 20px; border-left: 2px solid var(--border); }
+.intent-file.board .sec[data-sec="log"] li { position: relative; }
+.intent-file.board .sec[data-sec="log"] li::before { content: ""; position: absolute; left: -25px; top: .6em; width: 8px; height: 8px; border-radius: 50%; background: var(--border-strong); }
+.intent-file.board .sec[data-sec="log"] li:last-child::before { background: var(--accent); }
+.intent-file.board .sec[data-sec="differs"] ul { list-style: none; padding-left: 14px; border-left: 3px solid var(--c-orange); }
+@keyframes board-grow { from { transform: scaleX(0); } to { transform: none; } }
+@keyframes board-turn { to { transform: rotate(360deg); } }
+@keyframes board-draw { to { stroke-dashoffset: 0; } }
+@keyframes board-nod { 0%, 100% { transform: none; } 30% { transform: rotate(-8deg); } 60% { transform: rotate(8deg); } }
+@keyframes board-step { from { opacity: 0; transform: scale(.4); } }
+/* what moved since the tab last showed the board: a row or a field that changed
+   fades back from the accent, a new row, log line or differs slides in, and a
+   branch that is ready to merge breathes a few times */
+@keyframes board-flash { from { background-color: color-mix(in oklab, var(--accent) 32%, transparent); } to { background-color: transparent; } }
+@keyframes board-in { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
+@keyframes board-breathe { 0%, 100% { opacity: 1; } 50% { opacity: .45; } }
+.intent-file.board #page { animation: board-in .35s ease-out; }
+.markdown-body table.board tr.changed > td, .intent-file.board .fields li.changed, .intent-file.board .markdown-body li.added {
+  animation: board-flash 2.4s ease-out; }
+.markdown-body table.board tr.added > td { animation: board-in .4s ease-out, board-flash 2.4s ease-out; }
+.markdown-body table.board .gate-ready { animation: board-breathe 2.4s ease-in-out 3; }
+@media (prefers-reduced-motion: reduce) {
+  .intent-file.board #page, .markdown-body table.board tr > td, .intent-file.board .fields li,
+  .intent-file.board .markdown-body li, .markdown-body table.board .gate-ready,
+  .intent-file.board .board-strip .seg, .markdown-body table.board .track li,
+  .intent-file.board .ico-working, .intent-file.board .ico-warn, .intent-file.board .agents .posted::before { animation: none; }
+  .intent-file.board .ico-tick path { animation: none; stroke-dashoffset: 0; }
+  .intent-file.board details.pane > summary::before { transition: none; }
+  .intent-file.board table.board tr > td, .intent-file.board .board-strip .seg, .intent-file.board .agents > details,
+  .intent-file.board .sec[data-sec="log"] li, .intent-file.board .sec[data-sec="differs"] li { transition: none; }
+}
 .intent-file footer { margin-top: 36px; color: var(--faint); font-size: 12.5px; line-height: 1.7; }
 .intent-file footer code { overflow-wrap: anywhere; }
 @media (max-width: 600px) {
@@ -73,7 +227,7 @@ body.intent-file { background: var(--bg); color: var(--z-text);
 }
 </style>
 </head>
-<body class="intent-file" data-rev="{{ rev }}" data-slug="{{ slug }}">
+<body class="intent-file{% if board %} board{% endif %}" data-rev="{{ rev }}" data-slug="{{ slug }}">
 {%- if live %}
 <div class="offline">{{ offline }}</div>
 {%- endif %}
@@ -109,6 +263,7 @@ body.intent-file { background: var(--bg); color: var(--z-text);
 (function () {
   "use strict";
   var page = document.body;
+  var softReload = null;
   function palette(p) {
     document.documentElement.setAttribute("data-palette", p);
     ["black", "white"].forEach(function (q) {
@@ -133,15 +288,168 @@ body.intent-file { background: var(--bg); color: var(--z-text);
   document.getElementById("view-page").addEventListener("click", function () { view(false, true); });
   document.getElementById("view-source").addEventListener("click", function () { view(true, true); });
   if (location.hash === "#markdown") view(true, false);
+{%- if board %}
+
+  var reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  // What is shown changes through a view transition where there is one:
+  // nothing jumps, the page cross-fades and the named rows and cards glide.
+  function smooth(change) {
+    if (!reduced && document.startViewTransition) { document.startViewTransition(change); } else { change(); }
+  }
+  var text = function (el) { return el.textContent.replace(/\s+/g, " ").trim(); };
+
+  // Mark what moved since this tab last showed the board — a row or a header
+  // field that changed, a row, a log line or a differs line that is new — so
+  // the eye lands on it. The last state lives in this tab only; a first look
+  // marks nothing.
+  var movedKey = "ocgen-board:" + location.pathname;
+  function markMoved() {
+    try {
+      var before = JSON.parse(sessionStorage.getItem(movedKey) || "null");
+      var now = { rows: {}, fields: {}, items: {} };
+      var mark = function (el, cls) { if (before) el.classList.add(cls); };
+      document.querySelectorAll("table.board tbody tr").forEach(function (tr, i) {
+        var slug = tr.querySelector("td.slug .pick, td.slug b");
+        var id = slug ? text(slug) : "#" + i;
+        now.rows[id] = text(tr);
+        if (before && !(id in before.rows)) mark(tr, "added");
+        else if (before && before.rows[id] !== now.rows[id]) mark(tr, "changed");
+      });
+      document.querySelectorAll(".fields li").forEach(function (li) {
+        var k = li.querySelector("b");
+        var id = k ? text(k) : text(li);
+        now.fields[id] = text(li);
+        if (before && id in before.fields && before.fields[id] !== now.fields[id]) mark(li, "changed");
+      });
+      document.querySelectorAll(".markdown-body li").forEach(function (li) {
+        var t = text(li);
+        now.items[t] = 1;
+        if (before && !(t in before.items)) mark(li, "added");
+      });
+      sessionStorage.setItem(movedKey, JSON.stringify(now));
+    } catch (e) {}
+  }
+
+  // Panes fold, and stay as left across changes (this browser remembers).
+  var panesKey = "ocgen-board-panes:" + location.pathname;
+  var panes = {};
+  try { panes = JSON.parse(localStorage.getItem(panesKey) || "{}") || {}; } catch (e) {}
+  function bindPanes() {
+    document.querySelectorAll("details[data-pane]").forEach(function (d) {
+      var name = d.getAttribute("data-pane");
+      if (name in panes) d.open = !!panes[name];
+      if (d.getAttribute("data-bound")) return;
+      d.setAttribute("data-bound", "1");
+      d.addEventListener("toggle", function () {
+        panes[name] = d.open;
+        try { localStorage.setItem(panesKey, JSON.stringify(panes)); } catch (e) {}
+      });
+    });
+  }
+
+  // Select a workstream (#ws-<slug>, kept in the address so the choice
+  // survives every change): its agents open in front, the others folded, its
+  // row and strip segment lit, the other rows dimmed, only the log and differs
+  // lines that name it.
+  function select(slug) {
+    page.classList.toggle("selected", !!slug);
+    var bar = document.querySelector(".selection"), which = document.querySelector(".selection .which");
+    if (bar) { bar.hidden = !slug; if (which) which.textContent = slug; }
+    // Its cards open in front; the others fold to their head line and dim,
+    // staying where they are so nothing below them moves.
+    document.querySelectorAll(".agents > details").forEach(function (d) {
+      var mine = !slug || d.getAttribute("data-slug") === slug;
+      d.classList.toggle("dim", !mine);
+      d.classList.toggle("hit", !!slug && mine);
+      if (slug) d.open = mine;
+    });
+    document.querySelectorAll("table.board tbody tr, .board-strip .seg").forEach(function (el) {
+      var mine = el.getAttribute("data-slug") === slug;
+      el.classList.toggle("hit", !!slug && mine);
+      el.classList.toggle("dim", !!slug && !mine);
+    });
+    document.querySelectorAll(".sec[data-sec='log'] li, .sec[data-sec='differs'] li").forEach(function (li) {
+      var mine = !!slug && li.textContent.indexOf(slug) !== -1;
+      li.classList.toggle("hit", mine);
+      li.classList.toggle("gone", !!slug && !mine);
+    });
+  }
+  function selected() { var m = location.hash.match(/^#ws-([a-z0-9][a-z0-9-]*)$/); return m ? m[1] : ""; }
+  function setHash(h) { try { history.replaceState(null, "", h || location.pathname + location.search); } catch (e) {} }
+  // A row, its slug, a strip segment or an After link selects — again,
+  // unselects — without the jump a fragment would make; an After link glides
+  // to its row. A link to a brief or a report is left to itself.
+  document.addEventListener("click", function (e) {
+    if (e.target.closest("a:not(.pick):not(.after), button, summary")) return;
+    var a = e.target.closest("a.pick, a.after, .board-strip .seg[data-slug], table.board tbody tr[data-slug]");
+    if (!a) return;
+    var slug = a.getAttribute("data-slug") || (a.getAttribute("href") || "").replace(/^#ws-/, "");
+    if (!slug) return;
+    e.preventDefault();
+    var next = slug === selected() ? "" : slug;
+    setHash(next && "#ws-" + next);
+    smooth(function () { select(next); });
+    if (a.classList.contains("after")) {
+      var row = document.getElementById("ws-" + slug);
+      if (row) row.scrollIntoView({ behavior: reduced ? "auto" : "smooth", block: "center" });
+    }
+  });
+  document.addEventListener("click", function (e) {
+    if (!e.target.closest("#show-all")) return;
+    setHash("");
+    smooth(function () { select(""); });
+  });
+  window.addEventListener("hashchange", function () { smooth(function () { select(selected()); }); });
+
+  // A change on disk: fetch the page and swap its content in, never reload —
+  // the scroll stays, the open panes stay, the rest cross-fades.
+  softReload = function (reconnect) {
+    fetch(location.pathname + location.search, { cache: "no-store", credentials: "same-origin" })
+      .then(function (r) { if (!r.ok) throw new Error(r.status); return r.text(); })
+      .then(function (html) {
+        var doc = new DOMParser().parseFromString(html, "text/html");
+        var fresh = doc.getElementById("page"), md = doc.getElementById("markdown");
+        if (!fresh || !md) throw new Error("no page");
+        // The swap, the marks, the panes, the selection and the scroll, all
+        // in one step; the stream reconnects at the new revision only once
+        // that step has run (a view transition runs it a moment later).
+        var y = window.scrollY;
+        smooth(function () {
+          page.classList.add("swapped");
+          article.innerHTML = fresh.innerHTML;
+          document.getElementById("markdown").innerHTML = md.innerHTML;
+          page.setAttribute("data-rev", doc.body.getAttribute("data-rev") || "");
+          document.title = doc.title;
+          markMoved();
+          bindPanes();
+          select(selected());
+          window.scrollTo(0, y);
+          reconnect();
+        });
+      })
+      .catch(function () { location.reload(); });
+  };
+
+  markMoved();
+  bindPanes();
+  select(selected());
+{%- endif %}
 {%- if live %}
 
-  // The file changes on disk (or the word is sent again): show it as it is now.
+  // The file changes on disk (or the word is sent again): show it as it is
+  // now — the board swaps the new content in and reconnects at its revision.
   var errors = 0;
-  var es = new EventSource("events?topic=" + encodeURIComponent(page.getAttribute("data-slug")) +
-    "&rev=" + encodeURIComponent(page.getAttribute("data-rev")));
-  es.addEventListener("reload", function () { es.close(); location.reload(); });
-  es.onopen = function () { errors = 0; page.removeAttribute("data-viewer"); };
-  es.onerror = function () { if (++errors > 5) page.setAttribute("data-viewer", "offline"); };
+  function connect() {
+    var es = new EventSource("events?topic=" + encodeURIComponent(page.getAttribute("data-slug")) +
+      "&rev=" + encodeURIComponent(page.getAttribute("data-rev")));
+    es.addEventListener("reload", function () {
+      es.close();
+      if (typeof softReload === "function") softReload(connect); else location.reload();
+    });
+    es.onopen = function () { errors = 0; page.removeAttribute("data-viewer"); };
+    es.onerror = function () { if (++errors > 5) page.setAttribute("data-viewer", "offline"); };
+  }
+  connect();
   window.addEventListener("pageshow", function (e) { if (e.persisted) location.reload(); });
 {%- endif %}
 })();

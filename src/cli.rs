@@ -157,7 +157,9 @@ pub enum Command {
     ///
     /// Each ledger has a sibling .html that ocgen renders from the Markdown. A
     /// hook re-renders it after every write and refreshes the browser tab that
-    /// shows it (opening one when none does); these commands do it by hand.
+    /// shows it (opening one when none does); these commands do it by hand. The
+    /// /recap reports, /intent reading copies and the /workstreams board get a
+    /// read-only page the same way.
     #[command(after_help = NOTES_EXAMPLES)]
     Notes {
         #[command(subcommand)]
@@ -232,6 +234,7 @@ const NOTES_EXAMPLES: &str = "Examples:
   ocgen notes open                       the most recently updated ledger
   ocgen notes open request-flow          by file name (slug)
   ocgen notes open \"request flow\"        by its Topic: line
+  ocgen notes open workstreams           the /workstreams board (.claude/workstreams/board.md)
   ocgen notes render .claude/notes/request-flow.md
 
 Environment:
@@ -263,18 +266,21 @@ pub enum SandboxAction {
 #[derive(Subcommand)]
 pub enum NotesAction {
     /// Render a ledger and show it: refresh the tab that shows it, or open one.
+    /// `workstreams` (or the board's path) shows the /workstreams board instead.
     Open {
-        /// Ledger slug or topic (default: the most recently updated ledger).
+        /// Ledger slug or topic (default: the most recently updated ledger);
+        /// `workstreams` for the /workstreams board.
         topic: Option<String>,
         /// Directory inside the project (default: current dir).
         #[arg(long, short, default_value = ".")]
         path: String,
     },
-    /// Render ledgers (and /intent reading copies) to their HTML pages without
-    /// showing them.
+    /// Render ledgers (/recap reports, /intent reading copies and the
+    /// /workstreams board too) to their HTML pages without showing them.
     Render {
-        /// Ledger files (.claude/notes/<topic>.md) or /intent reading copies
-        /// (.claude/intent/view/<name>.md).
+        /// Ledger files (.claude/notes/<topic>.md), /recap reports, /intent
+        /// reading copies (.claude/intent/view/<name>.md) or the /workstreams
+        /// board (.claude/workstreams/board.md).
         #[arg(required = true)]
         files: Vec<String>,
     },

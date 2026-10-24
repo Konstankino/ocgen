@@ -960,10 +960,13 @@ impl Project {
             || self.writes_reading_copies()
     }
 
-    /// Whether the notes hook runs: it renders /inquire ledgers, /recap reports
-    /// and /intent reading copies as pages.
+    /// Whether the notes hook runs: it renders /inquire ledgers, /recap reports,
+    /// /intent reading copies and the /workstreams board as pages.
     pub fn renders_notes(&self) -> bool {
-        self.claude.workflow.inquire || self.claude.workflow.recap || self.writes_reading_copies()
+        self.claude.workflow.inquire
+            || self.claude.workflow.recap
+            || self.claude.workflow.workstreams
+            || self.writes_reading_copies()
     }
 
     /// Whether the sandbox withholds the user's gh login from Claude's shell, so
@@ -1728,8 +1731,8 @@ impl Project {
         // sites, over HTTPS; this PreToolUse hook enforces it.
         let body = templates::load_embedded("claude/hooks/https-only-fetch.sh")?;
         components.push(("hooks/https-only-fetch.sh".to_string(), body));
-        // /inquire ledgers and /intent reading copies get an HTML view, rendered
-        // and shown by this hook.
+        // /inquire ledgers, /recap reports, /intent reading copies and the
+        // /workstreams board get an HTML view, rendered and shown by this hook.
         if self.renders_notes() {
             let body = templates::load_embedded("claude/hooks/inquire-notes.sh")?;
             components.push(("hooks/inquire-notes.sh".to_string(), body));
@@ -2642,9 +2645,10 @@ impl Project {
             );
         }
         if self.renders_notes() {
-            // Re-render a ledger's, a recap report's or a reading copy's HTML view
-            // after each write and show it (and remember the ledger as the
-            // session's); tell Claude which language version is now missing.
+            // Re-render a ledger's, a recap report's, a reading copy's or the
+            // workstreams board's HTML view after each write and show it (and
+            // remember the ledger as the session's); tell Claude which language
+            // version is now missing.
             push(
                 "PostToolUse",
                 json!({ "matcher": "Write|Edit|MultiEdit", "hooks": [ command_hook(hook_cmd(prefix, dir, "inquire-notes.sh")) ] }),

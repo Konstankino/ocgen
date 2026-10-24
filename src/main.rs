@@ -311,36 +311,43 @@ fn run_draft(name: Option<&str>, path: &str) -> Result<()> {
 }
 
 fn run_notes(action: NotesAction) -> Result<()> {
-    use ocgen::notes::{self, Shown};
+    use ocgen::notes;
     match action {
         NotesAction::Open { topic, path } => {
+            let env: std::collections::HashMap<String, String> = std::env::vars().collect();
+            // The /workstreams board: a file page, opened again on request.
+            if let Some(t) = topic.as_deref().filter(|t| notes::board::wanted(t)) {
+                let md = if t.trim().eq_ignore_ascii_case(notes::board::WORD) {
+                    notes::board::find(std::path::Path::new(&path)).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "no .claude/workstreams/board.md above {path} — /workstreams writes it"
+                        )
+                    })?
+                } else {
+                    std::path::PathBuf::from(t.trim())
+                };
+                let html = notes::render_file(&md)?;
+                let shown = notes::board::show(&md, &env, true)?;
+                let dir = md.parent().map(std::path::Path::to_path_buf);
+                say_shown(shown, &html, || {
+                    notes::viewer::read_info(dir.as_deref()?).map(|i| i.url(notes::board::TOPIC))
+                });
+                return Ok(());
+            }
             let dir = notes::notes_dir(std::path::Path::new(&path)).ok_or_else(|| {
                 anyhow::anyhow!("no .claude/notes/ above {path} — start a ledger with /inquire")
             })?;
             let md = notes::find_ledger(&dir, topic.as_deref())?;
             let html = notes::render_file(&md)?;
-            let env: std::collections::HashMap<String, String> = std::env::vars().collect();
-            match notes::show(&md, &env, true)? {
-                Shown::Off => println!(
-                    "Rendered {} (not opened: OCGEN_NOTES_OPEN=0)",
-                    html.display()
-                ),
-                Shown::Reloaded(n) => println!(
-                    "Refreshed {n} open tab(s) of {}",
-                    notes::viewer::read_info(&dir)
-                        .map(|i| i.url(&slug_of(&md)))
-                        .unwrap_or_else(|| html.display().to_string())
-                ),
-                Shown::Pending => println!("A tab for {} is opening", html.display()),
-                Shown::Opened(url) => println!("Opened {url}"),
-                Shown::OpenedFile(p) | Shown::FileAlreadyOpened(p) => {
-                    println!("Opened {} (live refresh unavailable)", p.display())
-                }
-            }
+            let shown = notes::show(&md, &env, true)?;
+            say_shown(shown, &html, || {
+                notes::viewer::read_info(&dir).map(|i| i.url(&slug_of(&md)))
+            });
         }
         NotesAction::Render { files } => {
-            // Refuse anything but a ledger, a /recap report or an /intent
-            // reading copy (any language version) before writing anything.
+            // Refuse anything but a ledger, a /recap report, an /intent reading
+            // copy (any language version) or the /workstreams board before
+            // writing anything.
             for f in &files {
                 notes::check_renderable(std::path::Path::new(f))?;
             }
@@ -352,6 +359,31 @@ fn run_notes(action: NotesAction) -> Result<()> {
         NotesAction::Serve { dir } => notes::viewer::serve(std::path::Path::new(&dir))?,
     }
     Ok(())
+}
+
+/// Tell the user what `ocgen notes open` did with page `html`; `url` is the
+/// page's address in the viewer, when one runs.
+fn say_shown(
+    shown: ocgen::notes::Shown,
+    html: &std::path::Path,
+    url: impl FnOnce() -> Option<String>,
+) {
+    use ocgen::notes::Shown;
+    match shown {
+        Shown::Off => println!(
+            "Rendered {} (not opened: OCGEN_NOTES_OPEN=0)",
+            html.display()
+        ),
+        Shown::Reloaded(n) => println!(
+            "Refreshed {n} open tab(s) of {}",
+            url().unwrap_or_else(|| html.display().to_string())
+        ),
+        Shown::Pending => println!("A tab for {} is opening", html.display()),
+        Shown::Opened(url) => println!("Opened {url}"),
+        Shown::OpenedFile(p) | Shown::FileAlreadyOpened(p) => {
+            println!("Opened {} (live refresh unavailable)", p.display())
+        }
+    }
 }
 
 fn slug_of(md: &std::path::Path) -> String {

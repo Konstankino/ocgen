@@ -15,7 +15,12 @@
 //! The ledgers get a list the same way ([`super::LIST`]), and so do the intent
 //! files ([`super::intents`]), whose server runs for `.claude/intent/viewer` —
 //! the intent files themselves are tracked, so nothing is written beside them —
-//! and serves a read-only page per file. Neither saves anything.
+//! and serves a read-only page per file. Neither saves anything. Run for a
+//! project's `.claude/workstreams`, the server serves the /workstreams board's
+//! page ([`super::board`]) fresh on each request and the briefs and reports it
+//! links, read-only; it watches the board, those files, the reports workers
+//! post in their worktrees and the loop guard's escalations, so the page follows
+//! all of them.
 //!
 //! One server per notes directory, found through `.viewer.json` (port, token,
 //! pid). The token is in every URL and the `Host` header must be loopback, so
@@ -358,14 +363,18 @@ struct Client {
     stream: TcpStream,
 }
 
-/// What a server serves: /inquire ledger pages, /intent issue draft editors, or
-/// intent file pages.
+/// What a server serves: /inquire ledger pages, /intent issue draft editors,
+/// intent file pages, or the /workstreams board.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Kind {
     Notes,
     Drafts,
     Intents,
+    Board,
 }
+
+/// The board server's list name: there is no list, so no page can have it.
+const NO_LIST: &str = "_board";
 
 struct State {
     clients: HashMap<String, Vec<Client>>,
@@ -458,7 +467,8 @@ fn close_inherited_fds() {
 /// Run the viewer for notes directory `dir` until it is idle or superseded.
 /// Only a `.claude/notes` directory — the server writes `.viewer.json` there and
 /// renders pages next to their ledgers — an /intent drafts directory, whose
-/// drafts it edits, or a project's `.claude/intent/viewer`, for its intent files.
+/// drafts it edits, a project's `.claude/intent/viewer`, for its intent files,
+/// or its `.claude/workstreams`, for the board.
 pub fn serve(dir: &Path) -> Result<()> {
     #[cfg(unix)]
     close_inherited_fds();
@@ -468,12 +478,15 @@ pub fn serve(dir: &Path) -> Result<()> {
         Kind::Drafts
     } else if super::intents::is_viewer_dir(dir) {
         Kind::Intents
+    } else if super::board::is_board_dir(dir) {
+        Kind::Board
     } else {
         anyhow::bail!(
-            "{} is not a .claude/notes, {} or {} directory",
+            "{} is not a .claude/notes, {}, {} or {} directory",
             dir.display(),
             super::draft::DIR,
-            super::intents::VIEWER_DIR
+            super::intents::VIEWER_DIR,
+            super::versions::Kind::Board.dir()
         );
     };
     let dir = dir.canonicalize()?;
@@ -794,6 +807,7 @@ impl Server {
             Kind::Notes => super::versions::split(t, is_slug).is_some(),
             Kind::Intents => super::versions::split(t, super::draft::is_name).is_some(),
             Kind::Drafts => super::draft::is_name(t),
+            Kind::Board => t == super::board::TOPIC,
         };
         let topic = q.get("topic").copied().filter(|t| named(t) || *t == list);
         let selected = q.get("select").copied().filter(|t| named(t));
@@ -847,6 +861,8 @@ impl Server {
                     None => plain(&mut s, 404, "not found"),
                 }
             }
+            // A workstream's brief or report, as the board links it: read-only.
+            ("GET", file) if self.kind == Kind::Board => self.board_file(s, file),
             (method, file) if self.kind == Kind::Drafts => {
                 match (method, file.strip_suffix(".md").filter(|p| named(p))) {
                     ("GET", Some(slug)) => self.load_draft(s, slug),
@@ -966,6 +982,7 @@ impl Server {
         match self.kind {
             Kind::Drafts => return self.draft_page(s, slug),
             Kind::Intents => return self.intent_page(s, slug),
+            Kind::Board => return self.board_page(s),
             Kind::Notes => {}
         }
         let html = self.dir.join(format!("{slug}.html"));
@@ -1018,12 +1035,49 @@ impl Server {
         }
     }
 
+    /// The board's page, rendered fresh from the Markdown, live.
+    fn board_page(&self, mut s: TcpStream) {
+        let nonce = random_token();
+        let rev = self.topic_rev(super::board::TOPIC);
+        match super::board::live_page(&self.dir, &rev, &nonce) {
+            Ok(page) => respond(
+                &mut s,
+                200,
+                "text/html; charset=utf-8",
+                &draft_csp(&nonce),
+                page.as_bytes(),
+            ),
+            Err(e) => plain(&mut s, 404, &format!("{e:#}")),
+        }
+    }
+
+    /// A workstream's `<slug>/brief.md` or `<slug>/report.md` beside the board,
+    /// as text; anything else is not found.
+    fn board_file(&self, mut s: TcpStream, file: &str) {
+        let Some((slug, name)) = file.split_once('/') else {
+            return plain(&mut s, 404, "not found");
+        };
+        let Some(text) = super::board::linked_file(&self.dir, slug, name)
+            .and_then(|p| fs::read_to_string(p).ok())
+        else {
+            return plain(&mut s, 404, "not found");
+        };
+        respond(
+            &mut s,
+            200,
+            "text/plain; charset=utf-8",
+            CSP,
+            text.as_bytes(),
+        );
+    }
+
     /// The list's path under the token, and its tabs' topic.
     fn list(&self) -> &'static str {
         match self.kind {
             Kind::Notes => super::LIST,
             Kind::Drafts => super::draft::LIST,
             Kind::Intents => super::intents::LIST,
+            Kind::Board => NO_LIST,
         }
     }
 
@@ -1155,6 +1209,7 @@ impl Server {
     fn list_page(&self, mut s: TcpStream, page: Option<usize>, selected: Option<&str>, root: &str) {
         let nonce = random_token();
         let html = match self.kind {
+            Kind::Board => return plain(&mut s, 404, "not found"),
             Kind::Drafts => super::draft::list_page(&self.dir, page, selected, root, &nonce),
             Kind::Notes => super::list_page(&self.dir, page, selected, root, &nonce),
             Kind::Intents => match self.intents() {
@@ -1193,6 +1248,8 @@ impl Server {
                     super::listing::rev(&super::intents::files(&dir, &s))
                 })
                 .unwrap_or_default(),
+            Kind::Board if topic == super::board::TOPIC => super::board::rev(&self.dir),
+            Kind::Board => String::new(),
             // A copy appearing, or falling behind, changes the page too.
             Kind::Intents => self
                 .intent_version(topic)
@@ -1210,8 +1267,8 @@ impl Server {
     }
 
     /// Whether the server watches `topic`'s files for changes under its open
-    /// tabs: a draft and an intent file change without a hook telling it (a
-    /// ledger's hook re-renders and reloads it), and a list shows its folder.
+    /// tabs: a draft, an intent file and the board change without a hook telling
+    /// it (a ledger's hook re-renders and reloads it), and a list shows its folder.
     fn watched(&self, topic: &str) -> bool {
         self.kind != Kind::Notes || topic == self.list()
     }

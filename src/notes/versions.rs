@@ -13,6 +13,10 @@
 //! tells Claude after a write ([`touch`]) and once more when a turn ends
 //! ([`owed`]); the pages show which version is missing or behind ([`status`]).
 //!
+//! The /workstreams board ([`Kind::Board`]) is the exception: operational,
+//! English only and parsed by a hook, it is one version with no record, so
+//! nothing ever asks for another language's copy of it.
+//!
 //! [`Project::doc_languages`]: crate::render::Project::doc_languages
 
 use std::collections::BTreeMap;
@@ -35,10 +39,14 @@ pub enum Kind {
     Recap,
     /// An /intent reading copy: `.claude/intent/view/<intent file, lowercased>.md`.
     Copy,
+    /// The /workstreams board: `.claude/workstreams/board.md`, English only.
+    Board,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 3] = [Kind::Ledger, Kind::Recap, Kind::Copy];
+    /// The kinds kept in each project language, with version records; the
+    /// board isn't one.
+    pub const VERSIONED: [Kind; 3] = [Kind::Ledger, Kind::Recap, Kind::Copy];
 
     /// The kind's directory, relative to the project root.
     pub fn dir(self) -> &'static str {
@@ -46,6 +54,7 @@ impl Kind {
             Kind::Ledger => ".claude/notes",
             Kind::Recap => ".claude/notes/recap",
             Kind::Copy => ".claude/intent/view",
+            Kind::Board => ".claude/workstreams",
         }
     }
 }
@@ -107,9 +116,10 @@ pub struct Family {
 
 impl Family {
     /// The family of document `base` of `kind` in `dir`, in the languages of
-    /// `project` (English only outside one).
+    /// `project` (English only outside one, and for the board anywhere).
     pub fn new(kind: Kind, dir: &Path, base: &str, project: Option<(&Path, &Project)>) -> Family {
         let local = match (kind, project) {
+            (Kind::Board, _) => vec!["English".to_string()],
             (Kind::Copy, Some((_, p))) => p.copy_languages(),
             (_, Some((_, p))) => p.doc_languages(),
             (Kind::Copy, None) => Vec::new(),
@@ -239,13 +249,17 @@ pub fn classify(path: &Path) -> Option<Doc> {
 }
 
 /// The version named `file` (`<name>[.<language>].md`) of a document of `kind`
-/// in `dir`.
+/// in `dir`. Of a board's directory only `board.md` is one: a suffixed name
+/// there is no language version, and nothing else in it is a document.
 pub fn doc_in(
     kind: Kind,
     dir: &Path,
     file: &str,
     project: Option<(&Path, &Project)>,
 ) -> Option<Doc> {
+    if kind == Kind::Board && file != super::board::FILE {
+        return None;
+    }
     let stem = file.strip_suffix(".md")?;
     let (base, lang) = split(stem, super::is_slug)?;
     if lang.is_some_and(|s| !names_language(s, project.map(|(_, p)| p))) {
@@ -287,6 +301,7 @@ fn kind_of(dir: &Path) -> Option<Kind> {
         ["recap", "notes", ".claude"] => Some(Kind::Recap),
         ["notes", ".claude", ..] => Some(Kind::Ledger),
         ["view", "intent", ".claude"] => Some(Kind::Copy),
+        ["workstreams", ".claude", ..] => Some(Kind::Board),
         _ => None,
     }
 }
@@ -619,7 +634,7 @@ fn records(root: &Path) -> Vec<(Family, PathBuf, Record)> {
         return Vec::new();
     };
     let mut out = Vec::new();
-    for kind in Kind::ALL {
+    for kind in Kind::VERSIONED {
         let dir = root.join(kind.dir());
         let Ok(entries) = fs::read_dir(dir.join(RECORDS)) else {
             continue;
@@ -752,7 +767,7 @@ pub struct Relabeled {
 /// listed, never asked for.
 pub fn relabel(root: &Path, before: &Project, after: &Project) -> Relabeled {
     let mut out = Relabeled::default();
-    for kind in Kind::ALL {
+    for kind in Kind::VERSIONED {
         let first = |p: &Project| match kind {
             Kind::Copy => p.copy_languages().into_iter().next(),
             _ => p.doc_languages().into_iter().next(),
@@ -919,14 +934,46 @@ mod tests {
             kind_of(Path::new("/p/.claude/intent/view")),
             Some(Kind::Copy)
         );
+        assert_eq!(
+            kind_of(Path::new("/p/.claude/workstreams")),
+            Some(Kind::Board)
+        );
         for other in [
             "/p/notes",
             "/p/.claude/intent/drafts",
             "/p/x/notes/recap",
             "/p/.claude/notes/sub",
+            "/p/.claude/workstreams/billing-retry",
+            "/p/workstreams",
         ] {
             assert_eq!(kind_of(Path::new(other)), None, "{other}");
         }
+    }
+
+    #[test]
+    fn the_board_is_one_english_version_whatever_the_project_speaks() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = dir.path().join(".claude/workstreams");
+        fs::create_dir_all(&ws).unwrap();
+        let f = Family::new(Kind::Board, &ws, "board", None);
+        assert_eq!(f.languages(), ["English"]);
+        assert!(!f.bilingual());
+        assert_eq!(f.path("English").unwrap(), ws.join("board.md"));
+        assert_eq!(f.path("Ukrainian"), None);
+        // Only `board.md` is the board; a suffix names no version of it.
+        assert_eq!(
+            doc_in(Kind::Board, &ws, "board.md", None).map(|d| d.language),
+            Some("English".to_string())
+        );
+        for other in [
+            "board.english.md",
+            "board.ukrainian.md",
+            "notes.md",
+            "board-2026-10-23.md",
+        ] {
+            assert_eq!(doc_in(Kind::Board, &ws, other, None), None, "{other}");
+        }
+        assert!(!Kind::VERSIONED.contains(&Kind::Board));
     }
 
     #[test]

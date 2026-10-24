@@ -302,4 +302,6 @@ by ` — `, each a `Key: value` pair in this order; a value that isn't known yet
 is one of `planned`, `dispatched`, `reported`, `checked`, `integrated`; `Gate:` is `pending`,
 `ready` or `merged`. Exactly one `Status:` line, replaced in place. The hook reads only the first
 `Status:` line and each entry's `Branch:`, `Tip:` and `Gate:`; everything else is for us. Keep
-the file in English: the hook parses it.
+the file in English: the hook parses it. After every write ocgen renders the board as a page
+beside it (`board.html`) and opens it in my browser — never edit the `.html`; the Markdown is
+the record, and `ocgen notes open workstreams` shows the page again.

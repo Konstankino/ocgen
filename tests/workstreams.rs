@@ -180,6 +180,10 @@ fn the_skill_teaches_the_board_and_the_report_block() {
         "git worktree remove <path>",
         "git branch -d <branch>",
         ".claude/loop-guard/escalations.md",
+        // The page ocgen renders beside the board, never written by hand.
+        "`board.html`",
+        "never edit the `.html`",
+        "ocgen notes open workstreams",
     ] {
         assert!(md.contains(must), "missing {must:?}");
     }

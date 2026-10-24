@@ -1,8 +1,9 @@
 #!/bin/sh
 # Claude Code — PostToolUse hook (Write|Edit|MultiEdit): keep each /inquire ledger's,
-# /recap report's and /intent reading copy's HTML view (<name>.html beside the .md)
-# in step with its Markdown and show it in the browser, refreshing a tab that
-# already shows it. Each such document is kept in both project languages
+# /recap report's, /intent reading copy's and the /workstreams board's HTML view
+# (<name>.html beside the .md) in step with its Markdown and show it in the
+# browser, refreshing a tab that already shows it. Each such document but the
+# board (English only, parsed by a hook) is kept in both project languages
 # (<name>.md and <name>.<language>.md): after a write, the hook tells Claude which
 # language version fell behind, and as a Stop / SubagentStop hook it holds the end
 # of a turn once while one is still owed. As a UserPromptSubmit hook, the word

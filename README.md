@@ -598,7 +598,7 @@ repo used for a plugin's marketplace and release workflow; `--team` enables
 .claude/notes/github/                # Claude's read-only GitHub requests and their answers (git-ignored)
 .claude/skills/fanout/SKILL.md       # /fanout — worktree-isolated parallel writers (you run it)
 .claude/skills/workstreams/SKILL.md  # /workstreams — a board of worktree workstreams: plan the split, dispatch sessions or subagents, check and merge each branch in order (you run it)
-.claude/workstreams/                 # /workstreams' board, briefs and reports (git-ignored)
+.claude/workstreams/                 # /workstreams' board (with its page, board.html), briefs and reports (git-ignored)
 .claude/skills/improve-prompt/SKILL.md
 .claude/skills/<name>/SKILL.md       # your own skills (`ocgen add skill`)
 .claude/settings.json                # $schema, model, attribution off, permissions (+ secret read-denies), sandbox, hooks, output style, statusline
@@ -719,11 +719,12 @@ its workflows as `.claude/skills/<name>/SKILL.md`. You still type `/deliver`, `/
 
 **Extra hooks** (offered with the power-user defaults; apart from the config audit's guard, none
 of them ever block Claude):
-- **Notes pages** (on with `/inquire`, `/recap`, or reading copies): after each write to a ledger in
-  `.claude/notes/`, a `/recap` report or a reading copy, ocgen renders its HTML page and refreshes the
-  browser tab that shows it (see [The visual ledger](#the-visual-ledger)). When the project's two
-  languages differ, it also tells Claude which language version is missing, and holds the end of a
-  turn once while one is (see [Languages](#languages)).
+- **Notes pages** (on with `/inquire`, `/recap`, `/workstreams`, or reading copies): after each
+  write to a ledger in `.claude/notes/`, a `/recap` report, a reading copy or the `/workstreams`
+  board, ocgen renders its HTML page and refreshes the browser tab that shows it (see [The visual
+  ledger](#the-visual-ledger)). When the project's two languages differ, it also tells Claude which
+  language version is missing, and holds the end of a turn once while one is (see
+  [Languages](#languages)); the board, English only, is never asked for in another language.
 - **Re-inject context after compaction** (on by default): when a conversation is compacted,
   Claude is re-pointed at `.claude/rules/` and any `/inquire` notes in `.claude/notes/`. Claude
   Code keeps only the first 5,000 tokens of a skill through compaction, and `/intent` and
@@ -1081,7 +1082,8 @@ default browser; later updates **refresh the tab that already shows it** instead
 another. Close the tab, and the next update opens a fresh one. This works the same on macOS,
 Linux and Windows: ocgen runs a small viewer on `127.0.0.1` that each open tab stays connected
 to, so it knows which tabs are open without scripting a particular browser. The viewer stops by
-itself after 30 idle minutes with no tab open.
+itself after 30 idle minutes with no tab open. The `/workstreams` board gets a viewer of its
+own the same way, for `.claude/workstreams/`.
 
 To keep that working, the ledger's layout is fixed by the skill (headings, `### Q<n> · <Lens> ·
 <Verified|Inferred NN%>` entries with `Q:`/`A:`/`Cites:`/`Hint:` lines), and the helper writes it
@@ -1090,8 +1092,8 @@ converted on their next update.
 
 | Command / variable | What it does |
 |---|---|
-| `ocgen notes open [topic] [-p dir]` | Render a ledger and show it: refresh its tab, or open one. Picks by file name, then by `Topic:` line; with no topic, the latest ledger. `/inquire` runs this when it resumes. |
-| `ocgen notes render <file.md>…` | Render pages without showing them. Only `/inquire` ledgers (`.claude/notes/<topic-slug>.md`), `/recap` reports (`.claude/notes/recap/<date>.md`) and `/intent` reading copies (`.claude/intent/view/<name>.md`) — and their other language versions (`<name>.<language>.md`) — by any path, are rendered; any other file is refused, and every argument is checked before anything is written. |
+| `ocgen notes open [topic] [-p dir]` | Render a ledger and show it: refresh its tab, or open one. Picks by file name, then by `Topic:` line; with no topic, the latest ledger. `/inquire` runs this when it resumes. `ocgen notes open workstreams` (or the board's path) shows the [`/workstreams` board's page](#workstreams-workstreams) the same way, through a viewer of its own. |
+| `ocgen notes render <file.md>…` | Render pages without showing them. Only `/inquire` ledgers (`.claude/notes/<topic-slug>.md`), `/recap` reports (`.claude/notes/recap/<date>.md`) and `/intent` reading copies (`.claude/intent/view/<name>.md`) — and their other language versions (`<name>.<language>.md`) — and the `/workstreams` board (`.claude/workstreams/board.md`), by any path, are rendered; any other file is refused, and every argument is checked before anything is written. |
 | `OCGEN_NOTES_OPEN=0` | Never open a browser (pages are still rendered). `=1` always does. |
 | `OCGEN_NOTES_BROWSER` | Open pages with this command instead of the system default (`open`, `xdg-open`, `start`). Like those, it runs detached: ocgen doesn't wait for it or check how it exits, so a plain `firefox` is fine. |
 
@@ -1551,6 +1553,62 @@ After: …` — plus a log. `/workstreams` with no arguments shows it, reconcile
 `git worktree list` and the branch tips, and continues, so the work survives a compaction or a
 new session. The folder keeps itself out of git with its own `.gitignore`.
 
+**The board's page.** After every write to the board, the `inquire-notes` hook renders
+`board.html` beside it and shows it the way a ledger is shown: a small viewer for
+`.claude/workstreams/` serves the page, the first update opens it in your browser, and later
+ones refresh the tab that shows it. The viewer watches the board, the briefs and reports under
+`.claude/workstreams/<slug>/`, the reports workers post in their worktrees
+(`.claude/scratch/workstream-report.md`) and the loop guard's escalations itself, so a change
+made outside the hook — a hand edit, a report copied in, a worker posting — refreshes the tab
+too. Keep it open beside the CLI: while one works, the other shows the broad picture.
+`ocgen notes open workstreams` (or the board's path) shows the page again, reusing the tab;
+without a viewer to run, the page opens once as a file.
+
+The page opens with the broad picture:
+
+- **Progress:** a strip with one segment per workstream coloured by its state, the counts per
+  state, how many branches are ready to merge and how many issues there are.
+- **Next steps:** what the manager does next, read off the board the way the skill's steps go —
+  approve a draft board, dispatch a workstream or hold it behind its `After:`, wait for a
+  worker, collect the report it posted, send a worker back with what is missing, check a
+  reported branch, merge a ready one, decide on the differs, and once all are integrated, check
+  the whole and close.
+- **Agents:** a card per worker (session or subagent) with the workstream it is on, its brief's
+  goal, its state and gate, the facts from its report (check, status, confidence, tip, files
+  changed) and the issues that need your eye: a partial or blocked report, a failed or skipped
+  check, a confidence below the bar, a branch that moved since the report, uncommitted work, a
+  worktree that is gone, a `Differs` entry, a workstream marked reported or beyond with no
+  report on file, and any loop-guard escalation that names the worker, its branch or its
+  workstream (escalations tied to none are listed below the cards). A report a worker posted
+  in its worktree but the manager has not collected yet shows on the card at once, marked as
+  such, with its facts and issues, and asks to be collected. A card folds; one with issues
+  starts open, and its reports and brief fold out in full.
+
+Then the board as written: the `Status:` line and the other header fields, one table row per
+workstream (slug, worker, branch, state, gate, tip, what it waits for, and the rest of the
+line) with links to `<slug>/brief.md` and `<slug>/report.md` where they exist, and the
+`Differs` and `Log` sections. Each row shows where its workstream is on the way (planned,
+dispatched, reported, checked, integrated) as five dots, the gate as a dot that fills when the
+branch may merge and a tick once it has, and an `After:` that names a row links to it; the
+log is drawn as a timeline and the differs as flags.
+
+Click a workstream — its row in the table, a segment of the strip, or an `After:` link — and
+the page narrows to it: its agents open in front and the others folded and dimmed, its row and
+segment lit, the other rows dimmed, and only the log and differs lines that name it. A second
+click, or "Show all", widens it again, and the choice survives every update, since it lives in
+the address. An update is swapped in, never reloaded: the scroll and the open panes stay, lines
+that no longer belong fold away, and the rest cross-fades. Every section is a pane that folds,
+remembered across updates. On each update the page highlights what moved since the tab last
+showed it: a row or a header field that changed fades back from the accent colour, a new row
+or log line slides in, and a branch marked ready breathes a few times. Icons say what a worker
+is up to: a turning ring while it works, a tick that draws itself when it is done or merged, a
+warning that nods when something needs you. All of it is off under `prefers-reduced-motion`.
+
+ocgen never writes the Markdown, and the board is English only: unlike the ledgers and
+reports, it never gets a second language version, since the merge gate parses it. The page
+reads the entries leniently (a value that isn't known yet is `—`; a wrapped entry is one row);
+what merges is decided by the hook's own parser.
+
 **The merge gate.** A fail-closed `PreToolUse` hook, `workstreams-merge-gate`, enforces the rule
 the skill text can only state: while a board is open (no `Status: CLOSED` line), every `git
 merge` from any tool must name exactly one branch, in full (`refs/heads/<name>`), that the board
@@ -1801,14 +1859,14 @@ and inside the ocgen binary (`ocgen hook <name>`). The generated hook command us
 binary when a compatible ocgen is installed, and the script otherwise:
 
 ```sh
-if [ "$(ocgen hook --check 2>/dev/null)" = "ocgen-hooks 20" ]; then ocgen hook team-approval-gate; else sh ".../team-approval-gate.sh"; fi
+if [ "$(ocgen hook --check 2>/dev/null)" = "ocgen-hooks 21" ]; then ocgen hook team-approval-gate; else sh ".../team-approval-gate.sh"; fi
 ```
 
 - **The binary gives you** real JSON parsing instead of `grep`, and hooks that work on
   **native Windows**.
 - **The scripts keep the project working** for teammates and CI machines without ocgen.
-  The exceptions are `inquire-notes`, which renders the notes pages, opens them on `note` and
-  asks for each document's other language version, `intent-draft`, which opens `/intent`'s issue draft (and, on `adr`, its intent files)
+  The exceptions are `inquire-notes`, which renders the notes pages (the `/workstreams` board's
+  too), opens them on `note` and asks for each document's other language version, `intent-draft`, which opens `/intent`'s issue draft (and, on `adr`, its intent files)
   in the browser, `intent-approvers`, which checks drafts against the current approvers, and
   `recap-github` and `github-read`, which answer `/recap`'s and Claude's GitHub requests: their scripts do nothing, so without
   ocgen the ledgers stay Markdown only, nothing asks for a document's other language, `draft`, `note` and `adr` reach Claude as typed, only `ocgen verify` and `ocgen edit intent` report a draft that misses an
@@ -2154,8 +2212,8 @@ for a plugin; `--team` is off by default. (The `--base-url` flag is OpenCode-onl
 | `ocgen verify [dir] [--no-claude]` | Check the project works: up to date, settings valid, no local/user/managed setting turns hooks off or weakens a gate, hooks run (in bash; Git Bash present on Windows), the safety gates block when they fail to run (on Claude Code 2.1.295+), every gate is ocgen's own and the approval gate blocks, http:// WebFetch is blocked, a no-op `cd` is dropped, `/inquire` ledgers get their HTML view, `note` opens them, `draft` opens the `/intent` issue draft and `adr` its intent files, `/recap`'s GitHub request gets an answer, pending intents and drafts name the current approvers, the sandbox is on behind the gate, the hooks' sandbox works here, the pre-push hook blocks Claude and lets you through, scripts use LF, the statusline renders, ocgen on PATH is current, Claude Code validation passes. Runs only what ocgen generates. Exits 1 on failure. |
 | `ocgen approve [dir] [--minutes N] [--status] [--revoke]` | You approve high-impact actions for 1–1440 minutes (default 30). Refuses to run under Claude Code or without a terminal. |
 | `ocgen verify [dir] --run-check` | Also run the project's committed check command, as you and unsandboxed (only on a repository you trust). |
-| `ocgen notes open [topic]` | Show an `/inquire` ledger's HTML page: refresh the tab that shows it, or open one ([details](#the-visual-ledger)). |
-| `ocgen notes render <file.md>…` | Render `/inquire` ledgers (`.claude/notes/<topic-slug>.md`), `/recap` reports (`.claude/notes/recap/<date>.md`) and `/intent` reading copies (`.claude/intent/view/<name>.md`), in any of the project's languages, to their HTML pages without opening them; any other file is refused. |
+| `ocgen notes open [topic]` | Show an `/inquire` ledger's HTML page: refresh the tab that shows it, or open one ([details](#the-visual-ledger)); `ocgen notes open workstreams` does the same for the `/workstreams` board's page. |
+| `ocgen notes render <file.md>…` | Render `/inquire` ledgers (`.claude/notes/<topic-slug>.md`), `/recap` reports (`.claude/notes/recap/<date>.md`) and `/intent` reading copies (`.claude/intent/view/<name>.md`), in any of the project's languages, and the `/workstreams` board (`.claude/workstreams/board.md`), to their HTML pages without opening them; any other file is refused. |
 | `ocgen draft [name] [-p dir]` | Open an issue or pull request draft (`.claude/intent/drafts/<name>.md`: `/intent`'s, `/review-intent`'s, or a `pr-<slug>.md` Claude wrote) in a local browser editor: edit it as formatted text (Markdown syntax hidden) or as Markdown source, save it back as plain Markdown (untouched blocks keep their exact text), preview it as GitHub shows it, and copy it. A calm black page by default (white on request), the text around the cursor dimmed, and a Focus button for full screen. With no name, the only draft, or with several, their list to pick from (10 a page, newest first); `ADR-0007` picks by intent. Typing `draft` in Claude Code does the same, with the draft that session wrote last selected in the list ([details](#from-findings-to-a-github-issue-intent)). |
 | `ocgen adr [name] [-p dir]` | Read an `/intent` file (`docs/adr/ADR-0007-<slug>.md` by default; the project's prefix and directory) in a local browser page, read-only and sanitized like the draft's preview, in the drafts' black or white palette. With no name, the only file, or with several, their list to pick from (10 a page, highest number first); a name, its start, or a number (`7`, `0007`, `ADR-7`) picks one. Typing the prefix in lowercase (`adr`) in Claude Code does the same, with the file that session wrote last selected ([details](#from-findings-to-a-github-issue-intent)). |
 | `ocgen sandbox status [-p dir] [--json]` | Which sandbox runs the hooks' check and formatter on this machine (Seatbelt, bubblewrap, Landlock, wasmtime for WASI modules; on native Windows, why there is none), why the others can't, and what it grants. |
@@ -2229,7 +2287,7 @@ claude/intent/*.md              # default /intent issue and intent-file template
 claude/intent/*.md.j2           # /intent's shared text (writing standard, tone check, numbering, reading copy,
                                 # browser review), included by /intent and /review-intent
 claude/notes/ledger.html.j2     # the /inquire ledger's HTML page
-claude/notes/adr.html.j2        # the read-only page of an intent file, a reading copy and a /recap report
+claude/notes/adr.html.j2        # the read-only page of an intent file, a reading copy, a /recap report and the /workstreams board
 claude/notes/langs.html.j2      # the language switch both pages include
 claude/notes/draft.html.j2      # the /intent issue draft's editor (`draft`, `ocgen draft`): its layout, palettes and script;
                                 # the Milkdown editor itself is built into the binary (tools/milkdown, not a template)
