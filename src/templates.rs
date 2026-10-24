@@ -32,10 +32,11 @@ pub fn override_dir() -> Option<PathBuf> {
 /// The templates that teach the gate protocol: what the hooks parse in a team plan
 /// (`Status: APPROVED`, `Owner: <teammate-name>`, `Check:`) and in a worker's last
 /// message (`Confidence: NN%`). They can't be overridden (see the module docs).
-pub const GATE_PROTOCOL: [&str; 4] = [
+pub const GATE_PROTOCOL: [&str; 5] = [
     "claude/commands/team.md.j2",
     "claude/commands/team-plan.md.j2",
     "claude/commands/fanout.md.j2",
+    "claude/commands/workstreams.md.j2",
     "claude/rules/ocgen-team.md.j2",
 ];
 

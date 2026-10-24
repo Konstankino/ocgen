@@ -23,7 +23,7 @@ use serde_json::Value;
 /// embedded in the ocgen that generated the project (hook scripts can't be
 /// overridden from the template dir), so they implement the same protocol —
 /// unless someone edits the project's copies by hand.
-pub const PROTOCOL: &str = "ocgen-hooks 19";
+pub const PROTOCOL: &str = "ocgen-hooks 20";
 
 /// How long Claude Code lets a gate that runs the project check (SubagentStop,
 /// TaskCompleted) take, in seconds: its hook `timeout`. Claude Code treats a
@@ -36,12 +36,13 @@ pub const CHECK_GATE_TIMEOUT: u64 = 3600;
 pub const CHECK_TIMEOUT_MAX: u64 = CHECK_GATE_TIMEOUT - 60;
 
 /// Every hook `ocgen hook <name>` accepts (matching the script names minus `.sh`).
-pub const NAMES: [&str; 17] = [
+pub const NAMES: [&str; 18] = [
     "subagent-confidence-gate",
     "team-task-completed",
     "team-task-created",
     "team-teammate-idle",
     "team-approval-gate",
+    "workstreams-merge-gate",
     "notify",
     "format",
     "config-audit",
@@ -62,8 +63,9 @@ pub const NAMES: [&str; 17] = [
 /// Stop, SubagentStop, TaskCompleted and TeammateIdle, so the gates there
 /// aren't listed; nor are hooks whose failure must not cost the user a prompt
 /// or a tool call (the words, the formatter, the no-op `cd`).
-pub const FAIL_CLOSED: [&str; 5] = [
+pub const FAIL_CLOSED: [&str; 6] = [
     "team-approval-gate",
+    "workstreams-merge-gate",
     "https-only-fetch",
     "shell-sandbox",
     "config-audit",
@@ -170,6 +172,7 @@ pub fn run(name: &str, payload: &str, env: &HashMap<String, String>) -> Outcome 
         "team-task-created" => h.task_created(),
         "team-teammate-idle" => h.teammate_idle(),
         "team-approval-gate" => h.approval_gate(),
+        "workstreams-merge-gate" => h.workstreams_gate(),
         "notify" => h.notify(),
         "format" => h.format(),
         "config-audit" => h.config_audit(),
@@ -900,6 +903,175 @@ impl<'a> Hook<'a> {
         Outcome::allow()
     }
 
+    // -------------------------------------------------------- workstreams --
+
+    /// PreToolUse: while `/workstreams` has a board open (`.claude/workstreams/
+    /// board.md` whose first `Status:` line isn't CLOSED), a `git merge` from
+    /// any tool may bring in exactly one branch, named in full
+    /// (`refs/heads/<name>`), that the board marks `Gate: ready`, at the tip the
+    /// board recorded (`Tip:`); `--abort`, `--continue` and `--quit` pass.
+    /// Anything else is refused: a short name, a commit, two branches, a word
+    /// after `-m` or `-s`, a branch not on the board, one still pending, one
+    /// that moved since it was checked, a merge the gate can't read. Merging
+    /// unchecked work is the accident the board exists to prevent, and the
+    /// skill text that says so is cut at compaction; this gate is not.
+    /// Decisions come only from the board and git.
+    fn workstreams_gate(&self) -> Outcome {
+        let Ok(board) = fs::read_to_string(self.project().join(".claude/workstreams/board.md"))
+        else {
+            return Outcome::allow();
+        };
+        if board_closed(&board) {
+            return Outcome::allow();
+        }
+        // A repeated "command" key could hide the real one: refused on the raw
+        // text, as the script reads it.
+        if repeated_key(self.raw, "command") {
+            return self.refuse_merge(
+                "the call repeats the command key",
+                "a second command could hide the real one from the gate".into(),
+            );
+        }
+        let cmd = self
+            .json
+            .get("tool_input")
+            .and_then(|i| i.get("command"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        if cmd.is_empty() {
+            return Outcome::allow();
+        }
+        // A control character (other than tab/newline/CR) could hide a merge.
+        if crate::risk::has_control(cmd) {
+            return self.refuse_merge(
+                "the command holds a control character",
+                "it could hide a merge from the gate".into(),
+            );
+        }
+        let calls = crate::risk::merge_args(cmd);
+        if calls.is_empty() {
+            if crate::risk::unread_merge(cmd) {
+                return self.refuse_merge(
+                    "a git merge the gate can't read",
+                    "an option value with a space (a path after -C) hides the call: run the merge from this checkout, by the branch's full name".into(),
+                );
+            }
+            return Outcome::allow();
+        }
+        for args in calls {
+            if let Some(refused) = self.check_merge(&board, &args) {
+                return refused;
+            }
+        }
+        Outcome::allow()
+    }
+
+    /// Why this `git merge` (its arguments) may not run against `board`, if not.
+    fn check_merge(&self, board: &str, args: &[String]) -> Option<Outcome> {
+        if let [one] = args {
+            if matches!(one.as_str(), "--abort" | "--continue" | "--quit") {
+                return None;
+            }
+        }
+        let got = format!("got: git merge {}", args.join(" "));
+        let refs: Vec<&str> = args
+            .iter()
+            .map(String::as_str)
+            .filter(|a| !a.starts_with('-'))
+            .collect();
+        let &[branch] = refs.as_slice() else {
+            return Some(self.refuse_merge(
+                "name exactly one branch as refs/heads/<name>",
+                format!("{got} (an option's value counts as a branch: use --no-ff --no-edit and nothing else)"),
+            ));
+        };
+        if !branch.starts_with("refs/heads/") || branch.len() == "refs/heads/".len() {
+            return Some(self.refuse_merge(
+                &format!("{branch} is not a full branch name (refs/heads/<name>)"),
+                got,
+            ));
+        }
+        // The entries naming the branch; the one marked ready wins, else the first.
+        let entries = board_entries(board);
+        let naming: Vec<&String> = entries
+            .iter()
+            .filter(|e| board_field_is(e, "Branch:", branch))
+            .collect();
+        let Some(line) = naming
+            .iter()
+            .find(|e| board_field(e, "Gate:") == Some("ready"))
+            .or(naming.first())
+        else {
+            return Some(self.refuse_merge(
+                &format!("{branch} is not on the board"),
+                "only a workstream branch the board marks ready merges while it is open".into(),
+            ));
+        };
+        let gate = board_field(line, "Gate:").unwrap_or("none");
+        if gate != "ready" {
+            return Some(self.refuse_merge(
+                &format!("{branch} is not marked ready (Gate: {gate})"),
+                "check it first: /workstreams step 4 marks a checked branch ready".into(),
+            ));
+        }
+        let tip = board_field(line, "Tip:").unwrap_or("");
+        if tip.len() < 7 || !tip.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Some(self.refuse_merge(
+                &format!("{branch} has no checked tip on the board"),
+                "the board line needs Tip: <sha> from the check".into(),
+            ));
+        }
+        let proj = self.project();
+        let now = Command::new("git")
+            .arg("-C")
+            .arg(&proj)
+            .args([
+                "rev-parse",
+                "--verify",
+                "-q",
+                &format!("{branch}^{{commit}}"),
+            ])
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_default();
+        if now.is_empty() {
+            return Some(self.refuse_merge(
+                &format!("cannot read the tip of {branch}"),
+                format!("git rev-parse failed in {}", proj.display()),
+            ));
+        }
+        if !now.starts_with(tip) {
+            return Some(self.refuse_merge(
+                &format!("{branch} moved since it was checked"),
+                format!("board tip {tip}, now {now}; check it again (/workstreams step 4)"),
+            ));
+        }
+        None
+    }
+
+    /// Block a merge the board doesn't allow: `reason` on the first line,
+    /// `detail` on the next (the same text as the script's).
+    fn refuse_merge(&self, reason: &str, detail: String) -> Outcome {
+        let stderr = format!(
+            "BLOCKED by the workstreams merge gate: {reason}\n{detail}\n\
+             While .claude/workstreams/board.md is open, git merge takes exactly one branch, named refs/heads/<name>,\n\
+             that the board marks Gate: ready, at the tip it recorded. /workstreams checks a branch and marks it\n\
+             ready; closing the board (Status: CLOSED) lifts this.\n"
+        );
+        self.deny_by(
+            "workstreams-gate",
+            stderr,
+            format!("halted after repeated refused merges: {reason}"),
+            format!(
+                "Halted by the loop guard: repeated merges the workstreams board refused ({reason}). Check the branch with /workstreams, or close the board; see .claude/loop-guard/escalations.md"
+            ),
+        )
+    }
+
     fn home(&self) -> PathBuf {
         match self.env("HOME") {
             "" => PathBuf::from(self.env("USERPROFILE")),
@@ -915,18 +1087,28 @@ impl<'a> Hook<'a> {
     /// Block a gated call; once the loop-guard budget is spent, deny AND halt the
     /// agent (`continue: false`) so it stops retrying. Never allows the call.
     fn deny(&self, stderr: String, what: &str) -> Outcome {
+        self.deny_by(
+            "approval-gate",
+            stderr,
+            format!("halted after repeated high-impact attempts: {what}"),
+            format!(
+                "Halted by the loop guard: repeated attempts at a gated high-impact action ({what}). A human must review and approve from their own terminal; see .claude/loop-guard/escalations.md"
+            ),
+        )
+    }
+
+    /// Block a call under loop-guard key `gate`; once the budget is spent, log
+    /// `escalation`, then deny AND halt the agent (`continue: false`) with `halt`
+    /// as the reason, so it stops retrying. Never allows the call.
+    fn deny_by(&self, gate: &str, stderr: String, escalation: String, halt: String) -> Outcome {
         let who = match self.field("agent_type") {
             w if !w.is_empty() => w,
             _ => "main".into(),
         };
-        if let Some(g) = self.guard("approval-gate", &who) {
+        if let Some(g) = self.guard(gate, &who) {
             if g.bump() >= g.max {
-                g.escalate(&format!(
-                    "halted after repeated high-impact attempts: {what}"
-                ));
-                let msg = format!(
-                    "Halted by the loop guard: repeated attempts at a gated high-impact action ({what}). A human must review and approve from their own terminal; see .claude/loop-guard/escalations.md"
-                );
+                g.escalate(&escalation);
+                let msg = halt;
                 let out = serde_json::json!({
                     "hookSpecificOutput": {
                         "hookEventName": "PreToolUse",
@@ -2238,6 +2420,58 @@ fn quality_block(
          say what blocks you instead of retrying the same thing.\n",
         g.max
     ))
+}
+
+/// Whether a workstreams board is finished: its first `Status:` line says
+/// CLOSED (a finished board is moved aside, never appended to, so a later
+/// `Status:` line never reopens or closes one).
+fn board_closed(board: &str) -> bool {
+    board
+        .lines()
+        .find(|l| l.starts_with("Status:"))
+        .is_some_and(|l| l["Status:".len()..].trim_start().starts_with("CLOSED"))
+}
+
+/// The board's workstream entries: each `- ` line with any lines wrapped under
+/// it joined by spaces (a heading or a blank line ends an entry), as the
+/// script's awk builds them.
+fn board_entries(board: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut entry: Option<String> = None;
+    for line in board.lines() {
+        if line.starts_with("- ") {
+            out.extend(entry.replace(line.to_string()));
+        } else if line.starts_with('#') || line.trim().is_empty() {
+            out.extend(entry.take());
+        } else if let Some(e) = entry.as_mut() {
+            e.push(' ');
+            e.push_str(line);
+        }
+    }
+    out.extend(entry);
+    out
+}
+
+/// The word after the first `key` in a board entry, split on whitespace as the
+/// script's awk splits it: `- Workstream: a — Gate: ready` → `ready` for `Gate:`.
+fn board_field<'a>(line: &'a str, key: &str) -> Option<&'a str> {
+    let words: Vec<&str> = line.split_whitespace().collect();
+    words.windows(2).find(|p| p[0] == key).map(|p| p[1])
+}
+
+/// Whether some `key` in the board entry is followed by `value`.
+fn board_field_is(line: &str, key: &str, value: &str) -> bool {
+    let words: Vec<&str> = line.split_whitespace().collect();
+    words.windows(2).any(|p| p[0] == key && p[1] == value)
+}
+
+/// Whether the raw event holds `"key":` more than once, as the gate scripts
+/// count it (`grep -oE '"key"[[:space:]]*:'`): a repeated key could hide the
+/// value a JSON parser keeps.
+fn repeated_key(raw: &str, key: &str) -> bool {
+    let re = Regex::new(&format!(r#""{key}"[[:space:]]*:"#)).unwrap();
+    let twice = re.find_iter(raw).nth(1).is_some();
+    twice
 }
 
 /// Quality gate gives way: warn the user (systemMessage) and allow.

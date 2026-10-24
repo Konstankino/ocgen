@@ -197,13 +197,34 @@ into one team (teammates share one working directory, and a team converges on a 
   `SendMessage` / `@name` to hand findings and status across (e.g. `feature-a` → `deploy`
   "ready to ship").
 - You (or a coordinator session) collect each workstream's gated decisions and make the final call.
-  A message from another session can't approve your gates — approvals stay per session.
+  A message from another session can't approve your gates — approvals stay per session.{% if workstreams %}
+  `/workstreams` is that coordinator: it keeps the board and merges each branch once it is checked.{% endif %}
 - A worktree is a fresh checkout of tracked files. Committing `.claude/` is optional: while nothing
   under it is committed, ocgen keeps the config out of git in this clone (`.git/info/exclude`) and
   `.worktreeinclude` copies the settings, hooks, rules, `CLAUDE.md` and `.mcp.json` into each new
   worktree; agents and skills load from the main checkout. `ocgen verify` warns when a worktree
   would start without them.{% if fanout %} Worktrees branch from your current commit
   (`worktree.baseRef: head`), so they include unpushed work.{% endif %}
+{% endif %}
+{% if workstreams %}
+## Workstreams
+
+For a goal that splits into **several independent pieces**, each needing its own commits and
+checks, run `/workstreams <goal>`: one manager session — this one, in the main checkout — plans
+the split, hands each workstream to a worker in its own worktree (a separate session, or a
+worktree-isolated subagent for a small slice), collects every worker's report, checks each branch
+and merges them in order, the project check after every merge, then runs the scope and adversary
+loops on the whole. The board, `.claude/workstreams/board.md`, is the record a later session
+resumes from; a single workstream is better served by `/deliver`.
+
+- The manager never edits code; a worker does, in its worktree. Each worker ends with the report
+  block the skill prescribes and writes it to `.claude/scratch/workstream-report.md` in its
+  worktree: that file is the channel of record, a message is a courtesy.
+- While a board is open, the `workstreams-merge-gate` hook holds every `git merge`: only a
+  workstream branch the board marks `Gate: ready`, named in full (`refs/heads/<name>`), at the tip
+  the board recorded, merges; `--abort` passes. Closing the board (`Status: CLOSED`) lifts it.
+- A session's worktree belongs to that session; the manager removes only the worktrees of
+  subagent workers, after their branches merged.
 {% endif %}
 {% if inquire %}
 ## Codebase inquiry

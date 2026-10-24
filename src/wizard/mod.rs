@@ -621,6 +621,12 @@ fn build_claude_project(
         "Fans work out to worktree-isolated subagents (parallel edits never collide).",
         true,
     )?;
+    p.claude.workflow.workstreams = ask_confirm(
+        theme,
+        "Include the /workstreams board command?",
+        "One main session plans a goal into workstreams, each worked in its own worktree by a session or a subagent, then checks and merges each branch in order; a hook refuses merging a branch the board hasn't marked ready.",
+        true,
+    )?;
     p.claude.workflow.verify_todos = ask_confirm(
         theme,
         "Include verification-first todo guidance?",

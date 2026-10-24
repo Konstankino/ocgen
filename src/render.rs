@@ -1432,6 +1432,32 @@ impl Project {
             ));
         }
         let checks = self.checkers();
+        if self.claude.workflow.workstreams {
+            components.push((
+                "commands/workstreams.md".to_string(),
+                env.render_str(
+                    &templates::load("claude/commands/workstreams.md.j2")?,
+                    context! {
+                        allowed_tools => crate::claude::WORKSTREAMS_TOOLS.join(", "),
+                        explorer => self.fork_agent_default(),
+                        implementer => checks.implementer.clone(),
+                        implementer_isolated => checks.implementer_isolated,
+                        scope_guard => checks.scope_guard.clone(),
+                        adversary => checks.adversary.clone(),
+                        rounds => checks.rounds,
+                        scope_rounds => checks.scope_rounds,
+                        // The gate holds every `git merge`: integration waits
+                        // for `ocgen approve`.
+                        approval_gate => self.claude.team.enabled && self.claude.team.approval_gate,
+                        subagent_confidence => self.claude.workflow.subagent_confidence,
+                        check_cmd => self.claude.workflow.check_cmd.trim(),
+                        deliver => self.claude.workflow.deliver,
+                        recap => self.claude.workflow.recap,
+                    },
+                )
+                .context("rendering workstreams command")?,
+            ));
+        }
         if self.claude.workflow.deliver {
             // Without a scope guard, /deliver's own final check runs the tests, so
             // it merges a worktree-isolated implementer's branch first.
@@ -1456,6 +1482,7 @@ impl Project {
                         worktree_implementer => worktree_implementer,
                         rounds => checks.rounds,
                         scope_rounds => checks.scope_rounds,
+                        workstreams => self.claude.workflow.workstreams,
                     },
                 )
                 .context("rendering deliver command")?,
@@ -1678,6 +1705,12 @@ impl Project {
             let body = templates::load_embedded("claude/hooks/subagent-confidence-gate.sh")?;
             components.push(("hooks/subagent-confidence-gate.sh".to_string(), body));
         }
+        // /workstreams' merge gate: while a board is open, only a branch it marks
+        // ready merges. Independent of Agent Teams.
+        if self.claude.workflow.workstreams {
+            let body = templates::load_embedded("claude/hooks/workstreams-merge-gate.sh")?;
+            components.push(("hooks/workstreams-merge-gate.sh".to_string(), body));
+        }
         // Optional quality-of-life hook scripts.
         let x = &self.claude.hooks_extra;
         for (on, script) in [
@@ -1802,6 +1835,7 @@ impl Project {
             prefer_explorer => self.prefers_explorer(),
             gh_withheld => self.withholds_gh(),
             deliver => self.claude.workflow.deliver,
+            workstreams => self.claude.workflow.workstreams,
             inquire => self.claude.workflow.inquire,
             intent => self.claude.workflow.intent,
             intent_dir => self.claude.intent.dir.trim_end_matches('/'),
@@ -1985,6 +2019,7 @@ impl Project {
     /// Whether any hook that can block (exit 2) is emitted — those source the loop guard.
     fn has_blocking_hooks(&self) -> bool {
         self.worker_gate()
+            || self.claude.workflow.workstreams
             || (self.claude.team.enabled
                 && (self.claude.team.hooks || self.claude.team.approval_gate))
     }
@@ -2092,9 +2127,10 @@ impl Project {
             // Takes effect once the user trusts the workspace.
             obj.insert("enabledMcpjsonServers".into(), json!(approved));
         }
-        if self.claude.workflow.fanout {
-            // Worktrees (fanout workers, --worktree sessions) branch from the current
-            // HEAD, so they see unpushed work and merge back cleanly.
+        if self.claude.workflow.fanout || self.claude.workflow.workstreams {
+            // Worktrees (fanout workers, /workstreams workers, --worktree sessions)
+            // branch from the current HEAD, so they see unpushed work and merge
+            // back cleanly.
             obj.insert("worktree".into(), json!({ "baseRef": "head" }));
         }
         if self.claude.powerups.statusline {
@@ -2532,6 +2568,23 @@ impl Project {
                     "hooks": [ safety_gate(command_hook(hook_cmd(prefix, dir, "team-approval-gate.sh"))) ]
                 } ]),
             );
+        }
+        // /workstreams' merge gate, right behind the approval gate and also with
+        // no matcher: any tool with a `command` can merge. While a board is open,
+        // only a branch it marks ready merges; a gate that fails to run blocks.
+        if self.claude.workflow.workstreams {
+            let gate = safety_gate(command_hook(hook_cmd(
+                prefix,
+                dir,
+                "workstreams-merge-gate.sh",
+            )));
+            if let Some(arr) = hooks
+                .entry("PreToolUse".to_string())
+                .or_insert_with(|| json!([]))
+                .as_array_mut()
+            {
+                arr.push(json!({ "hooks": [ gate ] }));
+            }
         }
         // Per-worker confidence gate: SubagentStart records the tree a subagent
         // starts from; SubagentStop blocks one that changed it but isn't confident

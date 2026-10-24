@@ -218,6 +218,7 @@ pub fn verify(project: &Project, root: &Path, opts: &Options) -> Vec<Check> {
         out.push(effective(&layers, &expected));
         if shell_ok {
             out.push(approval_gate(&probe, layers.gate_off()));
+            out.push(workstreams_gate(&probe));
             out.push(https_only_fetch(&probe));
             out.push(noop_cd(&probe));
             out.push(notes_view(&probe));
@@ -1384,12 +1385,13 @@ fn hook_scripts(sh: &Path, root: &Path, settings: &Value) -> Check {
                 .collect::<Vec<_>>()
         })
         .collect();
-    const GATES: [&str; 5] = [
+    const GATES: [&str; 6] = [
         "subagent-confidence-gate.sh",
         "team-task-completed.sh",
         "team-task-created.sh",
         "team-teammate-idle.sh",
         "team-approval-gate.sh",
+        "workstreams-merge-gate.sh",
     ];
     if scripts.iter().any(|s| GATES.contains(&s.as_str())) {
         scripts.push("loop-guard.sh".into()); // the gates source it
@@ -2595,6 +2597,80 @@ fn approval_gate(p: &Probe, off: Option<(String, &str)>) -> Check {
         ),
         None => check(name, Status::Pass, format!("blocks pushes (also with flags), deploys and self-approval; allows normal work ({via})")),
     }
+}
+
+/// /workstreams' merge gate: with a board open beside the project (never in
+/// it), a merge of a branch the board hasn't marked ready is refused, an
+/// ordinary command passes, and without a board the gate stands aside.
+fn workstreams_gate(p: &Probe) -> Check {
+    let name = "workstreams merge gate holds unchecked branches";
+    let Some((event, group, cmd)) = p.find("PreToolUse", "workstreams-merge-gate") else {
+        return check(name, Status::Skip, "/workstreams not enabled");
+    };
+    if let Some(what) = p.hand_edited(&event, &group, &cmd) {
+        return check(name, Status::Fail, unverified("gate", &what));
+    }
+    // Two project folders beside the project, never in it: one with an open
+    // board, one without. The hook command names its script through
+    // `${CLAUDE_PROJECT_DIR}`, so each gets ocgen's own render of the scripts.
+    let scratch = scratch_path("workstreams");
+    let _ = std::fs::remove_dir_all(&scratch);
+    let open = scratch.join("open");
+    let none = scratch.join("none");
+    let _ = std::fs::create_dir_all(open.join(".claude/workstreams"));
+    for dir in [&open, &none] {
+        let _ = std::fs::create_dir_all(dir.join(".claude/hooks"));
+        for script in ["workstreams-merge-gate.sh", "loop-guard.sh"] {
+            if let Some(body) = p.rendered.get(&format!(".claude/hooks/{script}")) {
+                let _ = std::fs::write(dir.join(".claude/hooks").join(script), body);
+            }
+        }
+    }
+    let _ = std::fs::write(
+        open.join(".claude/workstreams/board.md"),
+        "# Workstreams — verify\nStatus: APPROVED session=ocgen-verify\n\n## Workstreams\n\
+         - Workstream: pending — Worker: — — Branch: refs/heads/ocgen-verify-pending — Worktree: — — Tip: — — State: reported — Gate: pending — After: none\n",
+    );
+    let run = |dir: &Path, c: &str| {
+        let mut env = p.env.clone();
+        env.insert("CLAUDE_PROJECT_DIR".into(), crate::paths::for_shell(dir));
+        let ev = serde_json::json!({
+            "session_id": "ocgen-verify", "tool_name": "Bash", "tool_input": { "command": c }
+        })
+        .to_string();
+        run_sh(p.sh, &cmd, &ev, &env, p.root, Duration::from_secs(20)).map(|x| x.0)
+    };
+    let mut wrong = Vec::new();
+    if run(&open, "git merge refs/heads/ocgen-verify-pending") != Some(2) {
+        wrong.push("an open board lets an unchecked branch merge");
+    }
+    if run(&open, "git merge ocgen-verify-pending") != Some(2) {
+        wrong.push("a short branch name gets through");
+    }
+    if run(&open, "git status") != Some(0) {
+        wrong.push("an open board blocks an ordinary command");
+    }
+    if run(&none, "git merge refs/heads/ocgen-verify-pending") != Some(0) {
+        wrong.push("without a board the gate still blocks");
+    }
+    let _ = std::fs::remove_dir_all(&scratch);
+    let via = if ocgen_hook_ok() {
+        "via `ocgen hook`"
+    } else {
+        "via the bundled script"
+    };
+    if !wrong.is_empty() {
+        return check(
+            name,
+            Status::Fail,
+            format!("{} ({via}) — run `ocgen doctor`", wrong.join("; ")),
+        );
+    }
+    check(
+        name,
+        Status::Pass,
+        format!("refuses a merge the board hasn't marked ready; allows the rest ({via})"),
+    )
 }
 
 /// The git half of the gate: the installed pre-push hook must refuse a push made
