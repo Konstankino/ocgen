@@ -7,7 +7,9 @@
 //!
 //! The pages speak the project's answer language ([`words`]). An /intent reading
 //! copy (`.claude/intent/view/<slug>.md`, the English intent file translated
-//! into that language) gets a page of its own the same way. The /intent issue
+//! into that language) gets a page of its own the same way, and so does a
+//! /recap report, as a read-only file page; the /workstreams board ([`board`])
+//! gets a read-only page served live by a viewer of its own. The /intent issue
 //! draft (`.claude/intent/drafts/<name>.md`) gets an editor instead ([`draft`]).
 //!
 //! The word `note` or `notes`, sent alone in Claude Code and caught by the same
@@ -16,6 +18,7 @@
 //! a read-only page and a list of their own ([`intents`]).
 
 pub mod blocks;
+pub mod board;
 pub mod browser;
 pub mod draft;
 pub mod html;
@@ -181,7 +184,8 @@ pub fn ledger_slug(md: &Path) -> Result<String> {
 /// ledger changes while rendering, it is rendered again. A /recap report or an
 /// /intent reading copy gets a read-only Zen page beside it the same way, and
 /// any language version of these (`<name>.<language>.md`, see [`versions`]) its
-/// own page, linked to the others. Anything else is refused (see
+/// own page, linked to the others; the /workstreams board gets its page
+/// ([`board`]) in English only. Anything else is refused (see
 /// [`ledger_slug`]): the sibling page would overwrite a real `.html`, and the
 /// `*` .gitignore would hide its directory from git.
 pub fn render_file(md: &Path) -> Result<PathBuf> {
@@ -212,6 +216,7 @@ fn render_doc(md: &Path, doc: &versions::Doc) -> Result<PathBuf> {
         versions::Kind::Ledger => render_ledger(md, name),
         versions::Kind::Recap => render_static(md, doc, intents::ZenKind::Recap),
         versions::Kind::Copy => render_static(md, doc, intents::ZenKind::Copy),
+        versions::Kind::Board => render_static(md, doc, intents::ZenKind::Board),
     }
 }
 
@@ -241,9 +246,10 @@ fn parent_or_dot(md: &Path) -> &Path {
     }
 }
 
-/// Render recap report or reading copy `md` (version `doc`) to its sibling
-/// `.html`: a read-only Zen page that works as a file — no live view — with its
-/// switch to the other versions. Its directory keeps itself out of git.
+/// Render recap report, reading copy or workstreams board `md` (version `doc`)
+/// to its sibling `.html`: a read-only Zen page that works as a file — no live
+/// view — with its switch to the other versions (none for the board). Its
+/// directory keeps itself out of git.
 fn render_static(md: &Path, doc: &versions::Doc, kind: intents::ZenKind) -> Result<PathBuf> {
     let dir = parent_or_dot(md);
     let name = md
@@ -262,13 +268,7 @@ fn render_static(md: &Path, doc: &versions::Doc, kind: intents::ZenKind) -> Resu
                 None => s.to_string_lossy().into_owned(),
             },
         );
-    let source = format!(
-        "{}/{name}.md",
-        match kind {
-            intents::ZenKind::Recap => versions::Kind::Recap.dir(),
-            _ => versions::Kind::Copy.dir(),
-        }
-    );
+    let source = format!("{}/{name}.md", f.kind.dir());
     let zen = intents::Zen {
         kind,
         topic: name,
@@ -279,8 +279,13 @@ fn render_static(md: &Path, doc: &versions::Doc, kind: intents::ZenKind) -> Resu
     };
     for _ in 0..3 {
         let src = fs::read_to_string(md).with_context(|| format!("reading {}", md.display()))?;
-        let page =
-            intents::page_with(&src, &source, &rev(src.as_bytes()), "", &doc.language, &zen)?;
+        let rev = rev(src.as_bytes());
+        let page = match kind {
+            intents::ZenKind::Board => {
+                board::page(&src, Some(dir), &source, &rev, "", &doc.language, &zen)?
+            }
+            _ => intents::page_with(&src, &source, &rev, "", &doc.language, &zen)?,
+        };
         write_if_changed(&out, page.as_bytes())?;
         if fs::read_to_string(md).ok().as_deref() == Some(src.as_str()) {
             break;
@@ -460,8 +465,9 @@ pub fn refresh_pages(dir: &Path, names: &[String], env: &HashMap<String, String>
     }
 }
 
-/// Show the static page of /recap report or reading copy `md` (any language
-/// version): the file itself, opened once — a file page can't refresh itself.
+/// Show the static page of /recap report, reading copy or workstreams board
+/// `md` (any language version): the file itself, opened once — a file page
+/// can't refresh itself.
 pub fn show_file_page(md: &Path, env: &HashMap<String, String>, explicit: bool) -> Result<Shown> {
     if !browser::decide(env, browser::this_os(), explicit) {
         return Ok(Shown::Off);

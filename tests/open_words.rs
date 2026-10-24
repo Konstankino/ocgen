@@ -1145,5 +1145,5 @@ fn the_notes_word_is_registered_with_the_ledgers() {
     assert!(on("UserPromptSubmit", "inquire-notes"));
     assert!(on("UserPromptSubmit", "intent-draft"));
     // No new hook: projects generated before get `adr` with the new binary.
-    assert_eq!(ocgen::hooks::PROTOCOL, "ocgen-hooks 20");
+    assert_eq!(ocgen::hooks::PROTOCOL, "ocgen-hooks 21");
 }

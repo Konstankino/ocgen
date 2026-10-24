@@ -106,6 +106,10 @@ pub struct VersionWords {
     /// A /recap report's page.
     pub recap_title: &'static str,
     pub recap_footer: &'static str,
+    /// The /workstreams board's page, and its banner when its viewer is gone.
+    pub board_title: &'static str,
+    pub board_footer: &'static str,
+    pub board_offline: &'static str,
 }
 
 /// What a draft's editor page says by itself. An issue's draft and a pull
@@ -302,6 +306,9 @@ pub static ENGLISH: Words = Words {
         copy_footer: "A reading copy, rendered by ocgen from the Markdown file named above. The English intent file it translates is the record.",
         recap_title: "Daily recap",
         recap_footer: "Rendered by ocgen from the Markdown file named above — the .md is the source of truth.",
+        board_title: "Workstreams board",
+        board_footer: "Rendered by ocgen from the board named above, which /workstreams keeps — the .md is the record. The page follows every change to the board; ocgen notes open workstreams shows it again.",
+        board_offline: "Viewer disconnected — this page won’t refresh. Run <code>ocgen notes open workstreams</code> to reconnect.",
     },
     lenses: [
         ("Structure", "Structure"),
@@ -439,6 +446,9 @@ pub static UKRAINIAN: Words = Words {
         copy_footer: "Переклад для читання, який ocgen створив із Markdown-файлу, указаного вище. Чинний запис — англійський файл наміру, який він перекладає.",
         recap_title: "Щоденний підсумок",
         recap_footer: "ocgen створив цю сторінку з Markdown-файлу, указаного вище. Основний файл — .md.",
+        board_title: "Дошка робочих потоків",
+        board_footer: "ocgen створив цю сторінку з дошки, указаної вище, яку веде /workstreams. Основний файл — .md; сторінка стежить за кожною зміною дошки, а ocgen notes open workstreams показує її знову.",
+        board_offline: "Переглядач від’єднано — сторінка не оновлюватиметься. Щоб під’єднатися знову, виконайте <code>ocgen notes open workstreams</code>.",
     },
     lenses: [
         ("Structure", "Структура"),

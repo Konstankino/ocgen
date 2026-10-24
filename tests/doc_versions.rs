@@ -192,6 +192,8 @@ fn recap_reports_get_a_static_zen_page_in_every_project() {
         r#"class="all""#,
         r#"class="langs""#,
         r#"class="offline""#,
+        // The board's change highlighting is the board's alone.
+        "ocgen-board:",
     ] {
         assert!(!page.contains(never), "{never} in:\n{page}");
     }
@@ -726,4 +728,81 @@ fn a_suffix_that_names_no_language_is_no_version() {
             [root.join(".claude/notes/flow.md")]
         );
     }
+}
+
+// ---------------------------------------------------------------- the board --
+
+const BOARD: &str = "# Workstreams — Ship it\nStatus: APPROVED session=s1\n\n## Workstreams\n\
+- Workstream: a — Worker: session a — Branch: refs/heads/worktree-a — Worktree: — — Tip: — — State: dispatched — Gate: pending — After: none\n";
+
+/// The /workstreams board is operational and English only: a hook parses it,
+/// so no project language ever asks for a second version of it.
+#[test]
+fn the_workstreams_board_is_english_only_and_never_owed() {
+    let dir = project("English", "Ukrainian", true, false, false);
+    let root = dir.path();
+    let md = write(root, ".claude/workstreams/board.md", BOARD);
+    let doc = versions::classify(&md).expect("the board is a document");
+    assert_eq!(doc.family.kind, versions::Kind::Board);
+    assert_eq!(doc.language, "English");
+    assert!(!doc.orphan);
+    assert_eq!(doc.family.languages(), ["English"]);
+    assert!(!doc.family.bilingual());
+    assert!(versions::touch(&doc, Some("s1")).is_empty());
+    assert!(!root.join(".claude/workstreams/.versions").exists());
+
+    // Through the hook: a page, no note to Claude, nothing owed at the turn's end.
+    let o = wrote(root, "s1", "", ".claude/workstreams/board.md");
+    assert_eq!((o.code, o.stdout.as_str(), o.stderr.as_str()), (0, "", ""));
+    let page = read(root, ".claude/workstreams/board.html");
+    assert_has(
+        &page,
+        &[r#"<html lang="en""#, "Workstreams board", "worktree-a"],
+    );
+    for never in [
+        r#"class="langs""#,
+        r#"class="version-note""#,
+        "ще не написано",
+    ] {
+        assert!(!page.contains(never), "{never} in:\n{page}");
+    }
+    assert_eq!(held(&stop(root, "Stop", "s1", "", false)), None);
+    assert!(versions::owed(root, "s1").is_empty());
+    assert!(!root.join(".claude/workstreams/.versions").exists());
+
+    // A file named like another language's version is no version of the board:
+    // refused, never rendered, never asked for.
+    let uk = write(root, ".claude/workstreams/board.ukrainian.md", BOARD);
+    assert_eq!(versions::classify(&uk), None);
+    assert!(render_file(&uk).is_err());
+    let o = wrote(root, "s1", "", ".claude/workstreams/board.ukrainian.md");
+    assert_eq!(o.code, 0, "{o:?}");
+    assert_eq!(context(&o), None);
+    assert!(!root
+        .join(".claude/workstreams/board.ukrainian.html")
+        .exists());
+    assert_eq!(held(&stop(root, "Stop", "s1", "", false)), None);
+
+    // A change of languages renames the ledgers' versions, never the board.
+    let before = Project::load_state(root).unwrap();
+    let mut after = before.clone();
+    after.language = "Ukrainian".into();
+    after.response_language = "English".into();
+    write(root, ".claude/notes/flow.md", UK_LEDGER);
+    let moved = versions::relabel(root, &before, &after);
+    assert!(
+        moved
+            .renamed
+            .iter()
+            .any(|(from, _)| from.ends_with("flow.md")),
+        "{moved:?}"
+    );
+    assert!(
+        moved
+            .renamed
+            .iter()
+            .all(|(from, to)| !from.ends_with("board.md") && !to.ends_with("board.md")),
+        "{moved:?}"
+    );
+    assert_eq!(read(root, ".claude/workstreams/board.md"), BOARD);
 }

@@ -216,6 +216,14 @@ struct Parts {
     body: String,
 }
 
+/// What a read-only Zen page shows: its title, its `Key: value` fields and its
+/// body, already safe HTML.
+pub(crate) struct Content {
+    pub title: Option<String>,
+    pub fields: Vec<(String, String)>,
+    pub body: String,
+}
+
 fn parts(md: &str) -> Parts {
     let lines: Vec<&str> = md.lines().collect();
     let mut comment = false;
@@ -294,6 +302,8 @@ pub enum ZenKind {
     Copy,
     /// A /recap report.
     Recap,
+    /// The /workstreams board.
+    Board,
 }
 
 /// How a read-only Zen page is shown.
@@ -339,6 +349,26 @@ pub fn page_with(
     language: &str,
     z: &Zen,
 ) -> Result<String> {
+    let p = parts(md);
+    let content = Content {
+        title: p.title,
+        fields: p.fields,
+        body: draft::render_safe(&p.body, false),
+    };
+    render_page(md, &content, source, rev, nonce, language, z)
+}
+
+/// [`page_with`] for `content` already split from `md` (the board's page lays
+/// its entries out as a table): the Markdown view still shows `md` as written.
+pub(crate) fn render_page(
+    md: &str,
+    content: &Content,
+    source: &str,
+    rev: &str,
+    nonce: &str,
+    language: &str,
+    z: &Zen,
+) -> Result<String> {
     let w = words::for_language(language);
     let mut env = Environment::new();
     env.set_auto_escape_callback(|_| AutoEscape::Html);
@@ -351,7 +381,6 @@ pub fn page_with(
     env.add_template_owned("adr.html", templates::load(TEMPLATE)?)
         .context("parsing the intent file template")?;
     let name = source.rsplit('/').next().unwrap_or(source).to_string();
-    let p = parts(md);
     // Escaped here: minijinja's own escaping also turns `/` into `&#x2f;`.
     let safe = |s: &str| Value::from_safe_string(escape(s));
     let field = |k: &str, v: Value| {
@@ -360,7 +389,7 @@ pub fn page_with(
         m.insert("value", v);
         Value::from(m)
     };
-    let mut fields: Vec<Value> = p
+    let mut fields: Vec<Value> = content
         .fields
         .iter()
         .map(|(k, v)| field(k, Value::from_safe_string(field_html(v))))
@@ -387,13 +416,23 @@ pub fn page_with(
             w.versions.recap_footer,
             "ocgen — a /recap report, read-only; edit the .md file",
         ),
+        ZenKind::Board => (
+            w.versions.board_title,
+            w.versions.board_footer,
+            "ocgen — a /workstreams board, read-only; edit the .md file",
+        ),
+    };
+    let eyebrow = match z.kind {
+        ZenKind::Recap => "/recap",
+        ZenKind::Board => "/workstreams",
+        ZenKind::Intent | ZenKind::Copy => "/intent",
     };
     let (list, base) = z.list.unwrap_or(("", ""));
     let ctx = minijinja::context! {
         w => listing::words_value(w),
-        title => safe(p.title.as_deref().unwrap_or(name.trim_end_matches(".md"))),
+        title => safe(content.title.as_deref().unwrap_or(name.trim_end_matches(".md"))),
         fields => fields,
-        body => Value::from_safe_string(draft::render_safe(&p.body, false)),
+        body => Value::from_safe_string(content.body.clone()),
         source_text => safe(md),
         source => safe(source),
         slug => safe(z.topic),
@@ -402,11 +441,18 @@ pub fn page_with(
         list => list,
         base => safe(base),
         live => z.live,
-        eyebrow => safe(if z.kind == ZenKind::Recap { "/recap" } else { "/intent" }),
+        board => z.kind == ZenKind::Board,
+        eyebrow => safe(eyebrow),
         kind_title => kind_title,
         footer => footer,
         generator => generator,
-        offline => Value::from_safe_string(w.docs.intent_offline.to_string()),
+        offline => Value::from_safe_string(
+            match z.kind {
+                ZenKind::Board => w.versions.board_offline,
+                _ => w.docs.intent_offline,
+            }
+            .to_string()
+        ),
         versions => z.switch.versions.clone(),
         notice => z.switch.notice.clone(),
     };

@@ -5021,7 +5021,7 @@ fn verify_flags_safety_gates_that_fail_open() {
     let gate = |extra: serde_json::Value| {
         let mut h = serde_json::json!({
             "type": "command",
-            "command": "if [ \"$(ocgen hook --check 2>/dev/null)\" = \"ocgen-hooks 20\" ]; then ocgen hook team-approval-gate; else sh \".claude/hooks/team-approval-gate.sh\"; fi",
+            "command": "if [ \"$(ocgen hook --check 2>/dev/null)\" = \"ocgen-hooks 21\" ]; then ocgen hook team-approval-gate; else sh \".claude/hooks/team-approval-gate.sh\"; fi",
             "shell": "bash"
         });
         for (k, v) in extra.as_object().unwrap() {
@@ -6586,7 +6586,7 @@ fn inquire_registers_the_notes_hook() {
     assert_eq!(notes["matcher"], "Write|Edit|MultiEdit");
     let cmd = notes["hooks"][0]["command"].as_str().unwrap();
     assert!(
-        cmd.contains("ocgen hook inquire-notes") && cmd.contains("ocgen-hooks 20"),
+        cmd.contains("ocgen hook inquire-notes") && cmd.contains("ocgen-hooks 21"),
         "{cmd}"
     );
     assert_eq!(notes["hooks"][0]["shell"], "bash");
@@ -6607,16 +6607,46 @@ fn inquire_registers_the_notes_hook() {
         .join("plugin/nv/hooks/inquire-notes.sh")
         .is_file());
 
-    // Off with /inquire and /recap (and no reading copies: English answers).
+    // Off with /inquire, /recap and /workstreams (and no reading copies:
+    // English answers).
     let dir = tempdir().unwrap();
     let mut p = claude_default("nv2");
     p.claude.workflow.inquire = false;
     p.claude.workflow.recap = false;
+    p.claude.workflow.workstreams = false;
     p.scaffold(dir.path(), false).unwrap();
     assert!(!settings_of(dir.path())
         .to_string()
         .contains("inquire-notes"));
     assert!(!dir.path().join(".claude/hooks/inquire-notes.sh").exists());
+}
+
+/// /workstreams alone: the board gets its page after each write, but neither
+/// the `note` word (there are no ledgers) nor the version check (the board is
+/// English only) comes with it.
+#[test]
+fn the_notes_hook_renders_the_workstreams_board() {
+    let dir = tempdir().unwrap();
+    let mut p = claude_default("wb");
+    p.claude.workflow.inquire = false;
+    p.claude.workflow.recap = false;
+    p.claude.workflow.intent = false;
+    p.response_language = "Ukrainian".into();
+    p.scaffold(dir.path(), false).unwrap();
+    let s = settings_of(dir.path());
+    let groups = |event: &str| {
+        hook_groups(&s, event)
+            .iter()
+            .filter(|g| g.to_string().contains("inquire-notes"))
+            .count()
+    };
+    assert_eq!(groups("PostToolUse"), 1);
+    assert_eq!(groups("UserPromptSubmit"), 0);
+    assert_eq!(groups("Stop"), 0);
+    assert_eq!(groups("SubagentStop"), 0);
+    assert!(dir.path().join(".claude/hooks/inquire-notes.sh").is_file());
+    let skill = read(dir.path(), ".claude/skills/workstreams/SKILL.md");
+    assert!(skill.contains("`board.html`"), "{skill}");
 }
 
 /// Every local document is kept in both project languages: when they differ,
@@ -6714,11 +6744,13 @@ fn verify_reports_the_notes_view() {
         "{checks:#?}"
     );
 
-    // Skipped without /inquire and /recap (English answers: no reading copies).
+    // Skipped without /inquire, /recap and /workstreams (English answers: no
+    // reading copies).
     let dir = tempdir().unwrap();
     let mut p = claude_default("vn2");
     p.claude.workflow.inquire = false;
     p.claude.workflow.recap = false;
+    p.claude.workflow.workstreams = false;
     p.scaffold(dir.path(), false).unwrap();
     let checks = verify_no_claude(dir.path());
     assert_eq!(status_of(&checks, "notes view"), Status::Skip);
