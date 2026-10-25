@@ -242,9 +242,13 @@ fn folded_brief(stem: &str, project: Option<&crate::render::Project>) -> Option<
 /// What Claude is told after writing `path`, a file in the briefs folder `dir`
 /// whose name (`stem`) is no slug. When it reads as a language version of a
 /// brief ([`folded_brief`], with `project`'s languages when its state could be
-/// read) — the habit of a bilingual project — the note names that one file to
-/// fold the text into and gives no example made of the name: slugified, it
-/// would be a second brief (`billing-retry-ukrainian`). When the name
+/// read) — the habit of a bilingual project — the note names that one file and
+/// gives no example made of the name: slugified, it would be a second brief
+/// (`billing-retry-ukrainian`). When that brief is listed, the note asks for a
+/// merge of only what is new, never a write over it (its What I know and First
+/// question may be the user's own words, and briefs are git-ignored); when
+/// another spelling of it is listed, that file is named and never moved over;
+/// else this file is renamed to it in place. When the name
 /// slugifies to a brief the folder holds as an entry of its own
 /// (`Billing Retry.md` beside `billing-retry.md`), that brief is never offered
 /// as the rename target — a Claude that followed it would move this text over
@@ -278,25 +282,53 @@ fn rename_brief_note(
          hand-off can reach it.",
         brief::DIR
     );
+    let names: Vec<_> = fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.file_name())
+        .collect();
+    let listed = |name: &str| names.iter().any(|n| n == OsStr::new(name));
+    let stem_name = format!("{stem}.md");
     if let Some(base) = folded_brief(stem, project) {
+        let base_name = format!("{base}.md");
+        let target = format!("{}/{base_name}", brief::DIR);
+        let lead = format!(
+            "{head} It reads as a language version of {target}, and a brief is one file with \
+             no second language version"
+        );
+        if listed(&base_name) {
+            return format!(
+                "{lead}. That brief exists already, and it is the one with a page: merge only \
+                 what is new in this file into it, in its language; keep what the brief holds; \
+                 then delete this file — never write this file's text over it."
+            );
+        }
+        // On a disk that folds case the slug name reaches another spelling of
+        // it (`Billing-Retry.md`): a move there would overwrite that file.
+        let twin = names
+            .iter()
+            .filter(|n| *n != OsStr::new(&stem_name))
+            .find_map(|n| n.to_str().filter(|n| n.eq_ignore_ascii_case(&base_name)));
+        if let Some(twin) = twin {
+            return format!(
+                "{lead}. On this disk {target} may reach {}/{twin}, a different file under \
+                 another spelling: never move or write this file over it. Rename that one in \
+                 place to {target} first (`mv`), then merge only what is new in this file into \
+                 it, in its language, keep what it holds, and delete this file.",
+                brief::DIR
+            );
+        }
         return format!(
-            "{head} It reads as a language version of {}/{base}.md, and a brief is one file \
-             with no second language version: put the text in that file and delete this one.",
-            brief::DIR
+            "{lead}. No brief has that name yet: rename this file to {target} in place (`mv`), \
+             never write a new file and delete this one."
         );
     }
     let slug = slugify(stem);
     let mut example = String::new();
     if brief::is_name(&slug) {
-        let (slug_name, stem_name) = (format!("{slug}.md"), format!("{stem}.md"));
+        let slug_name = format!("{slug}.md");
         let target = format!("{}/{slug_name}", brief::DIR);
-        let names: Vec<_> = fs::read_dir(dir)
-            .into_iter()
-            .flatten()
-            .flatten()
-            .map(|e| e.file_name())
-            .collect();
-        let listed = |name: &str| names.iter().any(|n| n == OsStr::new(name));
         // Two spellings of one entry: only a disk that folds case has them.
         let one_file = stem.eq_ignore_ascii_case(&slug);
         match (listed(&slug_name), listed(&stem_name)) {
