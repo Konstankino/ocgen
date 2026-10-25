@@ -90,6 +90,7 @@ fn a_claude_project_with_nothing_else_turned_on_still_gets_it() {
         intake: false,
         refine: false,
         improve_prompt: false,
+        brief: false,
         fanout: false,
         verify_todos: false,
         prefer_explorer: false,

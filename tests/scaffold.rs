@@ -1005,6 +1005,7 @@ fn claude_powerups_and_workflow_can_be_disabled() {
         intake: false,
         refine: false,
         improve_prompt: false,
+        brief: false,
         fanout: false,
         verify_todos: false,
         prefer_explorer: false,
@@ -1424,6 +1425,7 @@ fn claude_team_enabled_without_hook_stubs() {
     p.claude.hooks_extra.drop_noop_cd = false; // nor is the no-op cd hook
     p.claude.workflow.recap = false; // nor is /recap's GitHub fetch
     p.claude.workflow.workstreams = false; // nor is its merge gate
+    p.claude.workflow.brief = false; // nor is the notes hook that opens a brief's page
 
     let dir = tempdir().unwrap();
     p.scaffold(dir.path(), false).unwrap();
@@ -4030,6 +4032,7 @@ fn workflow_commands_are_generated_as_skills() {
         ("intake", false),
         ("refine", false),
         ("improve-prompt", false),
+        ("brief", false),
     ] {
         let md = read(dir.path(), &format!(".claude/skills/{name}/SKILL.md"));
         assert!(
@@ -5021,7 +5024,7 @@ fn verify_flags_safety_gates_that_fail_open() {
     let gate = |extra: serde_json::Value| {
         let mut h = serde_json::json!({
             "type": "command",
-            "command": "if [ \"$(ocgen hook --check 2>/dev/null)\" = \"ocgen-hooks 21\" ]; then ocgen hook team-approval-gate; else sh \".claude/hooks/team-approval-gate.sh\"; fi",
+            "command": "if [ \"$(ocgen hook --check 2>/dev/null)\" = \"ocgen-hooks 22\" ]; then ocgen hook team-approval-gate; else sh \".claude/hooks/team-approval-gate.sh\"; fi",
             "shell": "bash"
         });
         for (k, v) in extra.as_object().unwrap() {
@@ -6586,7 +6589,7 @@ fn inquire_registers_the_notes_hook() {
     assert_eq!(notes["matcher"], "Write|Edit|MultiEdit");
     let cmd = notes["hooks"][0]["command"].as_str().unwrap();
     assert!(
-        cmd.contains("ocgen hook inquire-notes") && cmd.contains("ocgen-hooks 21"),
+        cmd.contains("ocgen hook inquire-notes") && cmd.contains("ocgen-hooks 22"),
         "{cmd}"
     );
     assert_eq!(notes["hooks"][0]["shell"], "bash");
@@ -6607,13 +6610,14 @@ fn inquire_registers_the_notes_hook() {
         .join("plugin/nv/hooks/inquire-notes.sh")
         .is_file());
 
-    // Off with /inquire, /recap and /workstreams (and no reading copies:
-    // English answers).
+    // Off with /inquire, /recap, /workstreams and /brief (and no reading
+    // copies: English answers).
     let dir = tempdir().unwrap();
     let mut p = claude_default("nv2");
     p.claude.workflow.inquire = false;
     p.claude.workflow.recap = false;
     p.claude.workflow.workstreams = false;
+    p.claude.workflow.brief = false;
     p.scaffold(dir.path(), false).unwrap();
     assert!(!settings_of(dir.path())
         .to_string()
@@ -6623,7 +6627,8 @@ fn inquire_registers_the_notes_hook() {
 
 /// /workstreams alone: the board gets its page after each write, but neither
 /// the `note` word (there are no ledgers) nor the version check (the board is
-/// English only) comes with it.
+/// English only) comes with it. /brief alone brings the word group (the hook
+/// gates each word on the state) and the folder watch, and no version check.
 #[test]
 fn the_notes_hook_renders_the_workstreams_board() {
     let dir = tempdir().unwrap();
@@ -6631,6 +6636,7 @@ fn the_notes_hook_renders_the_workstreams_board() {
     p.claude.workflow.inquire = false;
     p.claude.workflow.recap = false;
     p.claude.workflow.intent = false;
+    p.claude.workflow.brief = false;
     p.response_language = "Ukrainian".into();
     p.scaffold(dir.path(), false).unwrap();
     let s = settings_of(dir.path());
@@ -6647,6 +6653,34 @@ fn the_notes_hook_renders_the_workstreams_board() {
     assert!(dir.path().join(".claude/hooks/inquire-notes.sh").is_file());
     let skill = read(dir.path(), ".claude/skills/workstreams/SKILL.md");
     assert!(skill.contains("`board.html`"), "{skill}");
+
+    // /brief alone (with /deliver as its target).
+    let dir = tempdir().unwrap();
+    let mut p = claude_default("ba");
+    p.claude.workflow.inquire = false;
+    p.claude.workflow.recap = false;
+    p.claude.workflow.intent = false;
+    p.claude.workflow.workstreams = false;
+    p.scaffold(dir.path(), false).unwrap();
+    let s = settings_of(dir.path());
+    let groups = |event: &str| {
+        hook_groups(&s, event)
+            .iter()
+            .filter(|g| g.to_string().contains("inquire-notes"))
+            .count()
+    };
+    for (event, want) in [
+        ("PostToolUse", 1),
+        ("UserPromptSubmit", 1),
+        ("SessionStart", 1),
+        ("CwdChanged", 1),
+        ("FileChanged", 1),
+        ("Stop", 0),
+        ("SubagentStop", 0),
+    ] {
+        assert_eq!(groups(event), want, "{event}");
+    }
+    assert!(dir.path().join(".claude/hooks/inquire-notes.sh").is_file());
 }
 
 /// Every local document is kept in both project languages: when they differ,
@@ -6670,6 +6704,8 @@ fn the_hook_table_registers_the_version_check() {
         p.claude.workflow.inquire = inquire;
         p.claude.workflow.intent = intent;
         p.claude.workflow.recap = recap;
+        // /brief brings the word group of its own (tests/brief_skill.rs).
+        p.claude.workflow.brief = false;
         p.scaffold(dir.path(), false).unwrap();
         let s = settings_of(dir.path());
         (dir, s)
@@ -6744,13 +6780,14 @@ fn verify_reports_the_notes_view() {
         "{checks:#?}"
     );
 
-    // Skipped without /inquire, /recap and /workstreams (English answers: no
-    // reading copies).
+    // Skipped without /inquire, /recap, /workstreams and /brief (English
+    // answers: no reading copies).
     let dir = tempdir().unwrap();
     let mut p = claude_default("vn2");
     p.claude.workflow.inquire = false;
     p.claude.workflow.recap = false;
     p.claude.workflow.workstreams = false;
+    p.claude.workflow.brief = false;
     p.scaffold(dir.path(), false).unwrap();
     let checks = verify_no_claude(dir.path());
     assert_eq!(status_of(&checks, "notes view"), Status::Skip);

@@ -585,6 +585,8 @@ repo used for a plugin's marketplace and release workflow; `--team` enables
 .claude/skills/multi/SKILL.md        # /multi — fan the whole team out on one task (you run it)
 .claude/skills/intake/SKILL.md       # /intake — a structured requirements interview
 .claude/skills/refine/SKILL.md       # /refine — propose, take reasoned push-back, iterate
+.claude/skills/brief/SKILL.md        # /brief — write the brief /deliver, /inquire or /workstreams reads first: an interview informed by the code, a dry run of the target, a live page; it ends with the command to type
+.claude/briefs/<slug>.md             # a /brief brief — type `brief` to edit it under its coverage strip in your browser (the folder's own .gitignore keeps it out of git)
 .claude/skills/deliver/SKILL.md      # /deliver — route → sharpen → requirements → plan → research → gated execution (you run it)
 .claude/skills/inquire/SKILL.md      # /inquire — understand a codebase with evidence and one hint per answer; resumable ledger with a live HTML view
 .claude/skills/intent/SKILL.md       # /intent — prompt → investigate → approved plan → numbered intent file (optional) → issue draft (you run it)
@@ -708,8 +710,8 @@ its workflows as `.claude/skills/<name>/SKILL.md`. You still type `/deliver`, `/
 - **You start the side-effecting ones:** `/multi`, `/fanout`, `/workstreams`, `/deliver`, `/intent`,
   `/review-intent`, `/recap`, `/team` and `/team-plan` carry `disable-model-invocation: true`, so Claude can't start them on
   its own.
-- **Claude may use the rest when relevant:** `/inquire`, `/intake`, `/refine` and
-  `/improve-prompt`. Each has a `when_to_use` line saying when, so Claude picks it for the right
+- **Claude may use the rest when relevant:** `/inquire`, `/intake`, `/refine`, `/improve-prompt`
+  and `/brief`. Each has a `when_to_use` line saying when, so Claude picks it for the right
   requests; ocgen's own check holds them to it like your skills.
 - **Upgrading:** `ocgen doctor` removes the old generated `.claude/commands/*.md`. Files you
   wrote yourself are kept.
@@ -719,10 +721,12 @@ its workflows as `.claude/skills/<name>/SKILL.md`. You still type `/deliver`, `/
 
 **Extra hooks** (offered with the power-user defaults; apart from the config audit's guard, none
 of them ever block Claude):
-- **Notes pages** (on with `/inquire`, `/recap`, `/workstreams`, or reading copies): after each
-  write to a ledger in `.claude/notes/`, a `/recap` report, a reading copy or the `/workstreams`
+- **Notes pages** (on with `/inquire`, `/recap`, `/workstreams`, `/brief`, or reading copies): after
+  each write to a ledger in `.claude/notes/`, a `/recap` report, a reading copy or the `/workstreams`
   board, ocgen renders its HTML page and refreshes the browser tab that shows it (see [The visual
-  ledger](#the-visual-ledger)). When the project's two languages differ, it also tells Claude which
+  ledger](#the-visual-ledger)); after each write to a `/brief` brief it opens the brief's live editor
+  instead (see [Writing the brief first](#writing-the-brief-first-brief)). When the project's two
+  languages differ, it also tells Claude which
   language version is missing, and holds the end of a turn once while one is (see
   [Languages](#languages)); the board, English only, is never asked for in another language.
 - **Re-inject context after compaction** (on by default): when a conversation is compacted,
@@ -997,7 +1001,9 @@ your approval; checks the result against the plan's success criteria before repo
 guard does it when the team has one, otherwise a **final check** runs the tests and loops back);
 and summarizes — for a goal that came from an `/intent`, with a pull request draft that asks the
 approvers to review the change ([details](#from-findings-to-a-github-issue-intent)). Small, clear
-goals collapse the interview and plan into a one-paragraph brief.
+goals collapse the interview and plan into a one-paragraph brief. Given a brief written by `/brief`
+(`/deliver .claude/briefs/<slug>.md`), it reads that first, skips the phases it settles and asks only
+what its Open section leaves open ([details](#writing-the-brief-first-brief)).
 
 **`/inquire <topic or question>`** is a read-only loop for learning a codebase by asking
 questions — and for getting better at asking them:
@@ -1093,7 +1099,7 @@ converted on their next update.
 | Command / variable | What it does |
 |---|---|
 | `ocgen notes open [topic] [-p dir]` | Render a ledger and show it: refresh its tab, or open one. Picks by file name, then by `Topic:` line; with no topic, the latest ledger. `/inquire` runs this when it resumes. `ocgen notes open workstreams` (or the board's path) shows the [`/workstreams` board's page](#workstreams-workstreams) the same way, through a viewer of its own. |
-| `ocgen notes render <file.md>…` | Render pages without showing them. Only `/inquire` ledgers (`.claude/notes/<topic-slug>.md`), `/recap` reports (`.claude/notes/recap/<date>.md`) and `/intent` reading copies (`.claude/intent/view/<name>.md`) — and their other language versions (`<name>.<language>.md`) — and the `/workstreams` board (`.claude/workstreams/board.md`), by any path, are rendered; any other file is refused, and every argument is checked before anything is written. |
+| `ocgen notes render <file.md>…` | Render pages without showing them. Only `/inquire` ledgers (`.claude/notes/<topic-slug>.md`), `/recap` reports (`.claude/notes/recap/<date>.md`) and `/intent` reading copies (`.claude/intent/view/<name>.md`) — and their other language versions (`<name>.<language>.md`) — and the `/workstreams` board (`.claude/workstreams/board.md`), by any path, are rendered; any other file is refused, and every argument is checked before anything is written. A `/brief` brief (`.claude/briefs/<slug>.md`) is refused too: it has no static page, only the live editor the word `brief` opens. |
 | `OCGEN_NOTES_OPEN=0` | Never open a browser (pages are still rendered). `=1` always does. |
 | `OCGEN_NOTES_BROWSER` | Open pages with this command instead of the system default (`open`, `xdg-open`, `start`). Like those, it runs detached: ocgen doesn't wait for it or check how it exits, so a plain `firefox` is fine. |
 
@@ -1106,8 +1112,15 @@ says there are no `/inquire` notes yet. The hook answers the word itself: the pr
 open tab is reused: sent again, the word refreshes the ledger's tab or moves the list's. Any other
 prompt (`note this`) reaches Claude untouched. The same
 `inquire-notes` hook catches the word (`UserPromptSubmit`) and remembers the ledger each write
-makes the session's, one small file per session in `.claude/notes/.sessions/`. Projects created
-before get the word with `ocgen doctor [dir]`.
+makes the session's, one small file per session in `.claude/notes/.sessions/`. **`brief`** typed
+alone works the same way for `/brief`'s briefs: it opens the brief this session wrote, else the
+only one, else their list, and with none says there are no briefs yet
+([details](#writing-the-brief-first-brief)). Because a hook answers these words, a word typed as an
+*answer* must go in a sentence: "brief" to a question opens the page, "the brief one" reaches Claude
+(the hook's own answer says so). Each word is answered only in a project whose state turns its skill
+on; elsewhere it reaches Claude as typed (without a readable state, as under a plugin, `note` is
+answered as before and `brief` is left alone).
+Projects created before get the words with `ocgen doctor [dir]`.
 
 **When nothing opens.** In CI (`CI` is set) and on Linux without a display, the hook only renders
 the pages; `ocgen notes open` still opens one when you ask. The page and the live view need the
@@ -1123,7 +1136,125 @@ anywhere, and without a network the diagram's source is shown instead. Browsers 
 live connections per host, so keep fewer than six ledger pages open at once.
 
 To add these commands to an existing project, re-render it with `ocgen doctor [dir]` (projects
-created by older versions get `/inquire` switched on automatically).
+created by older versions get `/inquire` switched on automatically). `/brief` arrives the same way:
+an older project's state loads with it on, and `doctor` adds `.claude/skills/brief/SKILL.md`, the
+brief clauses of `/deliver`, `/inquire` and `/workstreams`, the rule's **Briefs** section, the
+session tip and the hook's new events in `settings.json`; until it runs, `ocgen verify` reports the
+files out of date and the hooks fall back to the project's scripts (the hook protocol went up).
+
+#### Writing the brief first (`/brief`)
+
+`/deliver`, `/inquire` and `/workstreams` each start cold on a one-line goal and spend their first
+phases asking what you could have said up front. **`/brief <goal>`** writes that brief first
+(wizard: "Include the /brief brief-writer command?"; on by default, and rendered when the project
+has at least one of the three). You type it, or ask Claude to prepare a brief and it runs `/brief`
+itself: it writes nothing but the brief, and it never starts the target.
+
+```
+/brief add retries to the billing client
+```
+
+0. **Resume, or start.** It looks where it is first (`git rev-parse`): a brief written in a worktree
+   goes when the worktree does and the main checkout never sees it, so it refuses to write a
+   `workstreams` brief there (the manager runs in the main checkout) and warns before any other. It
+   makes sure `.claude/briefs/.gitignore` holds `*`. With no argument it lists the briefs, newest
+   first, to continue one; an argument that matches a brief's slug or Goal resumes it from where its
+   `Status:` and Open section say it stands, anything else is the goal of a new brief.
+1. **Route.** The goal is classified among the targets the project has — `deliver` (build or change
+   something), `inquire` (understand how or why the code works, no change yet), `workstreams`
+   (independent pieces that each need their own commits and checks) — in one line you can override.
+   The header and the Goal are written at once, `Status: draft`, and the page opens.
+2. **Skim.** Read-only explorer subagents gather the entry points, files, tests and recent git activity
+   the goal touches, as `file:line` facts under Context, so no question asks what the code answers.
+3. **Interview.** One question at a time, 2–4 options, the recommended one first with a reason; your
+   own answer is always allowed. The whole file is rewritten with the Write tool after every answer,
+   so the page follows and nothing is lost when you close the session. What Claude fills in without
+   asking goes under **Inferred** by slug; contest an item by naming its slug and it becomes a question.
+4. **Dry run.** When the sections are covered, a fresh read-only subagent gets the target's `SKILL.md`
+   (`${CLAUDE_SKILL_DIR}/../<target>/SKILL.md`, so it is found in a worktree and in a plugin) and the
+   brief, and returns the questions the target would still ask in its first phases. Each is dropped
+   (the brief already answers it, and the wording that hid the answer is tightened), answered from the
+   code (the fact under Context, the conclusion under Inferred) or asked. At most three rounds; what
+   is left stays under **Open**, and the target asks it.
+5. **Polish.** The `/improve-prompt` technique on the prose, without adding, removing or renaming a
+   section or a key, and without changing what any answer means.
+6. **Hand off.** `Status: ready`, `Updated:` and `Commit:` refreshed, and the one thing to type next:
+   `/deliver .claude/briefs/billing-retries.md`. Then it stops; it never starts the target, even when
+   asked in the same message.
+
+**The file.** `.claude/briefs/<slug>.md`: the slug is ASCII `a-z`, `0-9` and hyphens, at most 80
+characters, in English, saying what it is about. The folder keeps itself and the briefs out of git
+with its own `.gitignore` holding `*`, as `.claude/workstreams/` does. The header is `# Brief: <slug>`,
+then `Target:`, `Status:` (`draft` or `ready`), `Updated: <date> · Commit: <short sha>` and
+`Hand-off:`. The sections depend on the target — `deliver`: Goal, Context, Scope, Success criteria,
+Constraints, Out of scope, Risks; `inquire`: Goal, Context, What I know, First question, Success
+criteria, Constraints, Out of scope; `workstreams`: `deliver`'s plus Workstreams, each entry in the
+board's own `- Workstream: <slug> — Files: <paths> — After: … — Worker: … — Check: … — Criteria: …`
+shape — and every brief ends with Open and Inferred. Success criteria and risks are bullets
+`- <slug>: …`, named by slug like everything the brief refers back to. The headings and the `Key:`
+lines stay English (ocgen parses them); the text is yours.
+
+**The page and the word.** A brief has no static page. After every write the `inquire-notes` hook
+(`PostToolUse` on the Write or Edit tool) opens the brief in the drafts' browser editor
+([details](#from-findings-to-a-github-issue-intent)) in a brief mode: the same Save, Source, Preview,
+Focus and palettes, plus a **coverage strip** above the text — the target and status badges, one
+cell per section the target needs, **covered**, **thin** (a prose section under 40 characters, a list
+without a real bullet, a success criterion without its slug, a Workstreams entry without
+`Workstream:` or `Files:`) or **missing**, a hint and never a block — then **What the dry run
+still asks** (the Open list) and **Inferred without asking**, folded. **Copy brief** copies the
+Markdown (for a worker session in a worktree, which can't read this checkout, to paste as its first
+message), **Copy formatted** the rich text, **Copy hand-off** the command. The strip is recomputed as
+you type, Save writes the `.md` through the viewer, and Claude reads the file again before every
+step, so what you change in the page is what it continues from; a change on disk refreshes the tab,
+and a save over a newer file is refused like a draft's. Type **`brief`** alone (your whole message,
+any case) and the hook opens the brief this session wrote, else the only one, else their list (10 a
+page, newest first, each with its target, status and date); with none it says there are no briefs in
+`.claude/briefs/` yet and that `/brief` writes one. The hook answers the word itself, so the prompt
+stops there — which is why a word typed as an *answer* must go in a sentence, and why `/brief` never
+labels an option with the bare word. A file in `.claude/briefs/` whose name is no slug (spaces,
+uppercase, Cyrillic) gets no page: the hook tells Claude to rename it, and a language-suffixed name
+(`billing-retries.ukrainian.md`) is folded back into its one brief; nothing is ever moved over an
+existing brief. The list names the skipped files too.
+
+**How the targets use it.** `/deliver .claude/briefs/<slug>.md` (with or without a leading `@`)
+reads the brief first and treats it as your answers: Goal, Scope, Success criteria (their slugs
+kept), Constraints, Out of scope and Risks settle phases 1–2 and seed the plan's task list, Scope
+line and risk register; Context is the skim already done (a `file:line` that looks stale is
+re-checked); Inferred items are yours unless you contest one; only the Open items are asked, then
+the plan is presented for approval as usual. A `Status: draft` brief is usable, and it says so.
+`/inquire` takes the Goal as the topic (matching a ledger by it, else orienting with Context
+shortening the map), seeds the mental model from What I know (`assumed` bullets verified first),
+the boundaries and lenses from Constraints, asks the Open items first, then sharpens your First
+question and answers it — and never asks for a topic or a first question again. `/workstreams`
+takes the Workstreams section as the proposed split, checks it against the code (disjoint files,
+`git log` on them), asks the Open items, then writes the `DRAFT` board for approval; each
+workstream's `brief.md` is written from its entry, and with an open board the usual question applies
+(add this goal, or close the board first). A brief's `Target:` line is its route: `/deliver` given
+an `inquire` or `workstreams` brief says so and stops. **A path that doesn't exist is an error, not
+a goal:** the target says there is no such brief here — a brief written in a worktree stays in that
+worktree — and stops, instead of interviewing you about a goal named `.claude/briefs/x.md`. Only the
+path is accepted, never a bare slug, so `/deliver logging` can't pick up a weeks-old `logging.md`.
+
+**For `/inquire`** the brief never writes your questions for you: `/inquire` teaches you to ask by
+making you form each question yourself. It carries the topic and why you study it, what you know or
+assume (each bullet `assumed` until something verifies it), the boundaries and the lenses to favour,
+and your own first question, sharpened with you the way `/inquire` does it (2–3 sharper variants,
+you pick); its dry run asks only what orient and sharpen still need, never what you should ask next.
+
+**Languages.** The brief's text is written in the project's instruction language (the skill
+recommends it; nothing enforces it), the page's labels follow the answer language (English or
+Ukrainian), the headings and keys stay English, and a brief has no second language version: a
+bilingual project is never asked for one and no turn is held for it (see [Languages](#languages)).
+
+**Permissions and the rest.** The skill pre-approves only `git rev-parse` (the worktree check and
+the `Commit:` line); the Write tool it uses after every answer is pre-approved with the permissions
+power-up and asks without it. The page needs the ocgen binary on `PATH`: without it the brief is
+still written, `brief` reaches Claude as typed, and `ocgen verify` says so. `ocgen verify` runs two
+probes, `/brief hook` (a write to a scratch brief through the hook is remembered, keeps its folder
+out of git and fails nothing) and `/brief word` (the word is answered, and the probe leaves no
+record). A skill of your own named `brief` keeps its file and switches the generated one off
+entirely, so no clause, rule or tip points at it; a hand-made `.claude/commands/brief.md` is
+shadowed by the generated skill, and `ocgen landscape` says so.
 
 #### From findings to a GitHub issue (`/intent`)
 
@@ -1303,7 +1434,7 @@ The same `intent-draft` hook catches this word and remembers the intent file the
 (by path, or by a change the file watcher sees), so projects created before get it with the new binary,
 without regenerating. The intent files are tracked, so nothing is written beside them: the viewer
 and the session records live in `.claude/intent/viewer/`, which ignores itself. A prefix spelled
-like a word ocgen already has (`draft`, `note`, `notes`) leaves that word alone; `ocgen adr` still
+like a word ocgen already has (`draft`, `note`, `notes`, `brief`) leaves that word alone; `ocgen adr` still
 opens its files.
 
 **Blameless, but completely honest.** The team that wrote the code reads these drafts, so they
@@ -1519,7 +1650,9 @@ For one piece it offers `/deliver` instead.
 1. **Plan.** It skims the code, interviews you, and splits the goal into workstreams that touch
    disjoint files, each with a slug, a brief (goal, files, acceptance criteria, check command,
    out of scope), an `After:` dependency and a worker kind. You approve the board before anything
-   starts.
+   starts. A brief from `/brief` as the goal (`/workstreams .claude/briefs/<slug>.md`) brings the
+   proposed split with it: the manager checks it against the code and asks only the brief's Open
+   items ([details](#writing-the-brief-first-brief)).
 2. **Dispatch.** A **session worker** (anything with commits, a check it runs itself, or the
    `/deliver` pipeline) runs in its own worktree: the Claude desktop app starts it from the
    manager; in the CLI the manager prints `claude --worktree <slug> --name <slug>` for you to
@@ -1859,17 +1992,17 @@ and inside the ocgen binary (`ocgen hook <name>`). The generated hook command us
 binary when a compatible ocgen is installed, and the script otherwise:
 
 ```sh
-if [ "$(ocgen hook --check 2>/dev/null)" = "ocgen-hooks 21" ]; then ocgen hook team-approval-gate; else sh ".../team-approval-gate.sh"; fi
+if [ "$(ocgen hook --check 2>/dev/null)" = "ocgen-hooks 22" ]; then ocgen hook team-approval-gate; else sh ".../team-approval-gate.sh"; fi
 ```
 
 - **The binary gives you** real JSON parsing instead of `grep`, and hooks that work on
   **native Windows**.
 - **The scripts keep the project working** for teammates and CI machines without ocgen.
   The exceptions are `inquire-notes`, which renders the notes pages (the `/workstreams` board's
-  too), opens them on `note` and asks for each document's other language version, `intent-draft`, which opens `/intent`'s issue draft (and, on `adr`, its intent files)
+  too), opens them on `note`, opens a `/brief` brief's editor after each write and on `brief`, and asks for each document's other language version, `intent-draft`, which opens `/intent`'s issue draft (and, on `adr`, its intent files)
   in the browser, `intent-approvers`, which checks drafts against the current approvers, and
   `recap-github` and `github-read`, which answer `/recap`'s and Claude's GitHub requests: their scripts do nothing, so without
-  ocgen the ledgers stay Markdown only, nothing asks for a document's other language, `draft`, `note` and `adr` reach Claude as typed, only `ocgen verify` and `ocgen edit intent` report a draft that misses an
+  ocgen the ledgers stay Markdown only, a brief gets no page, nothing asks for a document's other language, `draft`, `note`, `adr` and `brief` reach Claude as typed, only `ocgen verify` and `ocgen edit intent` report a draft that misses an
   approver, `/recap` reports GitHub as not checked, and Claude asks you to run gh.
   They need only a POSIX `sh` (Git Bash on Windows): `jq` is used when present and is never
   required (without it, JSON escapes are decoded, and a command holding a `\b`, `\f` or `\u`
@@ -2174,7 +2307,7 @@ defaults to `.`.
 
 | Command | What it does |
 |---|---|
-| `ocgen new [dir] --target claude` | Scaffold a new Claude project (agents, `/multi` `/intake` `/refine` `/fanout` `/workstreams` `/deliver` `/inquire` `/intent` `/review-intent` `/recap`, `CLAUDE.md`, `settings.json`). |
+| `ocgen new [dir] --target claude` | Scaffold a new Claude project (agents, `/multi` `/intake` `/refine` `/brief` `/fanout` `/workstreams` `/deliver` `/inquire` `/intent` `/review-intent` `/recap`, `CLAUDE.md`, `settings.json`). |
 | `ocgen new [dir] --target claude --output plugin` | Emit a distributable plugin instead of the project tree. |
 | `ocgen new [dir] --target claude --output both --repo <owner/repo>` | Emit both the project **and** a plugin (marketplace + release workflow). |
 | `ocgen new [dir] --target claude --team` | Also enable Agent Teams (env flag + `/team` + hooks + guidance). With the approval gate on, the sandbox question defaults to yes (macOS, Linux/WSL2). |
@@ -2209,11 +2342,11 @@ for a plugin; `--team` is off by default. (The `--base-url` flag is OpenCode-onl
 |---|---|
 | `ocgen landscape [dir]` (alias `horizon`) | Read-only overview: agents (alias/tools/colour), skills, workflow/output/team setup, delegation topology, and a **Checks** section. |
 | `ocgen doctor [dir] [--dry-run] [--yes]` | Repair the project and rewrite files (invalid models, colours, empty roles, bad enum values, older state files). Shows a per-file plan with diffs, flags hand edits, offers to keep hand-added permission rules and MCP servers, removes files ocgen no longer generates, asks first, and backs up to `.ocgen-backup/`. |
-| `ocgen verify [dir] [--no-claude]` | Check the project works: up to date, settings valid, no local/user/managed setting turns hooks off or weakens a gate, hooks run (in bash; Git Bash present on Windows), the safety gates block when they fail to run (on Claude Code 2.1.295+), every gate is ocgen's own and the approval gate blocks, http:// WebFetch is blocked, a no-op `cd` is dropped, `/inquire` ledgers get their HTML view, `note` opens them, `draft` opens the `/intent` issue draft and `adr` its intent files, `/recap`'s GitHub request gets an answer, pending intents and drafts name the current approvers, the sandbox is on behind the gate, the hooks' sandbox works here, the pre-push hook blocks Claude and lets you through, scripts use LF, the statusline renders, ocgen on PATH is current, Claude Code validation passes. Runs only what ocgen generates. Exits 1 on failure. |
+| `ocgen verify [dir] [--no-claude]` | Check the project works: up to date, settings valid, no local/user/managed setting turns hooks off or weakens a gate, hooks run (in bash; Git Bash present on Windows), the safety gates block when they fail to run (on Claude Code 2.1.295+), every gate is ocgen's own and the approval gate blocks, http:// WebFetch is blocked, a no-op `cd` is dropped, `/inquire` ledgers get their HTML view, `note` opens them, `draft` opens the `/intent` issue draft and `adr` its intent files, a `/brief` brief's write is remembered and `brief` is answered (the `/brief hook` and `/brief word` probes), `/recap`'s GitHub request gets an answer, pending intents and drafts name the current approvers, the sandbox is on behind the gate, the hooks' sandbox works here, the pre-push hook blocks Claude and lets you through, scripts use LF, the statusline renders, ocgen on PATH is current, Claude Code validation passes. Runs only what ocgen generates. Exits 1 on failure. |
 | `ocgen approve [dir] [--minutes N] [--status] [--revoke]` | You approve high-impact actions for 1–1440 minutes (default 30). Refuses to run under Claude Code or without a terminal. |
 | `ocgen verify [dir] --run-check` | Also run the project's committed check command, as you and unsandboxed (only on a repository you trust). |
 | `ocgen notes open [topic]` | Show an `/inquire` ledger's HTML page: refresh the tab that shows it, or open one ([details](#the-visual-ledger)); `ocgen notes open workstreams` does the same for the `/workstreams` board's page. |
-| `ocgen notes render <file.md>…` | Render `/inquire` ledgers (`.claude/notes/<topic-slug>.md`), `/recap` reports (`.claude/notes/recap/<date>.md`) and `/intent` reading copies (`.claude/intent/view/<name>.md`), in any of the project's languages, and the `/workstreams` board (`.claude/workstreams/board.md`), to their HTML pages without opening them; any other file is refused. |
+| `ocgen notes render <file.md>…` | Render `/inquire` ledgers (`.claude/notes/<topic-slug>.md`), `/recap` reports (`.claude/notes/recap/<date>.md`) and `/intent` reading copies (`.claude/intent/view/<name>.md`), in any of the project's languages, and the `/workstreams` board (`.claude/workstreams/board.md`), to their HTML pages without opening them; any other file is refused. A `/brief` brief is refused too: it has no static page (type `brief` for its editor). |
 | `ocgen draft [name] [-p dir]` | Open an issue or pull request draft (`.claude/intent/drafts/<name>.md`: `/intent`'s, `/review-intent`'s, or a `pr-<slug>.md` Claude wrote) in a local browser editor: edit it as formatted text (Markdown syntax hidden) or as Markdown source, save it back as plain Markdown (untouched blocks keep their exact text), preview it as GitHub shows it, and copy it. A calm black page by default (white on request), the text around the cursor dimmed, and a Focus button for full screen. With no name, the only draft, or with several, their list to pick from (10 a page, newest first); `ADR-0007` picks by intent. Typing `draft` in Claude Code does the same, with the draft that session wrote last selected in the list ([details](#from-findings-to-a-github-issue-intent)). |
 | `ocgen adr [name] [-p dir]` | Read an `/intent` file (`docs/adr/ADR-0007-<slug>.md` by default; the project's prefix and directory) in a local browser page, read-only and sanitized like the draft's preview, in the drafts' black or white palette. With no name, the only file, or with several, their list to pick from (10 a page, highest number first); a name, its start, or a number (`7`, `0007`, `ADR-7`) picks one. Typing the prefix in lowercase (`adr`) in Claude Code does the same, with the file that session wrote last selected ([details](#from-findings-to-a-github-issue-intent)). |
 | `ocgen sandbox status [-p dir] [--json]` | Which sandbox runs the hooks' check and formatter on this machine (Seatbelt, bubblewrap, Landlock, wasmtime for WASI modules; on native Windows, why there is none), why the others can't, and what it grants. |
@@ -2259,6 +2392,12 @@ default team. If you made one before the scope guard or the adversary existed, n
 still get the old team until you add the `scope-guard` and `adversary` entries to it, in the
 shipped order (archetypes need no copy: a missing one comes from the binary).
 
+An override of `claude/commands/deliver.md.j2` or `claude/commands/inquire.md.j2` made before
+`/brief` has no brief clause, so a `/deliver` or `/inquire` rendered from it never reads a brief;
+an override of `claude/notes/draft.html.j2` from then shows a brief as an issue draft, with no
+coverage strip. `ocgen landscape` warns about each: bring the default's `{% if brief %}` blocks
+into your copy.
+
 **What can't be overridden.** Hook scripts, the statusline script (`claude/statusline.sh`) and
 the gate-protocol templates (`claude/commands/team.md.j2`, `team-plan.md.j2`, `fanout.md.j2`,
 `workstreams.md.j2` and `claude/rules/ocgen-team.md.j2`, which teach the plan, owner, check,
@@ -2282,14 +2421,14 @@ opencode/commands/multi.md.j2     # a command that fans out to the subagents
 seeds.toml               # blank-agent seed text (body + external prompt)
 claude/agent.md.j2              # one generic Claude subagent
 claude/CLAUDE.md.j2             # project instructions + roster
-claude/commands/*.md.j2         # multi / intake / refine / fanout / workstreams / deliver / inquire / intent / review-intent / recap… (rendered as skills)
+claude/commands/*.md.j2         # multi / intake / refine / brief / fanout / workstreams / deliver / inquire / intent / review-intent / recap… (rendered as skills)
 claude/intent/*.md              # default /intent issue and intent-file templates (copied into new projects)
 claude/intent/*.md.j2           # /intent's shared text (writing standard, tone check, numbering, reading copy,
                                 # browser review), included by /intent and /review-intent
 claude/notes/ledger.html.j2     # the /inquire ledger's HTML page
 claude/notes/adr.html.j2        # the read-only page of an intent file, a reading copy, a /recap report and the /workstreams board
 claude/notes/langs.html.j2      # the language switch both pages include
-claude/notes/draft.html.j2      # the /intent issue draft's editor (`draft`, `ocgen draft`): its layout, palettes and script;
+claude/notes/draft.html.j2      # the /intent issue draft's editor (`draft`, `ocgen draft`) and, in its brief mode, the /brief brief's (`brief`): layout, palettes, script;
                                 # the Milkdown editor itself is built into the binary (tools/milkdown, not a template)
 claude/notes/page.css           # the style the pages share
 claude/skill/SKILL.md.j2        # one generic skill

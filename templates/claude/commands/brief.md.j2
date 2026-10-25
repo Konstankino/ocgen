@@ -1,0 +1,181 @@
+---
+description: Write the brief a workflow skill needs before it starts — an interview informed by the code, a dry run of the target skill, a live page; the brief ends with the command to type
+when_to_use: Use when asked to write, prepare or draft a brief, a spec or a task description before a change, a study or a split into workstreams, or to prepare what /deliver, /inquire or /workstreams will be given — not to do the work itself, not a requirements checklist (/intake), not a rewrite of an existing prompt (/improve-prompt).
+argument-hint: "[goal, or a brief's slug — empty to pick one]"
+allowed-tools: {{ allowed_tools }}
+---
+Write the brief for: $ARGUMENTS
+
+You write the brief; you never run the work it describes. A brief is one file,
+`.claude/briefs/<slug>.md` — the slug is ASCII `a-z`, `0-9` and hyphens, in English, at most 80
+characters, saying what it is about (`billing-retry`) — written with the **Write tool** after every
+answer, so nothing is lost when I close the session, and shown as a page in my browser. The target
+skill reads it instead of interviewing me again. These hold throughout:
+- Ask **one question at a time**, with 2–4 options, the **recommended one first** with a one-line
+  reason; I can always type my own answer. Never label an option with the bare word `brief`: typed
+  alone, it opens the page instead of reaching you.
+- **Never ask what the code already answers**: look first, then ask. Say what you inferred.
+- Name what the brief refers back to — criteria, risks, workstreams — by kebab-case slugs, never
+  by codes (the project rule *Naming what you refer back to*).
+- Before every step, **Read the brief again**: I may have edited it in the page, and the file wins
+  over your memory of it.
+- Keep the headings and the `Key:` lines exactly as in the template below: ocgen parses them for
+  the page{% if not english_prompts %}. Write the text itself in {{ prompt_language }} unless I ask for another
+  language{% endif %}.
+
+## 0. Resume, or start
+
+First, where you are: `git rev-parse --path-format=absolute --git-dir --git-common-dir`. Two
+different paths mean a worktree. A brief written here goes when the worktree does, and the main
+checkout never sees it{% if workstreams %}; `/workstreams` runs only in the main checkout, so never write a
+`workstreams` brief here — tell me to run `/brief` there. For any other target, warn{% else %}. Warn{% endif %} me before
+writing anything and go on only when the brief is for this worktree's own work (a worker's), or
+when I say so. Then make sure `.claude/briefs/.gitignore` exists and holds the single line `*`
+(the folder keeps itself, and the briefs, out of git).
+
+- **No arguments:** list the briefs in `.claude/briefs/` — slug, `Target:`, `Status:`, `Updated:`
+  — newest first, and let me pick one to continue; with none, ask for the goal.
+- **With arguments:** match an existing brief by its slug or its Goal and continue it from where
+  its `Status:` and its Open section say it stands. Otherwise the arguments are the goal of a
+  new brief.
+
+The page opens by itself after every write: a hook shows the brief in an editor, with a coverage
+strip (one cell per section the target needs: missing, thin, covered), what the dry run still asks,
+the target, and Copy buttons; what I save there is in the file the next time you Read it. When you
+resume a brief, refresh its `Updated:` and `Commit:` lines and write the file: that puts its page in
+front of me again. If no page opens (no ocgen on PATH, or a browser switched off), carry on — the
+file is the record, and `brief` typed alone opens the page at any time.
+
+## 1. Route
+
+Classify the goal, say the classification in one line, and let me override it:
+{% if deliver %}- **deliver** — build or change something → the brief for `/deliver`.
+{% endif %}{% if inquire %}- **inquire** — understand how or why the code works, no change wanted yet → the brief for
+  `/inquire` (see *When the target is /inquire* below).
+{% endif %}{% if workstreams %}- **workstreams** — several independent pieces, each needing its own commits and checks → the
+  brief for `/workstreams`; one piece is {% if deliver %}`deliver`{% else %}not a split{% endif %}.
+{% endif %}The target decides which sections the brief needs (the template below). Write the header
+and the Goal now, with `Status: draft`.
+
+## 2. Skim
+
+Read-only, in parallel ({{ explorer }} subagents where useful): the entry points, files and types
+the goal touches, what is already true, the tests and the check command, recent git activity on
+those files. Put what you found under **Context** as `file:line` facts: this is what makes every
+question informed and keeps you from asking what the code answers.{% if workstreams %} For **workstreams**, check
+before the interview that the pieces you would propose touch disjoint files (Grep the paths,
+`git log --oneline -- <path>` for recent churn): two pieces that edit the same file are one
+workstream.{% endif %}
+
+## 3. Interview
+
+One question at a time until every section the target needs is covered: scope, success criteria
+(one per line, each with its slug and how to see it), constraints, out of scope, risks{% if workstreams %}; for
+workstreams, the split itself — slug, files, `After:`, worker kind (**session** for anything with
+commits or a check the worker runs{% if deliver %}, or the `/deliver` pipeline{% endif %}; **subagent**{% if implementer %} — `{{ implementer }}` —{% endif %} only for
+one edit set with no commit and no check run by the worker), check and criteria{% endif %}.{% if scope_guard %} `{{ scope_guard }}`
+checks a change against the criteria's slugs and the Scope line, so write them to be checked.{% endif %}
+After **each** answer rewrite the whole file with the Write tool — not Edit, not Bash: the write is
+what refreshes the page. What you fill in without asking goes under **Inferred** as
+`- <slug>: <what you assumed, and from what>`; I contest an item by naming its slug, and a
+contested item becomes a question. Skip a question whose answer is already in the brief or the
+code.
+
+## 4. Dry run
+
+When the sections are covered, ask the target itself what it would still ask. Start a **fresh,
+read-only subagent** ({{ explorer }}; it gets no conversation context) with exactly this: the path
+of the target's skill, `${CLAUDE_SKILL_DIR}/../<target>/SKILL.md` (where this skill was loaded
+from, so it is there in a worktree and in a plugin too), the path of the brief, and one question —
+*"Read both; if you cannot read the skill, answer `cannot read the skill` and nothing else. Given
+this brief and the code it cites (read only the cited `file:line` ranges), which questions would
+this skill still have to ask the user in its first phases ({{ dry_run_phases }}) before it could
+present its plan, board or first answer? One line each: the question, the phase it comes from, why
+the brief doesn't settle it. Write `none` when nothing is left."* It returns that list and nothing
+else. Then take each returned question in turn:
+- answered in the brief already → drop it, and tighten the wording that hid the answer;
+- answerable from the code → answer it yourself: the fact goes under Context, your conclusion
+  under Inferred;
+- otherwise → ask me, one question at a time, and write after each answer.
+Run the dry run again on the updated brief — **at most 3 rounds**, or until it returns `none`.
+What is still open after that stays under **Open**, one line each: the target asks those, you
+don't.
+
+## 5. Polish
+
+Rewrite the prose with the `/improve-prompt` technique — the role the brief speaks to, the task,
+success criteria with their slugs, constraints, context, an example only where it removes a doubt
+— without adding, removing or renaming a section or a key, and without changing what any answer
+means{% if inquire %}; **What I know** and **First question** stay word for word, they are mine{% endif %}. Tell me in
+one line what changed in meaning, or `wording only`; the page shows the text.
+
+## 6. Hand off
+
+Set `Status: ready`, refresh `Updated:` and `Commit:`, write the file, and print the `Hand-off:`
+line as the one thing to type next. Then **stop**: never start the target yourself, not even when
+asked in the same message — say the command and wait. For a worker session in a worktree, which
+cannot read this checkout, the page's **Copy brief** button gives the whole text to paste as that
+session's first message.
+
+## The brief
+
+Every brief has the header, **Open** and **Inferred**; the other sections are the ones marked for
+its target. Keep the keys and headings in English.
+
+````markdown
+# Brief: <slug>
+Target: {{ targets }}
+Status: draft | ready
+Updated: <date> · Commit: <git rev-parse --short HEAD>
+Hand-off: /<target> .claude/briefs/<slug>.md
+
+## Goal
+<what and why, two to five sentences{% if inquire %}; inquire: the topic, and why I study it{% endif %}>
+
+## Context
+<what the skim found: entry points, files, file:line facts, what is already true>
+
+## Scope
+<what changes and what doesn't; the refactors, renames or dependency changes the goal needs{% if inquire %} (not for inquire){% endif %}>
+
+## Success criteria
+- <criterion-slug>: <what must be true, and how to see it{% if inquire %}; inquire: what I want to be able to explain{% endif %}>
+
+## Constraints
+<must and must-not{% if inquire %}; inquire: the boundaries of the topic, and the lenses to favour{% endif %}>
+
+## Out of scope
+<what not to do>
+
+## Risks
+- <risk-slug>: <what could go wrong, and how you would see it{% if inquire %} (not for inquire){% endif %}>
+{% if workstreams %}
+## Workstreams
+- Workstream: <slug> — Files: <paths> — After: none | <slug> — Worker: session | subagent — Check: <command{% if check_cmd %}; `{{ check_cmd }}` unless this piece needs another{% endif %}> — Criteria: <criterion-slug>, <criterion-slug>
+{% endif %}{% if inquire %}
+## What I know
+- assumed | verified: <inquire only: one bullet of my mental model, verified ones with their file:line>
+
+## First question
+<inquire only: my own first question, sharpened with me>
+{% endif %}
+## Open
+- <what the dry run still asks; empty when ready>
+
+## Inferred
+- <slug>: <what you filled in without asking, and from what>
+````
+{% if inquire %}
+## When the target is /inquire
+
+`/inquire` teaches me to ask by making me form each question myself — its hints point, they never
+ask — so the brief must not do it for me: write no list of questions, and **never write the next
+question for me**. The brief carries the topic and why I study it (Goal); what I already know or
+assume (What I know, each bullet `assumed` until something verifies it; the skim may mark one
+`verified` with its `file:line`); the boundaries and the lenses to favour — structure, flow,
+contract, rationale, change impact, failure (Constraints); and my own **First question**,
+sharpened with me the way `/inquire` does it: if it is vague or rests on an assumption, offer 2–3
+sharper variants, recommended first, and I pick. The dry run for `/inquire` asks only what orient
+and sharpen would still need, never what I should ask next; Open holds those needs, never a
+question for me to study.
+{% endif %}

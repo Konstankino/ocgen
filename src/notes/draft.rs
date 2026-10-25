@@ -433,19 +433,12 @@ pub fn page(
     approvers: &[String],
 ) -> Result<String> {
     let w = words::for_language(language);
-    let mut env = Environment::new();
-    env.set_auto_escape_callback(|_| AutoEscape::Html);
-    env.add_template_owned("page.css", templates::load(super::html::STYLE)?)
-        .context("parsing the notes page style")?;
-    env.add_template_owned("palette.css", templates::load(PALETTE)?)
-        .context("parsing the draft pages' palettes")?;
-    env.add_template_owned("draft.html", templates::load(TEMPLATE)?)
-        .context("parsing the draft editor template")?;
     let name = source.rsplit('/').next().unwrap_or(source).to_string();
     let gaps = crate::intent::gaps(md, approvers);
     // Escaped here: minijinja's own escaping also turns `/` into `&#x2f;`.
     let safe = |s: &str| Value::from_safe_string(escape(s));
     let ctx = minijinja::context! {
+        brief => false,
         w => words_value(w, is_pull_request(&name)),
         name => safe(&name),
         slug => safe(name.trim_end_matches(".md")),
@@ -463,6 +456,21 @@ pub fn page(
         wraps => crate::intent::hard_wraps(md).len(),
         list => LIST,
     };
+    editor_page(ctx)
+}
+
+/// The editor page ([`TEMPLATE`]) rendered with `ctx`: a draft's ([`page`],
+/// `brief => false`) or a /brief brief's ([`super::brief::page`], `brief =>
+/// true`, which adds the coverage strip and drops what only a draft has).
+pub(crate) fn editor_page(ctx: Value) -> Result<String> {
+    let mut env = Environment::new();
+    env.set_auto_escape_callback(|_| AutoEscape::Html);
+    env.add_template_owned("page.css", templates::load(super::html::STYLE)?)
+        .context("parsing the notes page style")?;
+    env.add_template_owned("palette.css", templates::load(PALETTE)?)
+        .context("parsing the draft pages' palettes")?;
+    env.add_template_owned("draft.html", templates::load(TEMPLATE)?)
+        .context("parsing the draft editor template")?;
     let mut page = env
         .get_template("draft.html")?
         .render(ctx)
@@ -677,6 +685,9 @@ fn words_value(w: &'static Words, pr: bool) -> Value {
         ("wrapped", d.wrapped),
         ("join_lines", d.join_lines),
         ("footer", pick(d.footer, d.pr_footer)),
+        // The editor's link to the list (`all`, as the brief page names its
+        // own); `all_drafts` is the list page's.
+        ("all", d.all_drafts),
         ("all_drafts", d.all_drafts),
         ("list_title", d.list_title),
         ("newer", d.newer),

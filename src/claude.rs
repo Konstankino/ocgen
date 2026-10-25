@@ -884,11 +884,12 @@ impl Default for HooksExtra {
 
 /// The workflow skills ocgen generates (formerly `.claude/commands/`). A user
 /// skill with one of these names would collide with the generated one.
-pub const WORKFLOW_SKILLS: [&str; 13] = [
+pub const WORKFLOW_SKILLS: [&str; 14] = [
     "multi",
     "intake",
     "refine",
     "improve-prompt",
+    "brief",
     "fanout",
     "workstreams",
     "deliver",
@@ -966,6 +967,13 @@ pub const WORKSTREAMS_TOOLS: [&str; 14] = [
     "Bash(git show:*)",
     "Bash(git check-ignore:*)",
 ];
+
+/// Tools /brief may use without asking while it runs (skill `allowed-tools`):
+/// only `git rev-parse`, which the generated allow list doesn't carry (the
+/// worktree check and the brief's `Commit:` line). The brief itself is written
+/// with the Write tool under the project's own Write rule: no `Write` or `Edit`
+/// here, which `skill_issues` flags on a model-invocable skill.
+pub const BRIEF_TOOLS: [&str; 1] = ["Bash(git rev-parse:*)"];
 
 /// One project MCP server (`.mcp.json` entry).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -1168,6 +1176,13 @@ pub struct Workflow {
     /// Anthropic's prompt-engineering technique). The matching skill preset is
     /// available via `ocgen add skill`.
     pub improve_prompt: bool,
+    /// Emit the `/brief` brief writer: an interview informed by the code, a dry
+    /// run of the target skill for what it would still ask, a live page in the
+    /// browser; the brief in `.claude/briefs/<slug>.md` ends with the command to
+    /// type, and `/deliver`, `/inquire` and `/workstreams` read it first and skip
+    /// what it settles. Rendered only when at least one of those targets is on.
+    /// Model-invocable (with `when_to_use`), like `/inquire` and `/intake`.
+    pub brief: bool,
     /// Emit the `/fanout` command + CLAUDE.md protocol for fanning work out to
     /// worktree-isolated subagents (`.worktreeinclude` is written either way).
     pub fanout: bool,
@@ -1225,6 +1240,7 @@ impl Default for Workflow {
             intake: true,
             refine: true,
             improve_prompt: true,
+            brief: true,
             fanout: true,
             verify_todos: true,
             prefer_explorer: true,

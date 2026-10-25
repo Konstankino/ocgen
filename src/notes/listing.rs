@@ -1,9 +1,10 @@
-//! The read-only list of a project's documents — its /inquire notes, or its
-//! intent files ([`super::intents`]) — to pick one from: [`PER_PAGE`] a page, in
-//! the order the caller gives, with the selected one marked. It looks like the
-//! list of issue drafts ([`super::draft::list_page`]) without what only a draft
-//! has (an issue link, the approvers), and opens a document's page, never an
-//! editor.
+//! The list of a project's documents — its /inquire notes, its intent files
+//! ([`super::intents`]) or its /brief briefs ([`super::brief`]) — to pick one
+//! from: [`PER_PAGE`] a page, in the order the caller gives, with the selected
+//! one marked. It looks like the list of issue drafts
+//! ([`super::draft::list_page`]) without what only a draft has (an issue link,
+//! the approvers), and opens a document's page: a note's or an intent file's
+//! read-only one, a brief's editor.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -27,6 +28,8 @@ pub enum Kind {
     Notes,
     /// Intent files, highest number first.
     Intents,
+    /// /brief briefs, newest first.
+    Briefs,
 }
 
 /// One listed document.
@@ -51,8 +54,10 @@ pub struct List<'a> {
     pub source: &'a str,
     /// The list's path under the viewer's token, and its tabs' topic.
     pub list: &'a str,
-    /// The files left out because ocgen can't serve their names.
+    /// The files left out because ocgen can't serve their names, and the
+    /// sentence shown before them (each kind names its own rule).
     pub skipped: &'a [String],
+    pub skipped_label: &'a str,
     /// The project's answer language.
     pub language: &'a str,
 }
@@ -151,6 +156,13 @@ pub fn page(
             d.intents_offline,
             d.intents_none,
         ),
+        Kind::Briefs => (
+            w.brief.list_title,
+            w.brief.count,
+            w.brief.list_footer,
+            w.brief.list_offline,
+            w.brief.none_yet,
+        ),
     };
     let fill = |s: &str| {
         s.replace("{page}", &page.to_string())
@@ -175,7 +187,7 @@ pub fn page(
         rev => safe(&rev(l.docs)),
         source => safe(l.source),
         skipped => safe(&l.skipped.join(", ")),
-        skipped_label => safe(d.intents_skipped),
+        skipped_label => safe(l.skipped_label),
     };
     let mut out = env
         .get_template("docs.html")?

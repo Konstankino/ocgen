@@ -35,11 +35,12 @@ pub fn decide(env: &HashMap<String, String>, os: &str, explicit: bool) -> bool {
 
 /// A viewer URL we are willing to pass to a shell (`cmd /C start` treats `&`,
 /// `^`, `|` specially): loopback, a port, a hex token and a page — a ledger's
-/// slug, or a draft's or intent file's name ([`super::draft::is_name`]) — or a
-/// list (of drafts, ledgers or intent files), optionally open on one of them.
+/// or brief's slug, or a draft's or intent file's name
+/// ([`super::draft::is_name`]) — or a list (of drafts, ledgers, intent files or
+/// briefs), optionally open on one of them.
 pub fn is_viewer_url(url: &str) -> bool {
     regex::Regex::new(
-        r"^http://127\.0\.0\.1:\d{1,5}/[0-9a-f]{8,64}/(?:[A-Za-z0-9][A-Za-z0-9_-]{0,199}\.html|_(?:drafts|notes|intents)(?:/[A-Za-z0-9][A-Za-z0-9_-]{0,199})?)$",
+        r"^http://127\.0\.0\.1:\d{1,5}/[0-9a-f]{8,64}/(?:[A-Za-z0-9][A-Za-z0-9_-]{0,199}\.html|_(?:drafts|notes|intents|briefs)(?:/[A-Za-z0-9][A-Za-z0-9_-]{0,199})?)$",
     )
     .unwrap()
     .is_match(url)

@@ -23,7 +23,15 @@ studying — which is read-only — belongs in the main checkout.
 
 - **No arguments** (or `resume`): list the ledgers in `.claude/notes/` — topic, last updated, number
   of open questions — most recent first, and let me pick one. If there are none, ask for a topic.
-- **With arguments:** match an existing ledger by its file name or its `Topic:` line. If one
+{% if brief %}- **With a brief** from `/brief` (`.claude/briefs/<slug>.md`, with or without a leading `@`): Read it
+  first. Its Goal names the topic — match a ledger by it, else orient, with its Context shortening
+  the map; its What I know bullets seed the **Mental model** as the brief marks them, the `assumed`
+  ones verified first; its Constraints name the boundaries and the lenses to favour; its Open
+  section lists what orient and sharpen still need — ask those first, one at a time. Then sharpen
+  its First question as step 1 says and answer it; never ask for a topic or a first question
+  again. If no such file exists, say so (a brief written in a worktree stays in that worktree)
+  and stop.
+{% endif %}- **With arguments:** match an existing ledger by its file name or its `Topic:` line. If one
   matches, resume it; otherwise start a new ledger and orient.
 
 **Refresher** (when resuming — keep it to one screen, before anything else). First run

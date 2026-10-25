@@ -559,6 +559,7 @@ fn claude_landscape_plugin_opus_and_no_workflow_no_subagents() {
         intake: false,
         refine: false,
         improve_prompt: false,
+        brief: false,
         fanout: false,
         verify_todos: false,
         prefer_explorer: false,

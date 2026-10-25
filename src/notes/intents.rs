@@ -38,7 +38,7 @@ pub const LIST: &str = "_intents";
 /// project root.
 pub const VIEWER_DIR: &str = ".claude/intent/viewer";
 /// Words ocgen already has: a prefix named like one leaves it alone.
-const TAKEN: [&str; 3] = [draft::WORD, "note", "notes"];
+const TAKEN: [&str; 4] = [draft::WORD, super::brief::WORD, "note", "notes"];
 
 /// The word that opens the intent files of a project with prefix `prefix`: the
 /// prefix in lowercase, unless that is a word ocgen already has.
@@ -504,6 +504,7 @@ pub fn list_page(
         }
     };
     let source = s.dir.trim_matches('/').to_string();
+    let language = super::answer_language(project);
     listing::page(
         &listing::List {
             kind: listing::Kind::Intents,
@@ -512,7 +513,8 @@ pub fn list_page(
             source: &source,
             list: LIST,
             skipped: &skipped(&dir, s),
-            language: &super::answer_language(project),
+            skipped_label: words::for_language(&language).docs.intents_skipped,
+            language: &language,
         },
         page,
         selected,

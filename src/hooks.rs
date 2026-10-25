@@ -23,7 +23,7 @@ use serde_json::Value;
 /// embedded in the ocgen that generated the project (hook scripts can't be
 /// overridden from the template dir), so they implement the same protocol —
 /// unless someone edits the project's copies by hand.
-pub const PROTOCOL: &str = "ocgen-hooks 21";
+pub const PROTOCOL: &str = "ocgen-hooks 22";
 
 /// How long Claude Code lets a gate that runs the project check (SubagentStop,
 /// TaskCompleted) take, in seconds: its hook `timeout`. Claude Code treats a
@@ -161,6 +161,203 @@ fn post_tool_note(note: String) -> Outcome {
         stdout: format!("{out}\n"),
         stderr: String::new(),
     }
+}
+
+/// Every folder the project at `root` has Claude Code's file watcher watch, as
+/// absolute paths: the issue drafts' and the intent files' folders when /intent
+/// is on, the briefs' when /brief is (read from the project's state). Claude
+/// Code documents a hook's `watchPaths` answer as replacing the watched list,
+/// with no rule for merging two hooks' answers on one event, so `intent-draft`
+/// and `inquire-notes` both answer SessionStart and CwdChanged with this one
+/// list: whichever runs last changes nothing. Without a readable state (no
+/// generated project) the drafts' and intent files' folders, as before. Intent
+/// files kept in the project's own folder aren't watched: that would watch
+/// every file in it.
+pub fn watch_paths(root: &Path) -> Vec<PathBuf> {
+    use crate::notes::{brief, draft, intents};
+    let mut root = root.to_path_buf();
+    if root.is_relative() {
+        if let Ok(cwd) = std::env::current_dir() {
+            root = cwd.join(root);
+        }
+    }
+    let state = crate::render::Project::load_state(&root).ok();
+    let intent = state.as_ref().is_none_or(|p| p.claude.workflow.intent);
+    let brief = state.as_ref().is_some_and(|p| p.brief_enabled());
+    let mut paths = Vec::new();
+    if intent {
+        paths.push(root.join(draft::DIR));
+        let s = state
+            .as_ref()
+            .map(|p| p.claude.intent.clone())
+            .unwrap_or_default();
+        let own = s.dir.trim_matches('/');
+        if !own.is_empty()
+            && own
+                .split('/')
+                .all(|c| !c.is_empty() && c != "." && c != "..")
+        {
+            paths.push(intents::dir(&root, &s));
+        }
+    }
+    if brief {
+        paths.push(root.join(brief::DIR));
+    }
+    paths
+}
+
+/// The stem of a Markdown file written under `.claude/briefs/` (any path form)
+/// whose name is no slug, so no brief can be made of it; `None` for any other
+/// path, a brief included.
+fn misnamed_brief(path: &str) -> Option<String> {
+    use crate::notes::brief;
+    let p = path.replace('\\', "/");
+    let mut parts = p.rsplit('/');
+    let (file, briefs, claude) = (parts.next()?, parts.next()?, parts.next()?);
+    if (briefs, claude) != ("briefs", ".claude") {
+        return None;
+    }
+    let stem = file.strip_suffix(".md")?;
+    (!stem.is_empty() && !stem.starts_with('.') && !brief::is_name(stem)).then(|| stem.to_string())
+}
+
+/// The brief that a file in the briefs folder whose stem (`stem`) is no slug
+/// reads as a language version of: the slug before a dotted suffix naming a
+/// language of `project` or one ocgen offers (`billing-retry.ukrainian`, in
+/// any case). `None` for the rest, which are names to slugify: a dotted number
+/// is part of a name (`python-3.12` is no version of `python-3`, and folding
+/// it in would merge two briefs), and so is any other dotted word, with a
+/// brief beside it or not (`migrate-to-next.js`, `billing-retry.backup`): no
+/// such name is a language version ([`versions::names_language`]), as the
+/// versions themselves are told apart.
+fn folded_brief(stem: &str, project: Option<&crate::render::Project>) -> Option<String> {
+    use crate::notes::{brief, versions};
+    let lower = stem.to_ascii_lowercase();
+    let (base, Some(lang)) = versions::split(&lower, brief::is_name)? else {
+        return None;
+    };
+    versions::names_language(lang, project).then(|| base.to_string())
+}
+
+/// What Claude is told after writing `path`, a file in the briefs folder `dir`
+/// whose name (`stem`) is no slug. When it reads as a language version of a
+/// brief ([`folded_brief`], with `project`'s languages when its state could be
+/// read) — the habit of a bilingual project — the note names that one file to
+/// fold the text into and gives no example made of the name: slugified, it
+/// would be a second brief (`billing-retry-ukrainian`). When the name
+/// slugifies to a brief the folder holds as an entry of its own
+/// (`Billing Retry.md` beside `billing-retry.md`), that brief is never offered
+/// as the rename target — a Claude that followed it would move this text over
+/// the live brief — and the note asks for a merge into it instead. Any other
+/// name gets the rule and, where one can be made of the name, an example.
+///
+/// Whether that brief exists is read from the folder's entries, byte for byte,
+/// never from `is_file()`: on a disk that folds case (macOS, Windows)
+/// `Billing-Retry.md` and `billing-retry.md` are one file, and the merge note
+/// — "remove this file" — would have Claude delete the only copy. A fresh
+/// `Billing-Retry.md` is listed under that spelling, so it gets the rule and
+/// the example, with a word that the rename is in place, never a new file and
+/// a removal; a write to `Billing-Retry.md` over a live `billing-retry.md`
+/// lands in that entry (the folder lists the brief alone), and the note says
+/// the write reached the brief itself: nothing to rename or remove. That word
+/// is given only when the written name itself folds to the slug: when the slug
+/// name reaches some other entry instead (`Billing Retry.md` written beside a
+/// stale `BILLING-RETRY.md`), the note names that entry, says never to move
+/// this file over it, and offers no example — a Claude told "in place" there
+/// would move this text over the only copy of the other file.
+fn rename_brief_note(
+    path: &str,
+    stem: &str,
+    dir: &Path,
+    project: Option<&crate::render::Project>,
+) -> String {
+    use crate::notes::{brief, slugify};
+    use std::ffi::OsStr;
+    let head = format!(
+        "ocgen: {path} is in {}/ but its name is no slug, so it gets no page and no `brief` or \
+         hand-off can reach it.",
+        brief::DIR
+    );
+    if let Some(base) = folded_brief(stem, project) {
+        return format!(
+            "{head} It reads as a language version of {}/{base}.md, and a brief is one file \
+             with no second language version: put the text in that file and delete this one.",
+            brief::DIR
+        );
+    }
+    let slug = slugify(stem);
+    let mut example = String::new();
+    if brief::is_name(&slug) {
+        let (slug_name, stem_name) = (format!("{slug}.md"), format!("{stem}.md"));
+        let target = format!("{}/{slug_name}", brief::DIR);
+        let names: Vec<_> = fs::read_dir(dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.file_name())
+            .collect();
+        let listed = |name: &str| names.iter().any(|n| n == OsStr::new(name));
+        // Two spellings of one entry: only a disk that folds case has them.
+        let one_file = stem.eq_ignore_ascii_case(&slug);
+        match (listed(&slug_name), listed(&stem_name)) {
+            (true, false) if one_file => {
+                return format!(
+                    "ocgen: {path} is in {}/ but its name is no slug; on this disk it \
+                     reaches {target} itself — one file under two spellings — so the write \
+                     landed in that brief, and there is nothing to rename or remove: \
+                     write it as {target} from now on, the name its page and hand-off know.",
+                    brief::DIR
+                );
+            }
+            (true, _) => {
+                return format!(
+                    "{head} The brief {target} exists already, and it is the one with a page: \
+                     merge what is new in this file into that brief, keep what the brief holds, \
+                     then remove this file — never move this file over it."
+                );
+            }
+            (false, _) => {
+                let taken = dir.join(&slug_name).is_file();
+                if taken && !one_file {
+                    // The slug name reaches another file: a misnamed one under
+                    // another spelling of it (`BILLING-RETRY.md`), never this
+                    // one, whose own name folds to something else.
+                    let twin = names
+                        .iter()
+                        .filter(|n| *n != OsStr::new(&stem_name))
+                        .find_map(|n| n.to_str().filter(|n| n.eq_ignore_ascii_case(&slug_name)))
+                        .map(|n| {
+                            format!(
+                                "{}/{n}, a different file under another spelling",
+                                brief::DIR
+                            )
+                        })
+                        .unwrap_or_else(|| "a different file".to_string());
+                    return format!(
+                        "{head} Its slug is taken: on this disk {target} already reaches {twin}, \
+                         and moving this file there would overwrite it. Rename that one in place \
+                         first (`mv`), never this one over it; then merge what is new \
+                         in this file into it and remove this file, or rename this file to a slug \
+                         of its own: ASCII a-z, 0-9 and hyphens, starting with a letter or digit, \
+                         at most 80 characters. A brief has no second language version: write its \
+                         text in one file."
+                    );
+                }
+                example = format!(" — for example {target}");
+                if taken {
+                    example.push_str(
+                        ", which on this disk reaches this very file already: rename it in place \
+                         (`mv`), never write a new file and delete the old one",
+                    );
+                }
+            }
+        }
+    }
+    format!(
+        "{head} Rename it (move the file) to <slug>.md: ASCII a-z, 0-9 and hyphens, starting \
+         with a letter or digit, at most 80 characters{example}. A brief has no second language \
+         version: write its text in one file."
+    )
 }
 
 /// Run hook `name` on `payload` (the event JSON) with `env` (process environment).
@@ -1401,15 +1598,38 @@ impl<'a> Hook<'a> {
     /// /workstreams board's is live, through the viewer for its folder. Never
     /// blocks — the document is already written; problems are one stderr line.
     ///
+    /// A /brief brief (`.claude/briefs/<slug>.md`) has no static page: its
+    /// write opens its live page in the browser editor, under the coverage
+    /// strip, and makes it the session's brief ([`crate::notes::brief`]). One
+    /// written under a name that is no slug gets no page: Claude is told to
+    /// rename it. A brief changes outside Claude's own writes too — the page's
+    /// save, a Bash command — so the hook watches the briefs folder
+    /// (FileChanged, in the folders it names at SessionStart and CwdChanged:
+    /// [`watch_paths`], the same list `intent-draft` names) and remembers the
+    /// brief changed.
+    ///
     /// UserPromptSubmit: the word `note` or `notes`, sent on its own, opens the
     /// ledger there is — or, with several, their list, with the one this session
-    /// wrote last selected — and tells Claude what happened. Any other prompt
-    /// passes untouched.
+    /// wrote last selected — and tells Claude what happened; `brief` opens the
+    /// session's brief, else the only one, else their list. A word is answered
+    /// when the project's state turns its skill on; without a readable state
+    /// `note` and `notes` are answered and `brief` is left alone
+    /// ([`Self::notes_word`]). Any other prompt passes untouched.
     fn inquire_notes(&self) -> Outcome {
         use crate::notes;
         let event = self.field("hook_event_name");
         if event == "Stop" || event == "SubagentStop" {
             return self.versions_stop(&event);
+        }
+        match event.as_str() {
+            "FileChanged" => {
+                if self.field("event") != "unlink" {
+                    self.remember_brief(&self.field("file_path"));
+                }
+                return Outcome::allow();
+            }
+            "SessionStart" | "CwdChanged" => return self.watch_paths_answer(&event),
+            _ => {}
         }
         if self.is_prompt_event() {
             return self.notes_word();
@@ -1440,6 +1660,13 @@ impl<'a> Hook<'a> {
             relative_to(&md, &root).and_then(|rel| notes::versions::intent_doc(&root, &rel))
         });
         let Some(doc) = doc else {
+            // A brief under a name that is no slug gets no page, and nothing
+            // can hand it off: Claude renames it (the skill acts on context).
+            if let Some(stem) = misnamed_brief(path) {
+                let dir = md.parent().unwrap_or(root.as_path());
+                let project = crate::render::Project::load_state(&root).ok();
+                return post_tool_note(rename_brief_note(path, &stem, dir, project.as_ref()));
+            }
             return match notes::ledger_target(path) {
                 notes::Target::BadSlug => note(format!(
                     "{path} has no HTML view — name ledgers with a lowercase-hyphen slug (e.g. request-flow.md)"
@@ -1454,6 +1681,10 @@ impl<'a> Hook<'a> {
             notes::versions::touch(&doc, owner.as_deref())
         };
         let f = &doc.family;
+        // A brief: no static page, no language version; its live page opens.
+        if f.kind == notes::versions::Kind::Brief {
+            return self.brief_written(&md, &f.dir, &root);
+        }
         let first = f.local.first().is_some_and(|l| *l == doc.language);
         // This project's ledger: the session's now. A probe changes nothing.
         if f.kind == notes::versions::Kind::Ledger
@@ -1532,6 +1763,56 @@ impl<'a> Hook<'a> {
         match shown {
             Ok(_) => tell(None),
             Err(e) => tell(Some(format!("could not show the HTML view: {e:#}"))),
+        }
+    }
+
+    /// PostToolUse: a /brief brief `md` (in `dir`, the project's briefs folder
+    /// when `dir` is `.claude/briefs` under `root`) was written. It is the
+    /// session's brief now — not on a probe — and its live page opens, or the
+    /// tab showing it is told. Never blocks: the brief is written; a page that
+    /// can't be shown is one stderr line, and without a viewer to run the hook
+    /// stays silent (the next write tries again).
+    fn brief_written(&self, md: &Path, dir: &Path, root: &Path) -> Outcome {
+        use crate::notes::brief;
+        if !self.probe() && md.is_file() && relative_to(dir, root).as_deref() == Some(brief::DIR) {
+            if let Some(slug) = md.file_stem().and_then(|s| s.to_str()) {
+                brief::remember(dir, &self.field("session_id"), slug);
+            }
+        }
+        match brief::show(md, self.env, false) {
+            Ok(_) => Outcome::allow(),
+            Err(e) => Outcome {
+                code: 0,
+                stdout: String::new(),
+                stderr: format!("inquire-notes: could not show the brief's page: {e:#}\n"),
+            },
+        }
+    }
+
+    /// Remember the brief at `path` (absolute, or relative to the project) as
+    /// this session's, if it is one of this project's: `.claude/briefs/<slug>.md`
+    /// and a file. Anything else — a draft, the folder's own records, a name
+    /// that is no slug — changes nothing, nor does a probe.
+    fn remember_brief(&self, path: &str) {
+        use crate::notes::brief;
+        if path.is_empty() || self.probe() {
+            return;
+        }
+        let root = self.project();
+        let file = match Path::new(path) {
+            p if p.is_absolute() => p.to_path_buf(),
+            p => root.join(p),
+        };
+        let Some(rel) = relative_to(&file, &root) else {
+            return;
+        };
+        if !file.is_file() {
+            return;
+        }
+        if let Some(slug) = brief::brief_target(&format!("/{rel}")) {
+            if rel == format!("{}/{slug}.md", brief::DIR) {
+                brief::remember(&root.join(brief::DIR), &self.field("session_id"), &slug);
+            }
         }
     }
 
@@ -1633,11 +1914,30 @@ impl<'a> Hook<'a> {
         }
     }
 
-    /// `note` or `notes` sent alone: open the ledger, or their list.
+    /// `note` or `notes` sent alone: open the ledger, or their list; `brief`
+    /// sent alone: the session's brief, or the only one, or their list. One
+    /// prompt group serves every word, so each is answered only when the
+    /// project's state turns its skill on (`note` with /inquire or reading
+    /// copies, `brief` with /brief): in a project whose skill is off the word
+    /// reaches Claude as typed. Without a readable state (a repository the
+    /// hooks reach from a plugin) `note` is answered, as it was before `brief`
+    /// rode on this hook, and `brief` is left alone: nothing says its skill is
+    /// on.
     fn notes_word(&self) -> Outcome {
-        use crate::notes;
+        use crate::notes::{self, brief};
         let prompt = self.field("prompt");
-        if !notes::is_prompt(&prompt) {
+        let is_brief = brief::is_prompt(&prompt);
+        if !is_brief && !notes::is_prompt(&prompt) {
+            return Outcome::allow();
+        }
+        let project = crate::render::Project::load_state(&self.project()).ok();
+        if is_brief {
+            if !project.as_ref().is_some_and(|p| p.brief_enabled()) {
+                return Outcome::allow();
+            }
+            return Self::prompt_answer(self.brief_word());
+        }
+        if !project.as_ref().is_none_or(|p| p.opens_notes_word()) {
             return Outcome::allow();
         }
         let word = prompt.trim().to_ascii_lowercase();
@@ -1723,6 +2023,137 @@ impl<'a> Hook<'a> {
         }
     }
 
+    /// `brief` sent alone: open the brief this session wrote last, else the
+    /// only one, else their list — what to tell the user. Every answer names
+    /// the files the folder can't show and ends by saying how to send the word
+    /// itself to Claude: typed alone, it only opens the page.
+    fn brief_word(&self) -> String {
+        use crate::notes::brief;
+        let dir = self.project().join(brief::DIR);
+        let all = brief::briefs(&dir);
+        let mine = brief::session_brief(&dir, &self.field("session_id"));
+        let mut answer = match (mine, all.as_slice()) {
+            (_, []) => format!(
+                "`{}`: there are no briefs in {}/ yet, so nothing was opened — /brief writes one.",
+                brief::WORD,
+                brief::DIR
+            ),
+            (Some(slug), _) => self.open_brief(&dir.join(format!("{slug}.md"))),
+            (None, [md]) => self.open_brief(md),
+            (None, _) => self.open_brief_list(&dir, all.len()),
+        };
+        // A file that can't name a brief is left out of everything: say so.
+        let skipped = brief::skipped(&dir);
+        if !skipped.is_empty() {
+            answer.push_str(&format!(
+                " Also: {} in {}/ get no page, their names being no slug ({}); rename them to \
+                 continue them.",
+                skipped.join(", "),
+                brief::DIR,
+                brief::NAME_RULE
+            ));
+        }
+        format!(
+            "{answer} A word typed alone opens the page; \
+             to send the word to Claude, write it in a sentence."
+        )
+    }
+
+    /// One sentence on how far brief `md` is: its target and status, how many
+    /// of the target's sections are covered, thin or missing, and how many
+    /// items the dry run left open — words, never codes. Empty when the file
+    /// can't be read.
+    fn brief_coverage(md: &Path) -> String {
+        use crate::notes::brief::{self, Status};
+        let Ok(text) = fs::read_to_string(md) else {
+            return String::new();
+        };
+        let b = brief::parse(&text);
+        let c = brief::coverage(&b);
+        let n = c.counts();
+        let target = match b.target {
+            Some(t) => format!("for /{}", t.word()),
+            None => "with no target yet".to_string(),
+        };
+        let status = match b.status {
+            Status::Draft => "status draft".to_string(),
+            Status::Ready => "status ready".to_string(),
+            Status::Other if !b.status_raw.is_empty() => format!("status {}", b.status_raw),
+            Status::Other => "no status line".to_string(),
+        };
+        format!(
+            " Coverage {target}, {status}: {} of {} sections covered, {} thin, {} missing, {} \
+             open.",
+            n.covered,
+            c.cells.len(),
+            n.thin,
+            n.missing,
+            c.open
+        )
+    }
+
+    /// The brief to show, opened in the editor: what to tell the user.
+    fn open_brief(&self, md: &Path) -> String {
+        use crate::notes::{brief, Shown};
+        let rel = format!(
+            "{}/{}",
+            brief::DIR,
+            md.file_name().unwrap_or_default().to_string_lossy()
+        );
+        let word = brief::WORD;
+        let again = "type `brief` again once it can, or run /brief, which shows the page after \
+                     each write";
+        let answer = match brief::show(md, self.env, true) {
+            Ok(Shown::Off) => format!(
+                "`{word}`: opening a browser is switched off here (OCGEN_NOTES_OPEN=0). The brief \
+                 is {rel}; /brief continues it from the file."
+            ),
+            Ok(Shown::Reloaded(_) | Shown::Pending) => {
+                format!("`{word}`: the brief {rel} is already open in a tab of your browser.")
+            }
+            Ok(_) => format!(
+                "`{word}`: ocgen opened the brief {rel} in your browser, where you can edit it \
+                 under its coverage strip and save it to that file; /brief continues the \
+                 interview from the file."
+            ),
+            Err(e) => format!(
+                "`{word}`: ocgen could not open the brief {rel} in your browser ({e:#}); {again}."
+            ),
+        };
+        format!("{answer}{}", Self::brief_coverage(md))
+    }
+
+    /// Several briefs, none this session's (a session that wrote one gets that
+    /// brief, not the list: [`Self::brief_word`]): their list, opened on its
+    /// first page with none selected — what to tell the user.
+    fn open_brief_list(&self, dir: &Path, count: usize) -> String {
+        use crate::notes::{brief, draft, Shown};
+        let word = brief::WORD;
+        let none = "this session hasn't written a brief";
+        match brief::show_list(dir, None, self.env, true) {
+            Ok(Shown::Off) => format!(
+                "`{word}`: opening a browser is switched off here (OCGEN_NOTES_OPEN=0). There are \
+                 {count} briefs in {}/, and {none}; /brief with no argument lists them to pick \
+                 one.",
+                brief::DIR
+            ),
+            Ok(Shown::Reloaded(_) | Shown::Pending) => format!(
+                "`{word}`: the list of {count} briefs is already open in a tab of your browser, \
+                 and ocgen moved it to its first page ({none}). Pick the brief there."
+            ),
+            Ok(_) => format!(
+                "`{word}`: ocgen opened the list of {count} briefs in your browser ({} a page, \
+                 newest first), with none selected ({none}). Pick the one to open there, in the \
+                 browser editor.",
+                draft::PER_PAGE
+            ),
+            Err(e) => format!(
+                "`{word}`: ocgen could not open the list of briefs in your browser ({e:#}); type \
+                 `brief` again once it can, or run /brief with no argument, which lists them."
+            ),
+        }
+    }
+
     /// UserPromptSubmit: the word `draft`, sent on its own, opens the draft (an
     /// issue's or a pull request's) in the browser editor — or, with several, their list, with
     /// the one this session wrote last selected — from here, outside the Bash
@@ -1739,7 +2170,9 @@ impl<'a> Hook<'a> {
     /// (FileChanged) — one a Bash command makes, whatever the command. It
     /// watches the folders this hook names when the session starts, and again
     /// when the session's folder changes, which drops them (SessionStart,
-    /// CwdChanged). Never blocks a tool.
+    /// CwdChanged): every folder the project watches ([`watch_paths`]), the
+    /// briefs' included, the same list `inquire-notes` names. A brief's change
+    /// is that hook's: this one records nothing for it. Never blocks a tool.
     fn intent_draft(&self) -> Outcome {
         use crate::notes::draft;
         match self.field("hook_event_name").as_str() {
@@ -1758,7 +2191,7 @@ impl<'a> Hook<'a> {
                 }
                 return Outcome::allow();
             }
-            event @ ("SessionStart" | "CwdChanged") => return self.draft_watch_paths(event),
+            event @ ("SessionStart" | "CwdChanged") => return self.watch_paths_answer(event),
             _ => {}
         }
         let prompt = self.field("prompt");
@@ -1789,30 +2222,12 @@ impl<'a> Hook<'a> {
     }
 
     /// SessionStart, CwdChanged: the folders Claude Code's file watcher should
-    /// watch for drafts and intent files (it watches each with what is in it,
-    /// and waits for one that isn't there yet). Intent files kept in the
-    /// project's own folder aren't watched: that would watch every file in it.
-    fn draft_watch_paths(&self, event: &str) -> Outcome {
-        use crate::notes::{draft, intents};
-        let mut root = self.project();
-        if root.is_relative() {
-            if let Ok(cwd) = std::env::current_dir() {
-                root = cwd.join(root);
-            }
-        }
-        let mut paths = vec![root.join(draft::DIR)];
-        let s = intents::settings(&root);
-        let own = s.dir.trim_matches('/');
-        if !own.is_empty()
-            && own
-                .split('/')
-                .all(|c| !c.is_empty() && c != "." && c != "..")
-        {
-            paths.push(intents::dir(&root, &s));
-        }
-        let paths: Vec<String> = paths
+    /// watch ([`watch_paths`]; it watches each with what is in it, and waits
+    /// for one that isn't there yet). The one answer both hooks give.
+    fn watch_paths_answer(&self, event: &str) -> Outcome {
+        let paths: Vec<String> = watch_paths(&self.project())
             .iter()
-            .map(|p| p.to_string_lossy().into_owned())
+            .map(|p| crate::paths::plain(p).to_string_lossy().into_owned())
             .collect();
         let out = serde_json::json!({
             "hookSpecificOutput": { "hookEventName": event, "watchPaths": paths }

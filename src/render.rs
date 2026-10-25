@@ -961,12 +961,49 @@ impl Project {
     }
 
     /// Whether the notes hook runs: it renders /inquire ledgers, /recap reports,
-    /// /intent reading copies and the /workstreams board as pages.
+    /// /intent reading copies and the /workstreams board as pages, and opens a
+    /// /brief brief's live page after every write.
     pub fn renders_notes(&self) -> bool {
         self.claude.workflow.inquire
             || self.claude.workflow.recap
             || self.claude.workflow.workstreams
             || self.writes_reading_copies()
+            || self.brief_enabled()
+    }
+
+    /// Whether the /brief skill is rendered: the flag, at least one target
+    /// (/deliver, /inquire or /workstreams) to write a brief for, and no user
+    /// skill named `brief` (a project from before the name was reserved keeps its
+    /// own skill, and nothing may hand off to it). Every `{% if brief %}`, every
+    /// hook-table push and the landscape line use this one predicate.
+    pub fn brief_enabled(&self) -> bool {
+        let w = &self.claude.workflow;
+        w.brief
+            && (w.deliver || w.inquire || w.workstreams)
+            && !self.skills.iter().any(|s| s.name == "brief")
+    }
+
+    /// The targets /brief writes a brief for — the enabled ones, in the order
+    /// the skill lists them — so no generated text names a skill the project
+    /// doesn't have.
+    fn brief_targets(&self) -> Vec<&'static str> {
+        let w = &self.claude.workflow;
+        [
+            (w.deliver, "deliver"),
+            (w.inquire, "inquire"),
+            (w.workstreams, "workstreams"),
+        ]
+        .into_iter()
+        .filter(|(on, _)| *on)
+        .map(|(_, word)| word)
+        .collect()
+    }
+
+    /// The targets as prose alternatives (`/deliver, /inquire or /workstreams`),
+    /// each wrapped as `wrap` says.
+    fn brief_targets_phrase(&self, wrap: impl Fn(&str) -> String) -> String {
+        let items: Vec<String> = self.brief_targets().into_iter().map(wrap).collect();
+        or_list(&items)
     }
 
     /// Whether the sandbox withholds the user's gh login from Claude's shell, so
@@ -1435,6 +1472,46 @@ impl Project {
             ));
         }
         let checks = self.checkers();
+        if self.brief_enabled() {
+            // /brief writes the brief its target reads first: the route, the
+            // `Target:` line and the dry run's phases name only the targets the
+            // project has. Rendered before /deliver, which moves `checks` fields.
+            let w = &self.claude.workflow;
+            let targets = self.brief_targets();
+            let dry_run_phases: Vec<&str> = [
+                ("deliver", "/deliver: phases 0–3"),
+                ("inquire", "/inquire: orient and sharpen"),
+                ("workstreams", "/workstreams: step 1"),
+            ]
+            .into_iter()
+            .filter(|(target, _)| targets.contains(target))
+            .map(|(_, phases)| phases)
+            .collect();
+            let prompts = self.language.trim();
+            components.push((
+                "commands/brief.md".to_string(),
+                env.render_str(
+                    &templates::load("claude/commands/brief.md.j2")?,
+                    context! {
+                        language => lang,
+                        allowed_tools => crate::claude::BRIEF_TOOLS.join(", "),
+                        explorer => self.fork_agent_default(),
+                        deliver => w.deliver,
+                        inquire => w.inquire,
+                        workstreams => w.workstreams,
+                        targets => targets.join(" | "),
+                        dry_run_phases => dry_run_phases.join("; "),
+                        implementer => checks.implementer.clone(),
+                        scope_guard => checks.scope_guard.clone(),
+                        check_cmd => w.check_cmd.trim(),
+                        // The brief's text is written in the instruction language.
+                        prompt_language => canonical_language(&self.language),
+                        english_prompts => prompts.is_empty() || prompts.eq_ignore_ascii_case("English"),
+                    },
+                )
+                .context("rendering brief command")?,
+            ));
+        }
         if self.claude.workflow.workstreams {
             components.push((
                 "commands/workstreams.md".to_string(),
@@ -1456,6 +1533,7 @@ impl Project {
                         check_cmd => self.claude.workflow.check_cmd.trim(),
                         deliver => self.claude.workflow.deliver,
                         recap => self.claude.workflow.recap,
+                        brief => self.brief_enabled(),
                     },
                 )
                 .context("rendering workstreams command")?,
@@ -1486,6 +1564,7 @@ impl Project {
                         rounds => checks.rounds,
                         scope_rounds => checks.scope_rounds,
                         workstreams => self.claude.workflow.workstreams,
+                        brief => self.brief_enabled(),
                     },
                 )
                 .context("rendering deliver command")?,
@@ -1598,6 +1677,7 @@ impl Project {
                         bilingual => self.answers_differ(),
                         prompt_language => canonical_language(&self.language),
                         second_suffix => crate::notes::versions::suffix(&self.language),
+                        brief => self.brief_enabled(),
                     },
                 )
                 .context("rendering inquire command")?,
@@ -1840,6 +1920,9 @@ impl Project {
             deliver => self.claude.workflow.deliver,
             workstreams => self.claude.workflow.workstreams,
             inquire => self.claude.workflow.inquire,
+            brief => self.brief_enabled(),
+            // The targets a brief is written for, as the rule's prose lists them.
+            brief_targets => self.brief_targets_phrase(|t| format!("`/{t}`")),
             intent => self.claude.workflow.intent,
             intent_dir => self.claude.intent.dir.trim_end_matches('/'),
             approvers => self.claude.intent.approvers.join(", "),
@@ -1966,6 +2049,7 @@ impl Project {
                 subagents => &subs,
                 intake => self.claude.workflow.intake,
                 refine => self.claude.workflow.refine,
+                brief => self.brief_enabled(),
             };
             let plugin_json = env
                 .render_str(
@@ -2520,7 +2604,9 @@ impl Project {
     fn hook_table(&self, dir: &str, prefix: &str) -> serde_json::Map<String, Value> {
         let mut hooks = serde_json::Map::new();
         if self.claude.powerups.hooks
-            && (self.claude.workflow.intake || self.claude.workflow.improve_prompt)
+            && (self.claude.workflow.intake
+                || self.claude.workflow.improve_prompt
+                || self.brief_enabled())
         {
             let mut tip = String::from("Tip:");
             if self.claude.workflow.intake {
@@ -2532,6 +2618,14 @@ impl Project {
                 tip.push_str(
                     " run /improve-prompt to sharpen a prompt or an agent's system prompt.",
                 );
+            }
+            if self.brief_enabled() {
+                // Names the project's own targets: `/deliver, /inquire or
+                // /workstreams` with all three.
+                let targets = self.brief_targets_phrase(|t| format!("/{t}"));
+                tip.push_str(&format!(
+                    " run /brief to write the brief for {targets} before starting one."
+                ));
             }
             // Single-quote the echo argument, escaping any apostrophe in the tip
             // (e.g. "agent's") as '\'' so the command stays valid POSIX shell.
@@ -2647,20 +2741,38 @@ impl Project {
         if self.renders_notes() {
             // Re-render a ledger's, a recap report's, a reading copy's or the
             // workstreams board's HTML view after each write and show it (and
-            // remember the ledger as the session's); tell Claude which language
-            // version is now missing.
+            // remember the ledger as the session's); open a brief's live page;
+            // tell Claude which language version is now missing.
             push(
                 "PostToolUse",
                 json!({ "matcher": "Write|Edit|MultiEdit", "hooks": [ command_hook(hook_cmd(prefix, dir, "inquire-notes.sh")) ] }),
             );
         }
-        if self.opens_notes_word() {
+        if self.opens_notes_word() || self.brief_enabled() {
             // `note` or `notes`, sent alone, opens the ledger, or their list with
-            // the session's selected: from a hook, outside the Bash sandbox.
+            // the session's selected, and `brief` the session's brief: from a
+            // hook, outside the Bash sandbox. One group serves every word; the
+            // hook itself gates each word on the state, so a word whose skill is
+            // off reaches Claude as typed.
             push(
                 "UserPromptSubmit",
                 json!({ "hooks": [ command_hook(hook_cmd(prefix, dir, "inquire-notes.sh")) ] }),
             );
+        }
+        if self.brief_enabled() {
+            // A brief changes outside Claude's own writes too: the page's save,
+            // a Bash command's write. Claude Code's file watcher reports those
+            // (FileChanged), but its matcher takes file names only, so the hook
+            // names the folders to watch when the session starts and again when
+            // its folder changes, which drops them. An answer replaces the
+            // watched list, so this hook and intent-draft answer with the same
+            // full list, whichever runs last.
+            for event in ["SessionStart", "CwdChanged", "FileChanged"] {
+                push(
+                    event,
+                    json!({ "hooks": [ command_hook(hook_cmd(prefix, dir, "inquire-notes.sh")) ] }),
+                );
+            }
         }
         if self.checks_versions() {
             // A turn — or a subagent, such as /inquire's ledger helper — that
@@ -3721,6 +3833,27 @@ impl Project {
                 w.push(format!("skill '{}': {issue}", s.name));
             }
         }
+        // A target skill rendered from an override written before /brief never
+        // reads a brief: the clause that does is missing from it. An editor page
+        // from such an override shows a brief as an issue draft: no strip, no
+        // hand-off button.
+        if self.brief_enabled() {
+            if let Some(dir) = templates::override_dir() {
+                for (rel, what) in [
+                    ("claude/commands/deliver.md.j2", "/deliver rendered from it never reads a brief"),
+                    ("claude/commands/inquire.md.j2", "/inquire rendered from it never reads a brief"),
+                    ("claude/notes/draft.html.j2", "a brief's page rendered from it is the issue draft's editor, with no coverage strip"),
+                ] {
+                    if fs::read_to_string(dir.join(rel))
+                        .is_ok_and(|text| !text.contains("if brief"))
+                    {
+                        w.push(format!(
+                            "template override {rel}: an override from before /brief has no brief part — {what}; bring the default's `{{% if brief %}}` blocks into it"
+                        ));
+                    }
+                }
+            }
+        }
         w.extend(self.language_issues());
         w
     }
@@ -3737,6 +3870,18 @@ impl Project {
             let dir = root.join(".claude/skills").join(&s.name);
             for issue in crate::claude::skill_file_issues(&dir, &s.body) {
                 w.push(format!("skill '{}': {issue}", s.name));
+            }
+        }
+        // A `/brief` command written by hand before the name was reserved (not
+        // one an older ocgen wrote, which `doctor` removes): the generated skill
+        // shadows it, so it would never run again.
+        if self.brief_enabled() {
+            let p = root.join(".claude/commands/brief.md");
+            if fs::read_to_string(&p).is_ok_and(|md| !self.legacy_command("brief", &md)) {
+                w.push(
+                    "a hand-made /brief command (.claude/commands/brief.md) is shadowed by the generated skill — rename or remove it"
+                        .into(),
+                );
             }
         }
         w
@@ -4478,6 +4623,15 @@ pub use presets::shipped_preset_text;
 
 #[cfg(test)]
 mod write_tests;
+
+/// Alternatives as prose: `a`, `a or b`, `a, b or c`.
+fn or_list(items: &[String]) -> String {
+    match items {
+        [] => String::new(),
+        [one] => one.clone(),
+        [rest @ .., last] => format!("{} or {last}", rest.join(", ")),
+    }
+}
 
 /// Turn a rendered command file (`---` frontmatter + body) into a skill: add its
 /// `name` and, for side-effecting workflows, `disable-model-invocation: true`.

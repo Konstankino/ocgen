@@ -15,7 +15,9 @@
 //!
 //! The /workstreams board ([`Kind::Board`]) is the exception: operational,
 //! English only and parsed by a hook, it is one version with no record, so
-//! nothing ever asks for another language's copy of it.
+//! nothing ever asks for another language's copy of it. A /brief brief
+//! ([`Kind::Brief`]) is kept the same way: its keys are English, its text is
+//! in whatever language the user wrote it, and it has no second version.
 //!
 //! [`Project::doc_languages`]: crate::render::Project::doc_languages
 
@@ -41,11 +43,14 @@ pub enum Kind {
     Copy,
     /// The /workstreams board: `.claude/workstreams/board.md`, English only.
     Board,
+    /// A /brief brief: `.claude/briefs/<slug>.md`, English keys, one version,
+    /// edited in the browser.
+    Brief,
 }
 
 impl Kind {
     /// The kinds kept in each project language, with version records; the
-    /// board isn't one.
+    /// board and the briefs aren't.
     pub const VERSIONED: [Kind; 3] = [Kind::Ledger, Kind::Recap, Kind::Copy];
 
     /// The kind's directory, relative to the project root.
@@ -55,6 +60,7 @@ impl Kind {
             Kind::Recap => ".claude/notes/recap",
             Kind::Copy => ".claude/intent/view",
             Kind::Board => ".claude/workstreams",
+            Kind::Brief => ".claude/briefs",
         }
     }
 }
@@ -116,10 +122,11 @@ pub struct Family {
 
 impl Family {
     /// The family of document `base` of `kind` in `dir`, in the languages of
-    /// `project` (English only outside one, and for the board anywhere).
+    /// `project` (English only outside one, and for the board and a brief
+    /// anywhere).
     pub fn new(kind: Kind, dir: &Path, base: &str, project: Option<(&Path, &Project)>) -> Family {
         let local = match (kind, project) {
-            (Kind::Board, _) => vec!["English".to_string()],
+            (Kind::Board | Kind::Brief, _) => vec!["English".to_string()],
             (Kind::Copy, Some((_, p))) => p.copy_languages(),
             (_, Some((_, p))) => p.doc_languages(),
             (Kind::Copy, None) => Vec::new(),
@@ -250,7 +257,8 @@ pub fn classify(path: &Path) -> Option<Doc> {
 
 /// The version named `file` (`<name>[.<language>].md`) of a document of `kind`
 /// in `dir`. Of a board's directory only `board.md` is one: a suffixed name
-/// there is no language version, and nothing else in it is a document.
+/// there is no language version, and nothing else in it is a document. A brief
+/// is its unsuffixed file alone, the same way.
 pub fn doc_in(
     kind: Kind,
     dir: &Path,
@@ -262,6 +270,9 @@ pub fn doc_in(
     }
     let stem = file.strip_suffix(".md")?;
     let (base, lang) = split(stem, super::is_slug)?;
+    if kind == Kind::Brief && lang.is_some() {
+        return None;
+    }
     if lang.is_some_and(|s| !names_language(s, project.map(|(_, p)| p))) {
         return None;
     }
@@ -302,6 +313,7 @@ fn kind_of(dir: &Path) -> Option<Kind> {
         ["notes", ".claude", ..] => Some(Kind::Ledger),
         ["view", "intent", ".claude"] => Some(Kind::Copy),
         ["workstreams", ".claude", ..] => Some(Kind::Board),
+        ["briefs", ".claude", ..] => Some(Kind::Brief),
         _ => None,
     }
 }
@@ -938,6 +950,8 @@ mod tests {
             kind_of(Path::new("/p/.claude/workstreams")),
             Some(Kind::Board)
         );
+        assert_eq!(kind_of(Path::new("/p/.claude/briefs")), Some(Kind::Brief));
+        assert_eq!(kind_of(Path::new(".claude/briefs")), Some(Kind::Brief));
         for other in [
             "/p/notes",
             "/p/.claude/intent/drafts",
@@ -945,9 +959,38 @@ mod tests {
             "/p/.claude/notes/sub",
             "/p/.claude/workstreams/billing-retry",
             "/p/workstreams",
+            "/p/.claude/briefs/billing-retry",
+            "/p/briefs",
         ] {
             assert_eq!(kind_of(Path::new(other)), None, "{other}");
         }
+    }
+
+    #[test]
+    fn a_brief_is_one_english_version_whatever_the_project_speaks() {
+        let dir = tempfile::tempdir().unwrap();
+        let briefs = dir.path().join(".claude/briefs");
+        fs::create_dir_all(&briefs).unwrap();
+        let f = Family::new(Kind::Brief, &briefs, "billing-retry", None);
+        assert_eq!(f.languages(), ["English"]);
+        assert!(!f.bilingual());
+        assert_eq!(f.path("English").unwrap(), briefs.join("billing-retry.md"));
+        assert_eq!(f.path("Ukrainian"), None);
+        // Only the unsuffixed slug is the brief; a suffix names no version.
+        assert_eq!(
+            doc_in(Kind::Brief, &briefs, "billing-retry.md", None).map(|d| d.language),
+            Some("English".to_string())
+        );
+        for other in [
+            "billing-retry.english.md",
+            "billing-retry.ukrainian.md",
+            "billing-retry.backup.md",
+            "Billing Retry.md",
+            "billing-retry.html",
+        ] {
+            assert_eq!(doc_in(Kind::Brief, &briefs, other, None), None, "{other}");
+        }
+        assert!(!Kind::VERSIONED.contains(&Kind::Brief));
     }
 
     #[test]

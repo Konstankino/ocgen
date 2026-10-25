@@ -463,6 +463,8 @@ fn with_a_current_ocgen_every_probe_of_a_fresh_project_passes() {
         "WebFetch guard",
         "no-op cd",
         "notes view",
+        "/brief hook",
+        "/brief word",
         "git pre-push hook",
         "statusline renders",
     ] {

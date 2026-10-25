@@ -20,7 +20,11 @@
 //! page ([`super::board`]) fresh on each request and the briefs and reports it
 //! links, read-only; it watches the board, those files, the reports workers
 //! post in their worktrees and the loop guard's escalations, so the page follows
-//! all of them.
+//! all of them. Run for a project's `.claude/briefs`, it is the /brief briefs'
+//! editor ([`super::brief`]): the drafts' editor in its brief mode, with the
+//! same save, the same conflict answer and the same `changed` events, plus the
+//! coverage strip it recomputes on request (`POST coverage`), and the list of
+//! briefs ([`super::brief::LIST`]).
 //!
 //! One server per notes directory, found through `.viewer.json` (port, token,
 //! pid). The token is in every URL and the `Host` header must be loopback, so
@@ -364,13 +368,14 @@ struct Client {
 }
 
 /// What a server serves: /inquire ledger pages, /intent issue draft editors,
-/// intent file pages, or the /workstreams board.
+/// intent file pages, the /workstreams board, or /brief brief editors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Kind {
     Notes,
     Drafts,
     Intents,
     Board,
+    Briefs,
 }
 
 /// The board server's list name: there is no list, so no page can have it.
@@ -468,7 +473,8 @@ fn close_inherited_fds() {
 /// Only a `.claude/notes` directory — the server writes `.viewer.json` there and
 /// renders pages next to their ledgers — an /intent drafts directory, whose
 /// drafts it edits, a project's `.claude/intent/viewer`, for its intent files,
-/// or its `.claude/workstreams`, for the board.
+/// its `.claude/workstreams`, for the board, or its `.claude/briefs`, whose
+/// briefs it edits.
 pub fn serve(dir: &Path) -> Result<()> {
     #[cfg(unix)]
     close_inherited_fds();
@@ -480,13 +486,16 @@ pub fn serve(dir: &Path) -> Result<()> {
         Kind::Intents
     } else if super::board::is_board_dir(dir) {
         Kind::Board
+    } else if super::brief::is_briefs_dir(dir) {
+        Kind::Briefs
     } else {
         anyhow::bail!(
-            "{} is not a .claude/notes, {}, {} or {} directory",
+            "{} is not a .claude/notes, {}, {}, {} or {} directory",
             dir.display(),
             super::draft::DIR,
             super::intents::VIEWER_DIR,
-            super::versions::Kind::Board.dir()
+            super::versions::Kind::Board.dir(),
+            super::brief::DIR
         );
     };
     let dir = dir.canonicalize()?;
@@ -800,14 +809,15 @@ impl Server {
         self.touch();
         let q = query(q);
         let list = self.list();
-        // A page's name: a ledger's slug, or a draft's or intent file's (longer)
-        // name — a ledger or an intent file in another language with its
-        // language after a dot (`flow.english`, `ADR-0007-x.ukrainian`).
+        // A page's name: a ledger's or a brief's slug, or a draft's or intent
+        // file's (longer) name — a ledger or an intent file in another language
+        // with its language after a dot (`flow.english`, `ADR-0007-x.ukrainian`).
         let named = |t: &str| match self.kind {
             Kind::Notes => super::versions::split(t, is_slug).is_some(),
             Kind::Intents => super::versions::split(t, super::draft::is_name).is_some(),
             Kind::Drafts => super::draft::is_name(t),
             Kind::Board => t == super::board::TOPIC,
+            Kind::Briefs => is_slug(t),
         };
         let topic = q.get("topic").copied().filter(|t| named(t) || *t == list);
         let selected = q.get("select").copied().filter(|t| named(t));
@@ -840,9 +850,15 @@ impl Server {
                 Some(t) => self.events(s, t, q.get("rev").copied().unwrap_or("")),
                 None => plain(&mut s, 400, "bad topic"),
             },
-            ("POST", "render") if self.kind == Kind::Drafts => self.preview(s, &req),
+            // The preview: an issue keeps its line breaks, a brief is a file.
+            ("POST", "render") if self.editable() => {
+                self.preview(s, &req, self.kind == Kind::Drafts)
+            }
+            ("POST", "coverage") if self.kind == Kind::Briefs => {
+                self.coverage(s, &req, q.get("slug").copied())
+            }
             // The list: `_drafts`, or `_drafts/<name>` open on that draft (and
-            // `_notes`, `_intents` the same way).
+            // `_notes`, `_intents`, `_briefs` the same way).
             ("GET", page) if page.split('/').next() == Some(list) => {
                 let selected = page.split_once('/').map(|(_, name)| name);
                 if selected.is_some_and(|name| !named(name)) {
@@ -852,7 +868,7 @@ impl Server {
                 let n = q.get("page").and_then(|n| n.parse().ok());
                 self.list_page(s, n, selected, root)
             }
-            (_, "ping" | "reload" | "quit" | "events" | "render") => {
+            (_, "ping" | "reload" | "quit" | "events" | "render" | "coverage") => {
                 plain(&mut s, 405, "method not allowed")
             }
             ("GET", page) if page.ends_with(".html") => {
@@ -863,11 +879,12 @@ impl Server {
             }
             // A workstream's brief or report, as the board links it: read-only.
             ("GET", file) if self.kind == Kind::Board => self.board_file(s, file),
-            (method, file) if self.kind == Kind::Drafts => {
+            // A draft's or a brief's text: read by the page, and saved from it.
+            (method, file) if self.editable() => {
                 match (method, file.strip_suffix(".md").filter(|p| named(p))) {
-                    ("GET", Some(slug)) => self.load_draft(s, slug),
+                    ("GET", Some(slug)) => self.load_doc(s, slug),
                     ("POST", Some(slug)) => {
-                        self.save_draft(s, slug, &req, q.get("rev").copied().unwrap_or(""))
+                        self.save_doc(s, slug, &req, q.get("rev").copied().unwrap_or(""))
                     }
                     _ => plain(&mut s, 404, "not found"),
                 }
@@ -885,45 +902,71 @@ impl Server {
         })
     }
 
-    /// The draft file `slug` names: a regular file in the drafts directory.
-    fn draft_file(&self, slug: &str) -> Option<PathBuf> {
+    /// Whether this server edits its documents — the drafts' and the briefs'
+    /// pages are editors — and so answers `render`, serves and saves `<slug>.md`,
+    /// and tells a page's tabs the file's revision instead of reloading them.
+    fn editable(&self) -> bool {
+        matches!(self.kind, Kind::Drafts | Kind::Briefs)
+    }
+
+    /// The document (a draft or a brief) `slug` names: a regular file in the
+    /// served directory.
+    fn doc_file(&self, slug: &str) -> Option<PathBuf> {
         let p = self.dir.join(format!("{slug}.md"));
         fs::symlink_metadata(&p)
             .is_ok_and(|m| m.file_type().is_file())
             .then_some(p)
     }
 
-    /// The preview of the text the page sends.
-    fn preview(&self, mut s: TcpStream, req: &Request) {
+    /// The preview of the text the page sends; with `hard_breaks`, a newline
+    /// is a line break (an issue), else a space (a file).
+    fn preview(&self, mut s: TcpStream, req: &Request, hard_breaks: bool) {
         if !self.same_origin(req) {
             return plain(&mut s, 403, "forbidden");
         }
         let Some(body) = &req.body else {
             return plain(&mut s, 413, "too large");
         };
-        let html = super::draft::preview(&String::from_utf8_lossy(body));
+        let html = super::draft::render_safe(&String::from_utf8_lossy(body), hard_breaks);
         respond(&mut s, 200, "text/html; charset=utf-8", "", html.as_bytes());
     }
 
-    /// A draft's text and revision.
-    fn load_draft(&self, mut s: TcpStream, slug: &str) {
-        let Some(text) = self
-            .draft_file(slug)
-            .and_then(|p| fs::read_to_string(p).ok())
-        else {
+    /// The coverage strip for the text the page sends, as brief `slug`'s (the
+    /// page asks after every edit): its project's language, the body limit of
+    /// `render`, 400 without a slug.
+    fn coverage(&self, mut s: TcpStream, req: &Request, slug: Option<&str>) {
+        if !self.same_origin(req) {
+            return plain(&mut s, 403, "forbidden");
+        }
+        let Some(slug) = slug.filter(|t| is_slug(t)) else {
+            return plain(&mut s, 400, "bad slug");
+        };
+        let Some(body) = &req.body else {
+            return plain(&mut s, 413, "too large");
+        };
+        let language = super::answer_language(&self.dir.join(format!("{slug}.md")));
+        let w = super::words::for_language(&language);
+        let html = super::brief::strip_html(&String::from_utf8_lossy(body), slug, w);
+        respond(&mut s, 200, "text/html; charset=utf-8", "", html.as_bytes());
+    }
+
+    /// A draft's or a brief's text and revision.
+    fn load_doc(&self, mut s: TcpStream, slug: &str) {
+        let Some(text) = self.doc_file(slug).and_then(|p| fs::read_to_string(p).ok()) else {
             return plain(&mut s, 404, "not found");
         };
         let rev = super::rev(text.as_bytes());
         json_reply(&mut s, &json!({ "text": text, "rev": rev }));
     }
 
-    /// Save the page's text to draft `slug` — only over revision `base`, the
-    /// version the page last saw; otherwise answer 409 with what the file holds.
-    fn save_draft(&self, mut s: TcpStream, slug: &str, req: &Request, base: &str) {
+    /// Save the page's text to draft or brief `slug` — only over revision
+    /// `base`, the version the page last saw; otherwise answer 409 with what
+    /// the file holds.
+    fn save_doc(&self, mut s: TcpStream, slug: &str, req: &Request, base: &str) {
         if !self.same_origin(req) {
             return plain(&mut s, 403, "forbidden");
         }
-        let Some(path) = self.draft_file(slug) else {
+        let Some(path) = self.doc_file(slug) else {
             return plain(&mut s, 404, "not found");
         };
         let Some(body) = &req.body else {
@@ -970,9 +1013,9 @@ impl Server {
         }
     }
 
-    /// The current revision of draft `slug` ("" when it is gone).
-    fn draft_rev(&self, slug: &str) -> String {
-        self.draft_file(slug)
+    /// The current revision of draft or brief `slug` ("" when it is gone).
+    fn doc_rev(&self, slug: &str) -> String {
+        self.doc_file(slug)
             .and_then(|p| fs::read(p).ok())
             .map(|b| super::rev(&b))
             .unwrap_or_default()
@@ -981,6 +1024,7 @@ impl Server {
     fn page(&self, mut s: TcpStream, slug: &str) {
         match self.kind {
             Kind::Drafts => return self.draft_page(s, slug),
+            Kind::Briefs => return self.brief_page(s, slug),
             Kind::Intents => return self.intent_page(s, slug),
             Kind::Board => return self.board_page(s),
             Kind::Notes => {}
@@ -1007,7 +1051,7 @@ impl Server {
 
     /// The editor page for draft `slug`, rendered fresh from the file.
     fn draft_page(&self, mut s: TcpStream, slug: &str) {
-        let Some(path) = self.draft_file(slug) else {
+        let Some(path) = self.doc_file(slug) else {
             return plain(&mut s, 404, "not found");
         };
         let Ok(text) = fs::read_to_string(&path) else {
@@ -1023,6 +1067,36 @@ impl Server {
             &nonce,
             &language,
             &super::draft::approvers_for(&path),
+        ) {
+            Ok(page) => respond(
+                &mut s,
+                200,
+                "text/html; charset=utf-8",
+                &draft_csp(&nonce),
+                page.as_bytes(),
+            ),
+            Err(e) => plain(&mut s, 500, &format!("{e:#}")),
+        }
+    }
+
+    /// The editor page for brief `slug`, rendered fresh from the file, its
+    /// coverage strip with it.
+    fn brief_page(&self, mut s: TcpStream, slug: &str) {
+        let Some(path) = self.doc_file(slug) else {
+            return plain(&mut s, 404, "not found");
+        };
+        let Ok(text) = fs::read_to_string(&path) else {
+            return plain(&mut s, 404, "not found");
+        };
+        let nonce = random_token();
+        let source = format!("{}/{slug}.md", super::brief::DIR);
+        let language = super::answer_language(&path);
+        match super::brief::page(
+            &text,
+            &source,
+            &super::rev(text.as_bytes()),
+            &nonce,
+            &language,
         ) {
             Ok(page) => respond(
                 &mut s,
@@ -1078,6 +1152,7 @@ impl Server {
             Kind::Drafts => super::draft::LIST,
             Kind::Intents => super::intents::LIST,
             Kind::Board => NO_LIST,
+            Kind::Briefs => super::brief::LIST,
         }
     }
 
@@ -1211,6 +1286,7 @@ impl Server {
         let html = match self.kind {
             Kind::Board => return plain(&mut s, 404, "not found"),
             Kind::Drafts => super::draft::list_page(&self.dir, page, selected, root, &nonce),
+            Kind::Briefs => super::brief::list_page(&self.dir, page, selected, root, &nonce),
             Kind::Notes => super::list_page(&self.dir, page, selected, root, &nonce),
             Kind::Intents => match self.intents() {
                 Some((project, set)) => {
@@ -1236,7 +1312,9 @@ impl Server {
         let list = topic == self.list();
         match self.kind {
             Kind::Drafts if list => super::draft::listing_rev(&self.dir),
-            Kind::Drafts => self.draft_rev(topic),
+            Kind::Drafts => self.doc_rev(topic),
+            Kind::Briefs if list => super::listing::rev(&super::brief::briefs(&self.dir)),
+            Kind::Briefs => self.doc_rev(topic),
             Kind::Notes if list => super::listing::rev(&super::ledgers(&self.dir)),
             Kind::Notes => fs::read(self.dir.join(format!("{topic}.html")))
                 .map(|b| super::rev(&b))
@@ -1273,10 +1351,10 @@ impl Server {
         self.kind != Kind::Notes || topic == self.list()
     }
 
-    /// What tells `topic`'s open tabs it changed: a draft's editor is told the
-    /// revision (it may hold edits); every other page reloads.
+    /// What tells `topic`'s open tabs it changed: a draft's or a brief's editor
+    /// is told the revision (it may hold edits); every other page reloads.
     fn change_event(&self, topic: &str) -> String {
-        if self.kind == Kind::Drafts && topic != self.list() {
+        if self.editable() && topic != self.list() {
             changed_event(&self.topic_rev(topic))
         } else {
             RELOAD.to_string()
@@ -1301,9 +1379,10 @@ impl Server {
             let id = st.next_id;
             // The page is older than the file (it loaded mid-update): refresh now.
             if !rev.is_empty() && rev != current {
-                let msg = match self.kind {
-                    Kind::Drafts if topic != super::draft::LIST => changed_event(&current),
-                    _ => RELOAD.to_string(),
+                let msg = if self.editable() && topic != self.list() {
+                    changed_event(&current)
+                } else {
+                    RELOAD.to_string()
                 };
                 let _ = writer.write_all(msg.as_bytes());
             }
@@ -1398,14 +1477,15 @@ impl Server {
                 .map(|(t, _)| t.clone())
                 .collect();
             drop(st);
-            // Drafts and intent files change under open tabs (Claude, another
-            // editor): tell them. A list is redrawn: what it shows has changed.
+            // Drafts, briefs and intent files change under open tabs (Claude,
+            // another editor): tell them. A list is redrawn: what it shows has
+            // changed.
             for topic in open {
                 let now = self.topic_rev(&topic);
                 let mut st = self.lock();
                 if st.revs.get(&topic) != Some(&now) {
                     st.revs.insert(topic.clone(), now.clone());
-                    let msg = if self.kind == Kind::Drafts && topic != super::draft::LIST {
+                    let msg = if self.editable() && topic != self.list() {
                         changed_event(&now)
                     } else {
                         RELOAD.to_string()

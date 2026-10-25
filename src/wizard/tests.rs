@@ -522,6 +522,7 @@ fn new_claude_answers<'a>(sandbox: &[&'a str]) -> Vec<&'a str> {
         "", "", // extra hooks, formatter
         "", "", "", "", "", "", "", "",
         "", // intake … fanout, workstreams … inquire, recap
+        "", // /brief (index 16)
         "", "", "", "", "", "", "", // /intent, its settings and approvers
         "", "", "", // subagent confidence, check command, loop guard
         "", "", "", "", "", "", "", // Agent Teams and its gates
@@ -599,6 +600,21 @@ fn new_can_leave_out_recap() {
     assert_eq!(script_remaining(), 0);
     assert!(!p.claude.workflow.recap);
     assert!(p.claude.workflow.inquire, "only recap is off");
+}
+
+#[test]
+fn new_can_leave_out_brief() {
+    // The /brief question follows /recap (index 15) and precedes /intent, so
+    // every earlier answer keeps its place.
+    let mut answers = new_claude_answers(&[""]);
+    assert_eq!(answers[16], "");
+    answers[16] = "n";
+    script(&answers);
+    let p = build_new(true, false);
+    assert_eq!(script_remaining(), 0);
+    assert!(!p.claude.workflow.brief);
+    assert!(p.claude.workflow.recap, "recap is untouched");
+    assert!(p.claude.workflow.intent, "intent is untouched");
 }
 
 #[test]
