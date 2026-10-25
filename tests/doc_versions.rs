@@ -806,3 +806,76 @@ fn the_workstreams_board_is_english_only_and_never_owed() {
     );
     assert_eq!(read(root, ".claude/workstreams/board.md"), BOARD);
 }
+
+// ---------------------------------------------------------------- the brief --
+
+const BRIEF: &str =
+    "# Brief: billing-retry\nTarget: deliver\nStatus: draft\n\n## Goal\nRetry the billing client.\n";
+
+/// A /brief brief is one English-keyed version in every project, like the
+/// board: never a second language file, never owed, never relabelled, and
+/// never rendered to a file. Through the hook, in a project of two languages:
+/// no note asks for a second version, no turn is held for one, and the write
+/// makes the brief the session's. (The page itself has its tests with the
+/// viewer's.)
+#[test]
+fn a_brief_is_one_english_version_and_never_owed() {
+    let dir = project("English", "Ukrainian", true, false, false);
+    let root = dir.path();
+    let md = write(root, ".claude/briefs/billing-retry.md", BRIEF);
+    let o = wrote(root, "s1", "", ".claude/briefs/billing-retry.md");
+    assert_eq!(context(&o), None, "{o:?}");
+    assert!(o.stderr.is_empty(), "{o:?}");
+    assert_eq!(
+        read(root, ".claude/briefs/.sessions/s1"),
+        "billing-retry",
+        "the write makes the brief the session's"
+    );
+    assert_eq!(read(root, ".claude/briefs/.gitignore"), "*\n");
+    assert_eq!(held(&stop(root, "Stop", "s1", "", false)), None);
+    assert_eq!(held(&stop(root, "SubagentStop", "s1", "a1", false)), None);
+    let doc = versions::classify(&md).expect("a brief is a document");
+    assert_eq!(doc.family.kind, versions::Kind::Brief);
+    assert_eq!(doc.language, "English");
+    assert!(!doc.orphan);
+    assert_eq!(doc.family.languages(), ["English"]);
+    assert!(!doc.family.bilingual());
+    assert_eq!(doc.family.path("English").unwrap(), md);
+    assert_eq!(doc.family.path("Ukrainian"), None);
+    assert!(versions::touch(&doc, Some("s1")).is_empty());
+    assert!(!root.join(".claude/briefs/.versions").exists());
+    assert!(versions::owed(root, "s1").is_empty());
+    assert!(!versions::hold(root, "s1"));
+    let v = versions::status(&doc.family);
+    assert_eq!(v.len(), 1);
+    assert!(v[0].exists && !v[0].stale);
+    // A file named like another language's version is no version of it.
+    let uk = write(root, ".claude/briefs/billing-retry.ukrainian.md", BRIEF);
+    assert_eq!(versions::classify(&uk), None);
+    // No static page, whatever asks for one.
+    let err = render_file(&md).unwrap_err().to_string();
+    assert!(err.contains("has no static page"), "{err}");
+    assert!(render_family(&doc).is_empty());
+    assert!(!root.join(".claude/briefs/billing-retry.html").exists());
+    // A change of languages renames the ledgers' versions, never a brief.
+    let before = Project::load_state(root).unwrap();
+    let mut after = before.clone();
+    after.language = "Ukrainian".into();
+    after.response_language = "English".into();
+    write(root, ".claude/notes/flow.md", UK_LEDGER);
+    let moved = versions::relabel(root, &before, &after);
+    assert!(
+        moved
+            .renamed
+            .iter()
+            .any(|(from, _)| from.ends_with("flow.md")),
+        "{moved:?}"
+    );
+    assert!(
+        moved.renamed.iter().all(|(from, to)| {
+            !from.ends_with("billing-retry.md") && !to.ends_with("billing-retry.md")
+        }),
+        "{moved:?}"
+    );
+    assert_eq!(read(root, ".claude/briefs/billing-retry.md"), BRIEF);
+}

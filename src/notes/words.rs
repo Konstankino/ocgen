@@ -41,6 +41,9 @@ pub struct Words {
     pub intent_footer: &'static str,
     /// A draft's editor page (an issue's or a pull request's) and their list.
     pub draft: DraftWords,
+    /// A /brief brief's editor page — what it adds to the draft editor — and
+    /// the list of briefs.
+    pub brief: BriefWords,
     /// The read-only pages: the lists of notes and of intent files, and an
     /// intent file's page. Their palette, pager and keys are the drafts'.
     pub docs: DocsWords,
@@ -194,6 +197,97 @@ pub struct DraftWords {
     pub skipped: &'static str,
 }
 
+/// What a /brief brief's editor page says beyond the draft editor's own words
+/// (which it shares: Save, Source, Preview, the palettes, the banners), and
+/// what the list of briefs says. The offline banners point at the word `brief`
+/// typed in Claude Code: the skill runs no ocgen command, and neither does the
+/// user.
+pub struct BriefWords {
+    pub title: &'static str,
+    /// The formatted editor's name for screen readers.
+    pub editor: &'static str,
+    /// The editor's link to the list of briefs.
+    pub all_briefs: &'static str,
+    pub footer: &'static str,
+    /// The banner shown when the editor stops (HTML: it marks up the word).
+    pub offline: &'static str,
+    /// The buttons that copy the whole brief and its hand-off command.
+    pub copy_brief: &'static str,
+    pub copy_handoff: &'static str,
+    /// The coverage strip's name, and its three cell states.
+    pub coverage: &'static str,
+    pub missing: &'static str,
+    pub thin: &'static str,
+    pub covered: &'static str,
+    /// Before the target skill's name on the badge, and the badge with none.
+    pub target: &'static str,
+    pub no_target: &'static str,
+    pub status_draft: &'static str,
+    pub status_ready: &'static str,
+    /// The Open list: what the dry run still asks; its empty state; the
+    /// Inferred list.
+    pub open: &'static str,
+    pub open_none: &'static str,
+    pub inferred: &'static str,
+    /// The list of briefs: its title, its count (`{count}`), its footer, its
+    /// offline banner (HTML: it marks up the word) and what it shows with none.
+    pub list_title: &'static str,
+    pub count: &'static str,
+    pub list_footer: &'static str,
+    pub list_offline: &'static str,
+    pub none_yet: &'static str,
+    /// Before the `.md` files in the folder whose names are no slug.
+    pub skipped: &'static str,
+    /// Section keys → shown names.
+    sections: [(&'static str, &'static str); 12],
+}
+
+impl BriefWords {
+    /// The shown name of a section key (`Success criteria` → `Критерії
+    /// успіху`), matched on the heading's first words, so `Success criteria
+    /// (deliver)` finds it too; an unknown heading as written.
+    pub fn section(&self, key: &str) -> String {
+        let k = key.trim();
+        self.sections
+            .iter()
+            .find(|(name, _)| super::brief::heading_is(k, name))
+            .map_or(k, |(_, shown)| shown)
+            .to_string()
+    }
+
+    /// Every string here, for the tests that check the language.
+    pub fn all(&self) -> Vec<&'static str> {
+        let mut all = vec![
+            self.title,
+            self.editor,
+            self.all_briefs,
+            self.footer,
+            self.offline,
+            self.copy_brief,
+            self.copy_handoff,
+            self.coverage,
+            self.missing,
+            self.thin,
+            self.covered,
+            self.target,
+            self.no_target,
+            self.status_draft,
+            self.status_ready,
+            self.open,
+            self.open_none,
+            self.inferred,
+            self.list_title,
+            self.count,
+            self.list_footer,
+            self.list_offline,
+            self.none_yet,
+            self.skipped,
+        ];
+        all.extend(self.sections.iter().map(|(_, shown)| *shown));
+        all
+    }
+}
+
 pub static ENGLISH: Words = Words {
     lang: "en",
     offline: "Live view disconnected — this page won't refresh by itself. Run <code>ocgen notes open</code> to reconnect.",
@@ -274,6 +368,46 @@ pub static ENGLISH: Words = Words {
         list_offline: "Editor disconnected — this list won’t refresh. Run <code>ocgen draft</code> to reconnect.",
         none_yet: "No drafts yet.",
         skipped: "Not listed, because ocgen can’t open these names — rename them to letters, digits, - and _ (at most 200 characters):",
+    },
+    brief: BriefWords {
+        title: "Brief",
+        editor: "Brief text",
+        all_briefs: "All briefs",
+        footer: "Save writes the file named above — the brief the target skill reads instead of interviewing you again. The strip shows what the target would still have to ask.",
+        offline: "Editor disconnected — saving won’t work. Type <code>brief</code> in Claude Code to reconnect.",
+        copy_brief: "Copy brief",
+        copy_handoff: "Copy hand-off",
+        coverage: "Section coverage",
+        missing: "missing",
+        thin: "thin",
+        covered: "covered",
+        target: "For",
+        no_target: "No target yet",
+        status_draft: "Draft",
+        status_ready: "Ready",
+        open: "What the dry run still asks",
+        open_none: "The dry run has nothing left to ask.",
+        inferred: "Inferred without asking — contest an item by its slug",
+        list_title: "/brief briefs",
+        count: "{count} briefs · newest first",
+        list_footer: "Open a brief to edit it. The list follows the folder: it refreshes when a brief changes.",
+        list_offline: "Editor disconnected — this list won’t refresh. Type <code>brief</code> in Claude Code to reconnect.",
+        none_yet: "No briefs yet — /brief writes one.",
+        skipped: "Not listed, because a brief’s name must be a slug — rename these to lowercase letters, digits and hyphens (at most 80 characters):",
+        sections: [
+            ("Goal", "Goal"),
+            ("Context", "Context"),
+            ("Scope", "Scope"),
+            ("Success criteria", "Success criteria"),
+            ("Constraints", "Constraints"),
+            ("Out of scope", "Out of scope"),
+            ("Risks", "Risks"),
+            ("Workstreams", "Workstreams"),
+            ("What I know", "What I know"),
+            ("First question", "First question"),
+            ("Open", "Open"),
+            ("Inferred", "Inferred"),
+        ],
     },
     docs: DocsWords {
         notes_title: "/inquire notes",
@@ -414,6 +548,46 @@ pub static UKRAINIAN: Words = Words {
         list_offline: "Редактор від’єднано — список не оновлюватиметься. Щоб під’єднатися знову, виконайте <code>ocgen draft</code>.",
         none_yet: "Чернеток ще немає.",
         skipped: "Не в списку, бо ocgen не може відкрити файли з такими назвами — перейменуйте їх: лише букви, цифри, - і _ (до 200 символів):",
+    },
+    brief: BriefWords {
+        title: "Бриф",
+        editor: "Текст брифу",
+        all_briefs: "Усі брифи",
+        footer: "Кнопка «Зберегти» записує файл, указаний вище, — бриф, який цільова навичка читає замість того, щоб знову розпитувати вас. Смужка показує, про що ціль ще мусила б запитати.",
+        offline: "Редактор від’єднано — зберегти не вийде. Щоб під’єднатися знову, введіть <code>brief</code> у Claude Code.",
+        copy_brief: "Копіювати бриф",
+        copy_handoff: "Копіювати команду передачі",
+        coverage: "Охоплення розділів",
+        missing: "відсутній",
+        thin: "неповний",
+        covered: "заповнений",
+        target: "Для",
+        no_target: "Ціль ще не вибрано",
+        status_draft: "Чернетка",
+        status_ready: "Готово",
+        open: "Про що пробний запуск ще запитує",
+        open_none: "Пробний запуск більше нічого не запитує.",
+        inferred: "Виведено без запитання — заперечте пункт за його назвою",
+        list_title: "Брифи /brief",
+        count: "Брифів: {count} · найновіші вгорі",
+        list_footer: "Відкрийте бриф, щоб редагувати його. Список стежить за текою й оновлюється, коли бриф змінюється.",
+        list_offline: "Редактор від’єднано — список не оновлюватиметься. Щоб під’єднатися знову, введіть <code>brief</code> у Claude Code.",
+        none_yet: "Брифів ще немає — їх пише /brief.",
+        skipped: "Не в списку, бо назва брифу має бути слагом — перейменуйте їх: лише малі латинські букви, цифри й дефіси (до 80 символів):",
+        sections: [
+            ("Goal", "Мета"),
+            ("Context", "Контекст"),
+            ("Scope", "Обсяг"),
+            ("Success criteria", "Критерії успіху"),
+            ("Constraints", "Обмеження"),
+            ("Out of scope", "Поза обсягом"),
+            ("Risks", "Ризики"),
+            ("Workstreams", "Робочі потоки"),
+            ("What I know", "Що я знаю"),
+            ("First question", "Перше запитання"),
+            ("Open", "Відкриті питання"),
+            ("Inferred", "Виведено"),
+        ],
     },
     docs: DocsWords {
         notes_title: "Нотатки /inquire",
@@ -582,5 +756,40 @@ mod tests {
             ENGLISH.counts(1, 1, 0, 2),
             "1 question · 1 verified · 0 inferred · 2 stale"
         );
+    }
+
+    #[test]
+    fn brief_sections_are_shown_in_the_language_without_a_russian_letter() {
+        let uk = for_language("Ukrainian");
+        assert_eq!(uk.brief.section("Success criteria"), "Критерії успіху");
+        assert_eq!(
+            uk.brief.section("success criteria (deliver)"),
+            "Критерії успіху"
+        );
+        assert_eq!(uk.brief.section("What I know"), "Що я знаю");
+        assert_eq!(uk.brief.section("Open"), "Відкриті питання");
+        assert_eq!(uk.brief.section("Scoped"), "Scoped");
+        assert_eq!(uk.brief.section("Mystery"), "Mystery");
+        assert_eq!(ENGLISH.brief.section("goal"), "Goal");
+        assert_eq!(uk.brief.all().len(), 24 + 12);
+        for s in uk.brief.all() {
+            for letter in ['ы', 'э', 'ъ', 'ё', 'Ы', 'Э', 'Ъ', 'Ё'] {
+                assert!(!s.contains(letter), "{letter:?} in {s:?}");
+            }
+        }
+        // The offline banners point at the word, never at an ocgen command.
+        for s in [
+            ENGLISH.brief.offline,
+            ENGLISH.brief.list_offline,
+            uk.brief.offline,
+            uk.brief.list_offline,
+        ] {
+            assert!(
+                s.contains("<code>brief</code>") && !s.contains("ocgen"),
+                "{s}"
+            );
+        }
+        assert!(uk.brief.open.contains("пробний запуск"));
+        assert_eq!(uk.brief.coverage, "Охоплення розділів");
     }
 }

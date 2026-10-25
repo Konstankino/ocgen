@@ -19,7 +19,7 @@ use std::time::{Duration, Instant, SystemTime};
 use ocgen::agent;
 use ocgen::manifest::Manifest;
 use ocgen::notes::viewer::{self, Info};
-use ocgen::notes::{self, draft, intents};
+use ocgen::notes::{self, brief, draft, intents};
 use ocgen::render::Project as State;
 use ocgen::target::Target;
 use tempfile::TempDir;
@@ -71,7 +71,7 @@ fn the_words_are_the_whole_prompt() {
     }
     assert!(intents::is_prompt("rfc", "RFC") && !intents::is_prompt("adr", "RFC"));
     // A prefix named like a word ocgen already has leaves that word alone.
-    for taken in ["DRAFT", "Note", "NOTES"] {
+    for taken in ["DRAFT", "Note", "NOTES", "Brief"] {
         assert_eq!(intents::word(taken), None, "{taken}");
         assert!(!intents::is_prompt(&taken.to_lowercase(), taken));
     }
@@ -479,6 +479,12 @@ impl Project {
 
     fn drafts(&self) -> PathBuf {
         let d = self.dir.path().join(draft::DIR);
+        fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    fn briefs(&self) -> PathBuf {
+        let d = self.dir.path().join(brief::DIR);
         fs::create_dir_all(&d).unwrap();
         d
     }
@@ -1039,6 +1045,33 @@ fn draft_is_unchanged_beside_notes_and_intent_files() {
         info,
         "the editor is untouched"
     );
+    // A brief beside them (/brief is on: /inquire is one of its targets):
+    // `brief` isn't the intent hook's word, the notes hook answers it, and
+    // neither `draft` nor `note` is touched by the brief's presence.
+    fs::write(
+        p.briefs().join("billing-retry.md"),
+        "# Brief: billing-retry\nTarget: inquire\nStatus: draft\n\n## Goal\nHow retries work.\n",
+    )
+    .unwrap();
+    assert_eq!(p.say("intent-draft", "s-1", "brief"), "");
+    let said = p.say_off("inquire-notes", "brief");
+    assert!(said.contains(".claude/briefs/billing-retry.md"), "{said}");
+    let said = p.say_off("intent-draft", "draft");
+    assert!(
+        said.contains(".claude/intent/drafts/adr-0001-cache.md") && !said.contains("brief"),
+        "{said}"
+    );
+    let said = p.say_off("inquire-notes", "note");
+    assert!(
+        said.contains(".claude/notes/request-flow.md") && !said.contains("brief"),
+        "{said}"
+    );
+    assert_eq!(p.opened().len(), 2, "{:?}", p.opened());
+    assert_eq!(
+        viewer::read_info(&p.drafts()).unwrap(),
+        info,
+        "the editor is untouched"
+    );
 }
 
 #[test]
@@ -1063,6 +1096,22 @@ fn a_prefix_named_like_a_word_ocgen_has_leaves_that_word_alone() {
         said.contains("no draft"),
         "`draft` stays the drafts' word: {said}"
     );
+
+    // `brief` is the briefs' word: the intent hook stays out of it even with
+    // that prefix, the notes hook answers it, and `ocgen adr` still reaches
+    // the file.
+    let p = Project::new("BRIEF");
+    fs::write(p.adr().join("BRIEF-0001-x.md"), intent("BRIEF-0001", "X")).unwrap();
+    assert_eq!(p.say("intent-draft", "s-1", "brief"), "");
+    assert!(p.opened().is_empty(), "{:?}", p.opened());
+    let said = p.say_off("inquire-notes", "brief");
+    assert!(
+        said.contains("no briefs in .claude/briefs/ yet") && said.contains("/brief writes one"),
+        "`brief` is the briefs' word: {said}"
+    );
+    let out = p.ocgen_adr(&["1"]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert!(String::from_utf8_lossy(&out.stdout).contains("docs/adr/BRIEF-0001-x.md"));
 }
 
 #[test]
@@ -1144,6 +1193,8 @@ fn the_notes_word_is_registered_with_the_ledgers() {
     };
     assert!(on("UserPromptSubmit", "inquire-notes"));
     assert!(on("UserPromptSubmit", "intent-draft"));
-    // No new hook: projects generated before get `adr` with the new binary.
-    assert_eq!(ocgen::hooks::PROTOCOL, "ocgen-hooks 21");
+    // No new hook: `brief` rides on the notes hook, whose answers (the word,
+    // the folders to watch, a brief's page) are protocol 22; a project on 21
+    // falls back to its scripts until `ocgen doctor`.
+    assert_eq!(ocgen::hooks::PROTOCOL, "ocgen-hooks 22");
 }

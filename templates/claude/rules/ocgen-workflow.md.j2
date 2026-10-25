@@ -238,6 +238,21 @@ session can resume from its open questions. Each ledger has an HTML page beside 
 renders and refreshes in the browser after every write (`ocgen notes open` shows it again) — edit
 the Markdown, never the page. Hand off to `/deliver` once you know what to change.
 {% endif %}
+{% if brief %}
+## Briefs
+
+Before {{ brief_targets }} starts cold on a one-line goal, `/brief <goal>` writes
+the brief it would otherwise interview for: it skims the code read-only, asks one question at a
+time — only what the code doesn't answer — then dry-runs the target skill in a fresh subagent for
+what it would still ask, at most three rounds, and ends with the one command to type:
+`/<target> .claude/briefs/<slug>.md`. The brief lives in `.claude/briefs/<slug>.md` (an ASCII slug;
+the folder keeps itself out of git with its own `.gitignore`). A hook shows it as a live page in
+the browser after every write, with a coverage strip per section; `brief` typed alone shows it
+again — edit the Markdown or the page, never a copy. Each target reads a brief given by that path
+first, skips what it settles and asks only its Open items; a path that doesn't exist is an error,
+never a goal. `/brief` never starts the target itself{% if inquire %} and never writes the user's questions for
+`/inquire`{% endif %}. When asked to prepare a brief, run `/brief` yourself: it writes nothing but the brief.
+{% endif %}
 {% if intent %}
 ## Intents and issues
 

@@ -10,15 +10,20 @@
 //! into that language) gets a page of its own the same way, and so does a
 //! /recap report, as a read-only file page; the /workstreams board ([`board`])
 //! gets a read-only page served live by a viewer of its own. The /intent issue
-//! draft (`.claude/intent/drafts/<name>.md`) gets an editor instead ([`draft`]).
+//! draft (`.claude/intent/drafts/<name>.md`) gets an editor instead ([`draft`]),
+//! and so does a /brief brief (`.claude/briefs/<slug>.md`, [`brief`]), which
+//! never gets a static page: its value is live, with a coverage strip that
+//! would be stale the moment the interview continues.
 //!
 //! The word `note` or `notes`, sent alone in Claude Code and caught by the same
 //! hook, opens the ledger there is, or their list ([`LIST`], [`listing`]) with
 //! the one this session wrote last selected ([`session`]). The intent files get
-//! a read-only page and a list of their own ([`intents`]).
+//! a read-only page and a list of their own ([`intents`]); the word `brief`
+//! opens the briefs the same way.
 
 pub mod blocks;
 pub mod board;
+pub mod brief;
 pub mod browser;
 pub mod draft;
 pub mod html;
@@ -185,9 +190,11 @@ pub fn ledger_slug(md: &Path) -> Result<String> {
 /// /intent reading copy gets a read-only Zen page beside it the same way, and
 /// any language version of these (`<name>.<language>.md`, see [`versions`]) its
 /// own page, linked to the others; the /workstreams board gets its page
-/// ([`board`]) in English only. Anything else is refused (see
-/// [`ledger_slug`]): the sibling page would overwrite a real `.html`, and the
-/// `*` .gitignore would hide its directory from git.
+/// ([`board`]) in English only. A /brief brief is refused too, before anything
+/// is written: it has no static page, only the live editor the word `brief`
+/// opens ([`brief`]). Anything else is refused (see [`ledger_slug`]): the
+/// sibling page would overwrite a real `.html`, and the `*` .gitignore would
+/// hide its directory from git.
 pub fn render_file(md: &Path) -> Result<PathBuf> {
     match versions::classify(md) {
         Some(doc) => render_doc(md, &doc),
@@ -201,9 +208,19 @@ pub fn render_file(md: &Path) -> Result<PathBuf> {
 /// Whether [`render_file`] renders `md`: the reason it doesn't, if not.
 pub fn check_renderable(md: &Path) -> Result<()> {
     match versions::classify(md) {
+        Some(doc) if doc.family.kind == versions::Kind::Brief => Err(no_static_page(md)),
         Some(_) => Ok(()),
         None => ledger_slug(md).map(|_| ()),
     }
+}
+
+/// Why a brief is never rendered to a file: the one message `ocgen notes
+/// render` and the hook give.
+fn no_static_page(md: &Path) -> anyhow::Error {
+    anyhow::anyhow!(
+        "{} is a /brief brief — it has no static page; type `brief` in Claude Code to open its editor",
+        md.display()
+    )
 }
 
 /// Render version `doc` (the file `md`) to its page.
@@ -217,11 +234,13 @@ fn render_doc(md: &Path, doc: &versions::Doc) -> Result<PathBuf> {
         versions::Kind::Recap => render_static(md, doc, intents::ZenKind::Recap),
         versions::Kind::Copy => render_static(md, doc, intents::ZenKind::Copy),
         versions::Kind::Board => render_static(md, doc, intents::ZenKind::Board),
+        versions::Kind::Brief => Err(no_static_page(md)),
     }
 }
 
 /// Render every version of `doc`'s document there is — each page's switch
-/// shows the others — and return their pages.
+/// shows the others — and return their pages (none for a brief, which has no
+/// static page).
 pub fn render_family(doc: &versions::Doc) -> Vec<PathBuf> {
     versions::status(&doc.family)
         .into_iter()
@@ -562,7 +581,9 @@ pub fn list_page(
             row: &row,
             source: DIR,
             list: LIST,
+            // Every ledger is a slug: nothing is ever left out.
             skipped: &[],
+            skipped_label: "",
             language: &answer_language(dir),
         },
         page,

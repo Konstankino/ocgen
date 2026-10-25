@@ -657,6 +657,12 @@ fn build_claude_project(
         "Syncs your branches with the remote (fast-forward only, new remote branches tracked locally), then reports what changed on each branch since your last recap, plus new GitHub comments and reviews on the related issues and PRs; keeps each report in .claude/notes/recap/.",
         true,
     )?;
+    p.claude.workflow.brief = ask_confirm(
+        theme,
+        "Include the /brief brief-writer command?",
+        "Writes the brief for /deliver, /inquire or /workstreams first: an interview informed by the code, a dry run of the target skill for what it would still ask, a live page in your browser; the brief ends with the command to type.",
+        true,
+    )?;
     let (intent, intent_settings) =
         configure_intent(theme, true, &ocgen::claude::IntentSettings::default(), None)?;
     p.claude.workflow.intent = intent;

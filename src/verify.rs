@@ -222,7 +222,9 @@ pub fn verify(project: &Project, root: &Path, opts: &Options) -> Vec<Check> {
             out.push(https_only_fetch(&probe));
             out.push(noop_cd(&probe));
             out.push(notes_view(&probe));
-            out.push(notes_word(&probe));
+            out.push(notes_word(&probe, project));
+            out.push(brief_hook(&probe, project));
+            out.push(brief_word(&probe, project));
             out.push(doc_versions(&probe, project));
             out.push(draft_review(&probe));
             out.push(recap_github(&probe));
@@ -2091,10 +2093,14 @@ fn doc_versions(p: &Probe, project: &crate::render::Project) -> Check {
 /// The /inquire notes word: `note` gets an answer for the user about opening
 /// the ledgers, and any other prompt passes untouched. Probed with the browser
 /// switched off, in the project itself (it writes nothing then).
-fn notes_word(p: &Probe) -> Check {
+fn notes_word(p: &Probe, project: &Project) -> Check {
     let name = "/inquire notes word";
-    // Generated only with /inquire (or reading copies): a /recap-only project
-    // renders its reports without the word.
+    // Answered only with /inquire (or reading copies): a /recap-only project
+    // renders its reports without the word, and a /brief-only project has the
+    // prompt group for `brief`, whose hook lets `note` through as typed.
+    if !project.opens_notes_word() {
+        return check(name, Status::Skip, "/inquire not enabled");
+    }
     let Some((event, group, cmd)) = p.find("UserPromptSubmit", "inquire-notes") else {
         return check(name, Status::Skip, "/inquire not enabled");
     };
@@ -2157,6 +2163,167 @@ fn notes_word(p: &Probe) -> Check {
             Status::Warn,
             "`note` reaches Claude as typed — the ocgen on PATH may predate it; update ocgen",
         )
+    }
+}
+
+/// The /brief hook: after a brief is written, the hook remembers it as the
+/// session's, keeps its folder out of git and opens its live page. Probed on a
+/// scratch project holding a minimal brief, with the browser switched off: the
+/// session's record and the folder's `.gitignore` are what the run leaves. The
+/// write lands outside the project, so this run isn't a probe (the hook may
+/// keep its record), and the generated command's script fallback — under the
+/// scratch, which has none — is never judged: without a current ocgen the probe
+/// says what is missing instead.
+fn brief_hook(p: &Probe, project: &Project) -> Check {
+    use crate::notes::brief;
+    let name = "/brief hook";
+    if !project.brief_enabled() {
+        return check(name, Status::Skip, "/brief not enabled");
+    }
+    let Some((event, group, cmd)) = p.find("PostToolUse", "inquire-notes") else {
+        return check(name, Status::Skip, "no notes hook to open a brief's page");
+    };
+    if let Some(what) = p.hand_edited(&event, &group, &cmd) {
+        return check(name, Status::Warn, not_run(&what));
+    }
+    if !ocgen_hook_ok() {
+        return check(
+            name,
+            Status::Warn,
+            format!(
+                "needs ocgen ({}) on PATH — without it a brief gets no page and `brief` reaches \
+                 Claude as typed",
+                crate::hooks::PROTOCOL
+            ),
+        );
+    }
+    let scratch = scratch_path("brief");
+    let briefs = scratch.join(brief::DIR);
+    let md = briefs.join("ocgen-verify.md");
+    if std::fs::create_dir_all(&briefs).is_err()
+        || std::fs::write(
+            &md,
+            "# Brief: ocgen-verify\nTarget: deliver\nStatus: draft\n\n## Goal\nProbe the /brief hook.\n",
+        )
+        .is_err()
+    {
+        let _ = std::fs::remove_dir_all(&scratch);
+        return check(name, Status::Warn, "could not create a scratch brief to probe with");
+    }
+    let mut env = p.env.clone();
+    env.insert("OCGEN_NOTES_OPEN".into(), "0".into());
+    env.insert(
+        "CLAUDE_PROJECT_DIR".into(),
+        crate::paths::for_shell(&scratch),
+    );
+    env.remove("OCGEN_HOOK_PROBE");
+    let ev = serde_json::json!({
+        "session_id": "ocgen-verify", "hook_event_name": "PostToolUse", "tool_name": "Write",
+        "tool_input": { "file_path": crate::paths::for_shell(&md) }
+    })
+    .to_string();
+    let ran = run_sh(p.sh, &cmd, &ev, &env, p.root, Duration::from_secs(20));
+    let remembered = std::fs::read_to_string(briefs.join(brief::SESSIONS).join("ocgen-verify"))
+        .is_ok_and(|s| s.trim() == "ocgen-verify");
+    let ignored = briefs.join(".gitignore").is_file();
+    let _ = std::fs::remove_dir_all(&scratch);
+    match ran {
+        None => check(name, Status::Fail, "the hook did not finish"),
+        Some((code, _, err)) if code != 0 => check(
+            name,
+            Status::Fail,
+            format!(
+                "the hook exited {code} ({}) — it must never fail a write; run `ocgen doctor`",
+                err.lines().next().unwrap_or("").trim()
+            ),
+        ),
+        Some((_, _, err)) if !err.trim().is_empty() => check(
+            name,
+            Status::Fail,
+            format!(
+                "the hook complained about a brief ({}) — run `ocgen doctor`",
+                err.lines().next().unwrap_or("").trim()
+            ),
+        ),
+        Some(_) if remembered && ignored => check(
+            name,
+            Status::Pass,
+            "a written brief is the session's, its folder stays out of git, and its page opens \
+             in the browser editor",
+        ),
+        Some(_) => check(
+            name,
+            Status::Fail,
+            "the hook ran but didn't remember the brief — run `ocgen doctor`",
+        ),
+    }
+}
+
+/// The /brief word: `brief` on its own gets an answer for the user about the
+/// session's brief (or their list, or that there is none yet) and writes
+/// nothing. Probed in the project itself with the browser switched off.
+fn brief_word(p: &Probe, project: &Project) -> Check {
+    use crate::notes::brief;
+    let name = "/brief word";
+    if !project.brief_enabled() {
+        return check(name, Status::Skip, "/brief not enabled");
+    }
+    let Some((event, group, cmd)) = p.find("UserPromptSubmit", "inquire-notes") else {
+        return check(name, Status::Skip, "no prompt hook to answer the word");
+    };
+    if let Some(what) = p.hand_edited(&event, &group, &cmd) {
+        return check(name, Status::Warn, not_run(&what));
+    }
+    let mut env = p.env.clone();
+    env.insert("OCGEN_NOTES_OPEN".into(), "0".into());
+    let ev = serde_json::json!({
+        "session_id": "ocgen-verify", "hook_event_name": "UserPromptSubmit", "prompt": brief::WORD
+    })
+    .to_string();
+    let ran = run_sh(p.sh, &cmd, &ev, &env, p.root, Duration::from_secs(20));
+    // A probe writes nothing: no session record in the project.
+    let record = p
+        .root
+        .join(brief::DIR)
+        .join(brief::SESSIONS)
+        .join("ocgen-verify");
+    let wrote = record.is_file();
+    if wrote {
+        let _ = std::fs::remove_file(&record);
+    }
+    match ran {
+        None => check(name, Status::Fail, "the hook did not finish"),
+        Some((code, _, err)) if code != 0 => check(
+            name,
+            Status::Fail,
+            format!(
+                "the hook exited {code} ({}) — it must never stop a prompt; run `ocgen doctor`",
+                err.lines().next().unwrap_or("").trim()
+            ),
+        ),
+        Some(_) if wrote => check(
+            name,
+            Status::Fail,
+            "the hook wrote a session record for a probe — run `ocgen doctor`",
+        ),
+        Some((_, out, _)) if answers_prompt(&out) => check(
+            name,
+            Status::Pass,
+            "`brief` on its own opens the session's brief (or their list) in the browser editor",
+        ),
+        Some(_) if !ocgen_hook_ok() => check(
+            name,
+            Status::Warn,
+            format!(
+                "needs ocgen ({}) on PATH — without it `brief` reaches Claude as typed",
+                crate::hooks::PROTOCOL
+            ),
+        ),
+        Some(_) => check(
+            name,
+            Status::Warn,
+            "`brief` reaches Claude as typed — the ocgen on PATH may predate it; update ocgen",
+        ),
     }
 }
 

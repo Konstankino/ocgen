@@ -14,7 +14,11 @@ Classify the goal before anything else, state the classification, and let me ove
   instead of this pipeline.
 - **Mixed** — understand, then change → run a short `/inquire` orientation first, then continue with
   phase 1 using its ledger as context.
-{% endif %}
+{% if brief %}- A brief from `/brief` (`.claude/briefs/<slug>.md`, with or without a leading `@`): Read it first, its
+  `Target:` line is its route — `deliver` continues with phase 1; `inquire` is `/inquire`'s brief{% if workstreams %} and
+  `workstreams` is `/workstreams`'{% endif %}: say so and stop.
+  If no such file exists, say so (a brief written in a worktree stays in that worktree) and stop.
+{% endif %}{% endif %}
 ## 1. Sharpen the goal
 {% if intent %}If the goal names an intent from `/intent` — its intent file, an issue draft without one
 (`.claude/intent/drafts/issue-*.md`), or an issue that links either (an intent file's `Issue:` line, a
@@ -25,6 +29,14 @@ draft's `<!-- Issue: … -->` line) — read it first and check its sign-off. An
 stop. If I insist, say plainly that starting now bypasses the approvers' sign-off, and start only after
 I confirm explicitly. Then treat its approved plan as the brief: confirm with me what changed since,
 and skip what it already settles in phases 1–3.
+{% endif %}{% if brief %}If the goal is a brief from `/brief` (`.claude/briefs/<slug>.md`, with or without a leading `@`),
+Read it first; its `Target:` line must name `deliver` (another target's brief belongs to that skill — say
+so and stop). Treat it as my answers: its Goal, Scope, Success criteria (keep their slugs),
+Constraints, Out of scope and Risks settle phases 1–2 and seed phase 3's task list, Scope line and
+risk register; its Context is the skim already done (re-check a `file:line` that looks stale); its
+Inferred items are mine unless I contest one. Ask only what its Open section leaves open, then
+present the plan for approval as usual. `Status: draft` is usable — say it is unfinished. If no such
+file exists, say so (a brief written in a worktree stays in that worktree) and stop.
 {% endif %}Rewrite the goal into a crisp brief using the prompt-engineering technique: explicit role, task,
 and success criteria; remove ambiguity.
 

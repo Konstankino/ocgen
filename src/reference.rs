@@ -278,7 +278,7 @@ const CLAUDE_FIELDS: &[Field] = &[
                  Optional: paths (globs that limit activation), arguments ($name), \
                  disallowed-tools, effort, background: false (a forked skill that waits for its \
                  result). ocgen's own workflows \
-                 (/deliver, /inquire, /workstreams, …) are skills too, so their names are reserved.",
+                 (/deliver, /inquire, /workstreams, /brief, …) are skills too, so their names are reserved.",
         example: "commit",
     },
     Field {

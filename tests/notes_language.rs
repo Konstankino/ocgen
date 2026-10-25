@@ -358,10 +358,11 @@ fn the_notes_hook_is_wired_for_intent_reading_copies() {
     assert!(dir.path().join(".claude/hooks/inquire-notes.sh").is_file());
     // English answers and prompts write no copy: nothing to render (without
     // /recap and /workstreams, whose report and board get a page in every
-    // project).
+    // project, and /brief, whose page the hook opens).
     let mut p = project(tempdir().unwrap().path(), "", false, true);
     p.claude.workflow.recap = false;
     p.claude.workflow.workstreams = false;
+    p.claude.workflow.brief = false;
     let dir = tempdir().unwrap();
     p.scaffold(dir.path(), false).unwrap();
     assert!(!has_hook(dir.path()));
