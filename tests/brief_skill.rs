@@ -680,3 +680,19 @@ fn the_plugin_carries_the_skill() {
     assert!(!dir.path().join("plugin/br/skills/brief").exists());
     assert!(!read(dir.path(), "plugin/br/README.md").contains("/brief"));
 }
+
+#[test]
+fn every_target_takes_only_its_own_brief() {
+    let (dir, _) = scaffolded(&claude("br"));
+    for (skill, target) in [
+        ("inquire", "inquire"),
+        ("workstreams", "workstreams"),
+        ("deliver", "deliver"),
+    ] {
+        let md = read(dir.path(), &format!(".claude/skills/{skill}/SKILL.md"));
+        assert!(
+            md.contains(&format!("its `Target:` line must name `{target}`")),
+            "/{skill} must check the brief's Target line"
+        );
+    }
+}

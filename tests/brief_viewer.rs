@@ -842,15 +842,16 @@ fn a_file_whose_name_is_no_slug_gets_the_rename_context() {
             && context.contains("for example .claude/briefs/billing-retry.md"),
         "{context}"
     );
-    // A language version written beside the brief, the habit of a bilingual
-    // project: the one file to fold the text into, and no example made of the
-    // name — `billing-retry-ukrainian.md` would be a second brief.
+    // A language version written with no brief of that name, the habit of a
+    // bilingual project: renamed in place to the one file, and no example made
+    // of the name — `billing-retry-ukrainian.md` would be a second brief.
     let md = p.briefs().join("billing-retry.ukrainian.md");
     let context = Project::context(&p.wrote_with("inquire-notes", "s-1", &md, "1")).unwrap();
     assert!(
         context.contains("language version")
             && context.contains("one file")
-            && context.contains("delete this one")
+            && context.contains("rename this file to .claude/briefs/billing-retry.md in place")
+            && !context.contains("merge")
             && !context.contains("billing-retry-ukrainian")
             && !context.contains("for example")
             && !context.contains("Rename it"),
@@ -891,17 +892,23 @@ fn a_dotted_tail_folds_only_a_language_version() {
     let context = told("Payment-Retry.Ukrainian.md");
     assert!(
         context.contains("language version")
-            && context.contains("delete this one")
-            && context.contains(".claude/briefs/payment-retry.md")
+            && context.contains("rename this file to .claude/briefs/payment-retry.md in place")
+            && !context.contains("merge")
             && !context.contains("for example"),
         "{context}"
     );
-    // And beside the brief it is a version of: that one file, nothing else.
+    // And beside the brief it is a version of: only what is new merged into
+    // that one file, never a write over it — the brief may hold the user's own
+    // words, and briefs are git-ignored — and never a rename onto it.
     p.brief("billing-retry", READY);
     let context = told("billing-retry.ukrainian.md");
     assert!(
         context.contains("language version of .claude/briefs/billing-retry.md")
-            && context.contains("delete this one")
+            && context.contains("exists already")
+            && context.contains("merge only what is new in this file into it, in its language")
+            && context.contains("never write this file's text over it")
+            && context.contains("then delete this file")
+            && !context.contains("in place")
             && !context.contains("for example")
             && !context.contains("Rename it"),
         "{context}"
@@ -974,7 +981,7 @@ fn a_dotted_tail_folds_only_a_language_version() {
     let context = Project::context(&p.wrote_with("inquire-notes", "s-1", &md, "1")).unwrap();
     assert!(
         context.contains("language version of .claude/briefs/billing-retry.md")
-            && context.contains("delete this one")
+            && context.contains("never write this file's text over it")
             && !context.contains("for example"),
         "{context}"
     );
@@ -982,6 +989,29 @@ fn a_dotted_tail_folds_only_a_language_version() {
         fs::read_to_string(p.briefs().join("billing-retry.md")).unwrap(),
         READY
     );
+}
+
+#[test]
+fn a_language_version_beside_another_spelling_of_its_brief_is_never_moved_over_it() {
+    // `Billing-Retry.md` is listed, not `billing-retry.md`: on a disk that folds
+    // case the slug name reaches that file, so a rename there would overwrite it.
+    let p = Project::new();
+    let other = p.briefs().join("Billing-Retry.md");
+    fs::create_dir_all(other.parent().unwrap()).unwrap();
+    fs::write(&other, READY).unwrap();
+    let md = p.briefs().join("billing-retry.ukrainian.md");
+    fs::write(&md, THIN).unwrap();
+    let out = p.wrote_with("inquire-notes", "s-1", &md, "1");
+    let context = Project::context(&out).unwrap_or_else(|| panic!("{out:?}"));
+    assert!(
+        context.contains("may reach .claude/briefs/Billing-Retry.md")
+            && context.contains("never move or write this file over it")
+            && context
+                .contains("Rename that one in place to .claude/briefs/billing-retry.md first")
+            && !context.contains("rename this file to"),
+        "{context}"
+    );
+    assert_eq!(fs::read_to_string(&other).unwrap(), READY);
 }
 
 #[test]
