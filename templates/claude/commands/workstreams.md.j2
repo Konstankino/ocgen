@@ -65,7 +65,8 @@ files** and have no cross-dependency, or whose order is explicit (`After: <slug>
 that would edit the same file are one workstream. Infer what you can and say what you inferred.
 
 {% if brief %}With a brief from `/brief` (`.claude/briefs/<slug>.md`, with or without a leading `@`) as the goal:
-Read it first. Its Workstreams section is the proposed split — slug, files, `After:`, worker kind,
+Read it first; its `Target:` line must name `workstreams` (another target's brief belongs to that
+skill — say so and stop). Its Workstreams section is the proposed split — slug, files, `After:`, worker kind,
 check, criteria — and its Goal, Scope, Constraints and Out of scope are my answers; its Inferred
 items are mine unless I contest one. Check the split against the code (disjoint files,
 `git log --oneline -- <path>` on them), ask only what its Open section leaves open, then write the

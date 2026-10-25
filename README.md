@@ -1213,8 +1213,9 @@ page, newest first, each with its target, status and date); with none it says th
 stops there — which is why a word typed as an *answer* must go in a sentence, and why `/brief` never
 labels an option with the bare word. A file in `.claude/briefs/` whose name is no slug (spaces,
 uppercase, Cyrillic) gets no page: the hook tells Claude to rename it, and a language-suffixed name
-(`billing-retries.ukrainian.md`) is folded back into its one brief; nothing is ever moved over an
-existing brief. The list names the skipped files too.
+(`billing-retries.ukrainian.md`) is folded back into its one brief: only what is new is merged into
+a brief that exists, and the file is renamed to it when none does; nothing is ever moved or written
+over an existing brief. The list names the skipped files too.
 
 **How the targets use it.** `/deliver .claude/briefs/<slug>.md` (with or without a leading `@`)
 reads the brief first and treats it as your answers: Goal, Scope, Success criteria (their slugs
