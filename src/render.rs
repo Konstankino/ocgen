@@ -2884,7 +2884,13 @@ impl Project {
         if self.has_blocking_hooks() {
             // The loop guard's state for a session goes when it ends, however it
             // ends. Claude Code gives a SessionEnd hook 1.5 s unless it says more.
-            let mut end = command_hook(hook_cmd(prefix, dir, "session-end.sh"));
+            // It runs the hook after removing an unchanged `--worktree` worktree,
+            // so the project folder, its script and its state may all be gone: no
+            // loop guard folder means nothing to clean, and nothing starts.
+            let mut end = command_hook(format!(
+                "[ -d \"${{CLAUDE_PROJECT_DIR:-.}}/.claude/loop-guard\" ] || exit 0; {}",
+                hook_cmd(prefix, dir, "session-end.sh")
+            ));
             end["timeout"] = json!(10);
             push("SessionEnd", json!({ "hooks": [ end ] }));
         }

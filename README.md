@@ -2254,7 +2254,9 @@ Tune the budget with the wizard's "Max times a gate may block the same agent" qu
 `claude.workflow.loop_guard_max` in `.claude/.ocgen-state.json` and run `ocgen doctor` (`0` =
 unlimited, not recommended). Set a subagent's max turns with `ocgen edit agent`. The
 `.claude/loop-guard/` directory git-ignores itself; a `SessionEnd` hook removes a session's
-counts when it ends (`escalations.md` stays). Projects made by older versions get the
+counts when it ends (`escalations.md` stays). With no loop guard folder it does nothing, so
+it stays quiet when Claude Code has already removed a `--worktree` worktree. Projects made by
+older versions get the
 loop guard from `ocgen doctor`. Their existing agents keep unlimited turns until you set
 max turns with `ocgen edit agent`.
 
