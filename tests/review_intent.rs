@@ -192,13 +192,24 @@ fn it_runs_the_projects_own_agents_in_parallel_waves() {
     // Find: the scope check, one reviewer per area and the explorer, at once.
     let find = between(&md, "## 2.", "## 3.");
     assert!(find.contains("one message"), "{find}");
-    for area in ["Correctness", "Security", "Tests", "Cross-platform", "Conformance"] {
+    for area in [
+        "Correctness",
+        "Security",
+        "Tests",
+        "Cross-platform",
+        "Conformance",
+    ] {
         assert!(find.contains(&format!("**{area}:**")), "{area}: {find}");
     }
     // Conformance looks past the diff for what the change should have reused,
     // and leaves broken public surfaces to Correctness.
     let conformance = between(find, "**Conformance:**", "\n  Each reports");
-    for must in ["duplicates", "beyond the diff", "`file:line`", "Correctness"] {
+    for must in [
+        "duplicates",
+        "beyond the diff",
+        "`file:line`",
+        "Correctness",
+    ] {
         assert!(conformance.contains(must), "{must}: {conformance}");
     }
     assert!(find.contains("`scope-guard`") && find.contains("`reviewer`"));

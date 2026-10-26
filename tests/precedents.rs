@@ -155,6 +155,10 @@ fn deliver_finds_a_renamed_reviewer_by_role() {
     let mut team = without("reviewer");
     team.push(("critic", "reviewer"));
     let f = files(&project(&team));
-    let check = section(&f[DELIVER], "**Conformance check.**", "**Adversary check.**");
+    let check = section(
+        &f[DELIVER],
+        "**Conformance check.**",
+        "**Adversary check.**",
+    );
     assert!(check.contains("`critic`"), "{check}");
 }
