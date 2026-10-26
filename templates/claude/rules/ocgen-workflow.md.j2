@@ -68,6 +68,23 @@ in this project. Where instructions (plan mode's included) say Explore, use `exp
 shell, so run git queries and GitHub requests yourself.
 {%- endif %}
 
+## Precedents
+
+Before a change, research lists the precedents that bear on it: what the code already does that
+the change must follow. Three kinds:
+- **reuse** — an existing function, type, helper or test fixture that already does what the change
+  needs, so the change calls it instead of writing it again;
+- **pattern** — how nearby code already does the same kind of thing: naming, error handling,
+  logging, configuration, tests, file layout;
+- **contract** — what callers rely on: invariants, signatures, error types, file and protocol
+  formats.
+
+Give each entry a slug (**Naming what you refer back to**), its kind, its `file:line`, and what
+the change must do: "call `parse_config` instead of reading the file", "return `Outcome::allow()`
+on every early exit". List only entries that bear on this change, about ten at most; "None found"
+is a valid answer. An entry is a fact the code shows, not advice. Departing from a precedent needs
+a stated reason, approved like any other change to the plan.
+
 ## Web research
 
 {% if trusted_docs -%}
@@ -179,9 +196,11 @@ Run `/deliver <goal>` to take a complex task end-to-end in one session:
 2. **Gather requirements** — interview one question at a time, options-first.
 3. **Plan** — draft the shared task list + risk register and get **approval** before executing.
 4. **Research in parallel** (read-only) — fetch online HTML/PDF (trusted sites, see **Web research**)
-   and study local source concurrently.
+   and study local source concurrently; the sweep of the code writes the precedent list (see
+   **Precedents**).
 5. **Execute under the gates** — state a `Confidence: NN%` for each decision and surface it for
-   confirmation; every risk gets a mitigation round.
+   confirmation; every risk gets a mitigation round. The implementer works from the precedent
+   list, and a **Conformance check** compares the finished change against it.
 6. **Synthesize** the deliverable.
 
 ## Multi-session delivery
