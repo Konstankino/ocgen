@@ -3961,6 +3961,91 @@ fn hooks_carry_their_claude_code_fields() {
     assert!(!dir.path().join(".claude/hooks/session-end.sh").exists());
 }
 
+/// Claude Code removes an unchanged `--worktree` worktree before it runs the
+/// SessionEnd hook, so `CLAUDE_PROJECT_DIR` names a folder that is gone. With no
+/// loop guard there, nothing is left to clean: the hook ends quietly instead of
+/// failing on its missing script. With one, it still cleans up.
+#[test]
+fn session_end_hook_is_quiet_when_the_worktree_is_gone() {
+    use std::process::{Command, Stdio};
+    let dir = tempdir().unwrap();
+    let mut p = claude_default("se");
+    p.claude.output = Output {
+        project: true,
+        plugin: true,
+    };
+    p.claude.plugin.repo_owner = "me".into();
+    p.claude.plugin.repo_name = "se".into();
+    p.scaffold(dir.path(), false).unwrap();
+    let plugin_root = dir.path().join("plugin/se");
+    let plugin: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(plugin_root.join("hooks/hooks.json")).unwrap())
+            .unwrap();
+    let end_cmd = |v: &serde_json::Value| -> String {
+        let groups = hook_groups(v, "SessionEnd");
+        assert_eq!(groups.len(), 1, "{v:#}");
+        groups[0]["hooks"][0]["command"].as_str().unwrap().to_string()
+    };
+
+    // An ocgen that speaks no project's protocol: the command takes the script.
+    let bin = tempdir().unwrap();
+    let stub = bin.path().join("ocgen");
+    fs::write(&stub, "#!/bin/sh\necho 'ocgen-hooks 0'\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&stub, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let path = format!(
+        "{}:{}",
+        ocgen::paths::for_shell(bin.path()),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let run = |cmd: &str, project: &std::path::Path| {
+        let mut child = Command::new("sh")
+            .arg("-c")
+            .arg(cmd)
+            .env("PATH", &path)
+            .env("CLAUDE_PROJECT_DIR", ocgen::paths::for_shell(project))
+            .env("CLAUDE_PLUGIN_ROOT", ocgen::paths::for_shell(&plugin_root))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        use std::io::Write;
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(br#"{"hook_event_name":"SessionEnd","session_id":"s-1","reason":"other"}"#)
+            .unwrap();
+        let out = child.wait_with_output().unwrap();
+        (
+            out.status.code(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    };
+
+    for (who, cmd) in [
+        ("project", end_cmd(&settings_of(dir.path()))),
+        ("plugin", end_cmd(&plugin)),
+    ] {
+        // The worktree is gone.
+        let gone = dir.path().join("removed-worktree");
+        assert_eq!(run(&cmd, &gone), (Some(0), String::new()), "{who}: {cmd}");
+
+        // The project is there with a session's loop guard state: it goes.
+        let lg = dir.path().join(".claude/loop-guard");
+        fs::create_dir_all(lg.join("s-1")).unwrap();
+        fs::create_dir_all(lg.join("s-2")).unwrap();
+        assert_eq!(run(&cmd, dir.path()), (Some(0), String::new()), "{who}: {cmd}");
+        assert!(!lg.join("s-1").exists(), "{who}: {cmd}");
+        assert!(lg.join("s-2").is_dir(), "{who}: {cmd}");
+        fs::remove_dir_all(&lg).unwrap();
+    }
+}
+
 #[test]
 fn format_hook_never_blocks_and_audit_log_ignores_itself() {
     let dir = tempdir().unwrap();
