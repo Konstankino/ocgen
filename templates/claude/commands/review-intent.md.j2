@@ -93,6 +93,10 @@ commits.
     order-dependent tests.
   - **Cross-platform:** Windows paths (spaces, backslashes, drive letters, `\\?\` verbatim paths), line
     endings, shell portability (POSIX sh, Git Bash, PowerShell), case-insensitive file systems.
+  - **Conformance:** new code that duplicates an existing function, type or helper, and local patterns
+    the change departs from without a stated reason (naming, error handling, logging, configuration,
+    tests, file layout). Search the repository beyond the diff, and cite the precedent's `file:line`
+    next to the change's. A broken public surface belongs to Correctness, not here.
   Each reports only in its area — "nothing in this area" when nothing applies — and gives every
   candidate: the area; severity and likelihood; `file:line`; when [trigger], [behavior], which means
   [impact]; the evidence; the proposed fix; and `Confidence: NN%`.

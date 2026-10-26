@@ -999,9 +999,21 @@ register for your approval; researches in parallel (re-planning if findings cont
 plan); executes with a stated `Confidence: NN%` per decision and no deploys/pushes without
 your approval; checks the result against the plan's success criteria before reporting (the scope
 guard does it when the team has one, otherwise a **final check** runs the tests and loops back);
-and summarizes — for a goal that came from an `/intent`, with a pull request draft that asks the
+has the reviewer check the change against the research's precedent list (see below); and
+summarizes — for a goal that came from an `/intent`, with a pull request draft that asks the
 approvers to review the change ([details](#from-findings-to-a-github-issue-intent)). Small, clear
-goals collapse the interview and plan into a one-paragraph brief. Given a brief written by `/brief`
+goals collapse the interview and plan into a one-paragraph brief.
+
+**Precedents and the conformance check.** The research always includes a precedent sweep: the
+`explorer` lists what the change must follow, by the **Precedents** rule in
+`.claude/rules/ocgen-workflow.md`. An entry is code to **reuse**, a **pattern** nearby code already
+follows, or a **contract** callers rely on, each with a slug, a `file:line` and what the change
+must do. The implementer gets the entries that bear on each task. When the work is done, the
+**conformance check** has the `reviewer` mark each entry Followed, Broken or Not applicable and
+flag new code that duplicates an existing helper. Broken entries go back to the implementer
+once; one still broken is reported as broken. Without a reviewer the session checks it itself.
+The how-to lives in a rule rather than the explorer's prompt, because `ocgen doctor` refreshes
+rules and skills but keeps each agent's saved prompt. Given a brief written by `/brief`
 (`/deliver .claude/briefs/<slug>.md`), it reads that first, skips the phases it settles and asks only
 what its Open section leaves open ([details](#writing-the-brief-first-brief)).
 
@@ -1583,7 +1595,7 @@ offers that you check it out (`gh pr checkout`), and you run that.
 |---|---|---|---|
 | Context pack | the session | — | the diff, stat and log, the change's stated purpose (pull-request body, linked issues, an intent it names) and the changed symbols |
 | Find, in one wave | `scope-guard` | the purpose and the commits | what the purpose asks that the change lacks, what the change adds that it doesn't need, the blast radius |
-| | `reviewer` × 4 | the pack and one area: correctness, security, tests, cross-platform | candidates: severity, `file:line`, trigger → behavior → impact, evidence, fix |
+| | `reviewer` × 5 | the pack and one area: correctness, security, tests, cross-platform, conformance (code that duplicates an existing helper or departs from a local pattern) | candidates: severity, `file:line`, trigger → behavior → impact, evidence, fix |
 | | `explorer` | the changed symbols | every call site, test and doc that uses them |
 | Merge | the session | the reports | candidates, each named by a slug it keeps as a finding (duplicates merged, the scope gaps included) |
 | Verify, in one wave (≤ 8 at a time) | the adversary, one run per candidate (the Low ones together) | one claim, its evidence and fix, the pack — **not** the reviewer's reasoning or confidence | Confirmed (reproduced), Confirmed (by reading), Rejected or Unsettled, plus a severity and a fix check |

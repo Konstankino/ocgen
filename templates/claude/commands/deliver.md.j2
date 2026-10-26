@@ -55,7 +55,10 @@ criteria and the Scope line in phase 5.
 
 ## 4. Research in parallel (read-only)
 Investigate concurrently where independent: fetch the relevant online HTML/PDF docs — from the
-trusted documentation sites only (the project's **Web research** rule) — and study the local source. Run these in parallel — exploration is side-effect-free. If what you find contradicts
+trusted documentation sites only (the project's **Web research** rule) — and study the local source. Run these in parallel — exploration is side-effect-free.
+One thread is always the precedent sweep: {% if explorer %}the `{{ explorer }}` subagent{% else %}a built-in `Explore` subagent{% endif %} gets the approved plan
+and lists the precedents the change must follow, by the project rule **Precedents**. Keep the list with the
+plan; for a small goal keep the sweep short, but run it. If what you find — a precedent included — contradicts
 the approved plan, go back to phase 3 and re-plan rather than pushing through — at most 2 re-plans;
 after that, stop and present the conflict to me instead of looping.
 
@@ -63,7 +66,8 @@ after that, stop and present the conflict to me instead of looping.
 {% if scope_guard %}Before the first task, note the base for the scope check below: run
 `git status --porcelain=v2 --branch --untracked-files=all` — its `# branch.oid` line is the commit you start
 from, and the files it lists are mine, already modified.
-{% endif %}Work the approved plan. For each decision or completed task, **state a `Confidence: NN%`** and
+{% endif %}Work the approved plan. With each task, give {% if implementer_agent %}`{{ implementer_agent }}`{% else %}whoever makes the change{% endif %} the precedents that bear on it,
+verbatim. For each decision or completed task, **state a `Confidence: NN%`** and
 surface gated decisions for me to confirm; keep working a risk until its mitigation round is done.
 Give each task at most 3 attempts: if the same approach fails twice, change it; on the third
 failure, stop and report the blocker with evidence.
@@ -90,7 +94,17 @@ collapsed, the brief; if an approved intent replaced them, its acceptance criter
 after merging `{{ worktree_implementer }}`'s worktree branch into the working branch, or you check code without the change{% endif %}. For a
 criterion that isn't met or a test that fails, go back to the task that should meet it, fix it, and check again —
 at most 2 rounds. A criterion still unmet after that is **not done** in phase 6, never done.
-{% endif %}{% if adversary %}
+{% endif %}
+**Conformance check.** After the {% if scope_guard %}scope{% else %}final{% endif %} check{% if adversary %}, and before the adversary check{% endif %}, {% if reviewer %}have `{{ reviewer }}`
+check{% else %}check{% endif %} the whole change against the precedent list from phase 4{% if not reviewer %} yourself: the project has no reviewer{% endif %}.
+{% if worktree_implementer %}- Merge `{{ worktree_implementer }}`'s worktree branch into the working branch before each check, or it checks code without the change.
+{% endif %}- {% if reviewer %}Give it{% else %}Work from{% endif %} the goal, the approved plan, the precedent list verbatim, the base and the changed files. Each
+  precedent is Followed, Broken or Not applicable, with its `file:line`. New code that duplicates an existing
+  function, type or helper missing from the list is a finding too.
+- A Broken precedent with a reason I approved is not a finding. Send {% if implementer_agent %}`{{ implementer_agent }}`{% else %}the subagent that made the change{% endif %} the other
+  Broken items and the duplicates, verbatim, then check once more. At most one round.
+- A precedent still broken after that is reported in phase 6 as broken, never as followed.
+{% if adversary %}
 **Adversary check.** When the plan's tasks are done, and before phase 6, have `{{ adversary }}` check the whole change —
 the adversary loop in `.claude/rules/ocgen-team.md`:
 {% if implementer_isolated %}- First merge `{{ implementer }}`'s worktree branch into the working branch, or it checks code without the change.
@@ -104,6 +118,8 @@ the adversary loop in `.claude/rules/ocgen-team.md`:
 Summarize what was done, the decisions and their confidence, open risks, and next steps. Report
 anything left unresolved — including every entry in `.claude/loop-guard/escalations.md` — as
 unresolved, not done. If a coordinator session is named, report status to it with `SendMessage`.
+From the conformance check, report each precedent followed, each one broken with its reason or as still broken,
+and each duplicate found.
 {% if scope_guard %}From the scope check, report the plan coverage (anything still missing, as not done), the blast radius,
 every cut (reverted, or kept with its reason), every Differs for me to accept or reject, and the Defer list as
 follow-ups.

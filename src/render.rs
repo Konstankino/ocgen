@@ -1547,6 +1547,14 @@ impl Project {
                 .filter(|a| a.isolation.trim() == "worktree")
                 .map(|a| a.name.clone())
                 .unwrap_or_default();
+            // The precedent sweep and the conformance check name their agents by
+            // role, so a renamed one still counts; with none, the text says who
+            // does it instead.
+            let named = |role: &str| {
+                self.subagent_for(role)
+                    .map(|a| a.name.clone())
+                    .unwrap_or_default()
+            };
             components.push((
                 "commands/deliver.md".to_string(),
                 env.render_str(
@@ -1561,6 +1569,9 @@ impl Project {
                         implementer => checks.implementer,
                         implementer_isolated => checks.implementer_isolated,
                         worktree_implementer => worktree_implementer,
+                        explorer => named("explorer"),
+                        reviewer => named("reviewer"),
+                        implementer_agent => named("implementer"),
                         rounds => checks.rounds,
                         scope_rounds => checks.scope_rounds,
                         workstreams => self.claude.workflow.workstreams,
