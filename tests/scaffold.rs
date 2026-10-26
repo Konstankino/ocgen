@@ -3984,7 +3984,10 @@ fn session_end_hook_is_quiet_when_the_worktree_is_gone() {
     let end_cmd = |v: &serde_json::Value| -> String {
         let groups = hook_groups(v, "SessionEnd");
         assert_eq!(groups.len(), 1, "{v:#}");
-        groups[0]["hooks"][0]["command"].as_str().unwrap().to_string()
+        groups[0]["hooks"][0]["command"]
+            .as_str()
+            .unwrap()
+            .to_string()
     };
 
     // An ocgen that speaks no project's protocol: the command takes the script.
@@ -4039,7 +4042,11 @@ fn session_end_hook_is_quiet_when_the_worktree_is_gone() {
         let lg = dir.path().join(".claude/loop-guard");
         fs::create_dir_all(lg.join("s-1")).unwrap();
         fs::create_dir_all(lg.join("s-2")).unwrap();
-        assert_eq!(run(&cmd, dir.path()), (Some(0), String::new()), "{who}: {cmd}");
+        assert_eq!(
+            run(&cmd, dir.path()),
+            (Some(0), String::new()),
+            "{who}: {cmd}"
+        );
         assert!(!lg.join("s-1").exists(), "{who}: {cmd}");
         assert!(lg.join("s-2").is_dir(), "{who}: {cmd}");
         fs::remove_dir_all(&lg).unwrap();
