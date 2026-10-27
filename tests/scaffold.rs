@@ -2799,7 +2799,7 @@ fn workflow_without_loop_guard_field_backfills_three() {
 // ------------------------------------------------------------ worktrees -----
 
 #[test]
-fn worktreeinclude_carries_claude_config_but_not_live_or_runtime_dirs() {
+fn worktreeinclude_carries_claude_config_but_not_runtime_dirs() {
     let mut p = base_project("English");
     p.target = Target::ClaudeCode;
     p.project_name = "wti".into();
@@ -2808,22 +2808,22 @@ fn worktreeinclude_carries_claude_config_but_not_live_or_runtime_dirs() {
     let dir = tempdir().unwrap();
     p.scaffold(dir.path(), false).unwrap();
     let wti = read(dir.path(), ".worktreeinclude");
-    for want in [".env"].into_iter().chain(ocgen::gitcheck::WORKTREE_COPIES) {
+    for want in [
+        ".env",
+        ".claude/agents/**",
+        ".claude/commands/**",
+        ".claude/skills/**",
+    ]
+    .into_iter()
+    .chain(ocgen::gitcheck::WORKTREE_COPIES)
+    {
         assert!(
             wti.lines().any(|l| l.trim() == want),
             "missing {want}:\n{wti}"
         );
     }
-    // Agents/commands/skills load from the main checkout when a worktree has
-    // none; runtime state must never be copied into a worktree.
-    for never in [
-        ".claude/agents",
-        ".claude/commands",
-        ".claude/skills",
-        "notes",
-        "loop-guard",
-        "worktrees",
-    ] {
+    // Runtime state must never be copied into a worktree.
+    for never in ["agent-memory", "notes", "loop-guard", "worktrees"] {
         assert!(
             !wti.lines()
                 .any(|l| !l.starts_with('#') && l.contains(never)),

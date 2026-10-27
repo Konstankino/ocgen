@@ -9,9 +9,8 @@
 # committed, ocgen keeps this config out of git in your clone (a block in
 # `.git/info/exclude`), so these lines copy it. Without them a worktree session
 # would start with no settings, hooks (approval gate, confidence gates, loop
-# guard), rules or project instructions. Agents, commands and skills are
-# deliberately absent: Claude Code loads them from the main checkout when a
-# worktree has none. Runtime state (notes, loop-guard, worktrees) is never copied.
+# guard), rules, project instructions, agents or skills. Runtime state (notes,
+# loop-guard, agent memory, worktrees) is never copied.
 CLAUDE.md
 .mcp.json
 .claude/settings.json
@@ -21,3 +20,6 @@ CLAUDE.md
 .claude/statusline.sh
 .claude/.ocgen-state.json
 .claude/intent/*.md
+.claude/agents/**
+.claude/commands/**
+.claude/skills/**

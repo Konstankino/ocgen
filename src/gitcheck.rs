@@ -4,7 +4,7 @@
 //! `isolation: worktree` subagents) is a fresh checkout of *committed* files, and
 //! `.worktreeinclude` copies only *git-ignored* ones into it. So config that is
 //! neither — untracked, not ignored — never reaches a worktree, and its sessions
-//! start without their settings, hooks and rules. Committing `.claude/` is
+//! start without their settings, hooks, rules and skills. Committing `.claude/` is
 //! optional: while nothing under it is committed, ocgen keeps its config out of
 //! git in this clone ([`sync_exclude`], `.git/info/exclude`), so the copy picks it
 //! up.
@@ -17,9 +17,10 @@ use anyhow::{Context, Result};
 
 /// What a worktree must find in its checkout, committed or copied by
 /// `.worktreeinclude` (which lists each of these). Agents, commands and skills
-/// are absent: Claude Code loads them from the main checkout when a worktree has
-/// none, so a copy would only shadow the live ones.
-pub const WORKTREE_COPIES: [&str; 9] = [
+/// are copied too: Claude Code can fall back to the main checkout's, but the
+/// model can't — a user-run skill such as /deliver is never in its skills list,
+/// so with no `.claude/skills/` in the worktree it decides the skill is missing.
+pub const WORKTREE_COPIES: [&str; 12] = [
     "CLAUDE.md",
     ".mcp.json",
     ".claude/settings.json",
@@ -29,18 +30,14 @@ pub const WORKTREE_COPIES: [&str; 9] = [
     ".claude/statusline.sh",
     ".claude/.ocgen-state.json",
     ".claude/intent/*.md",
+    ".claude/agents/**",
+    ".claude/commands/**",
+    ".claude/skills/**",
 ];
 
 /// Kept out of git along with [`WORKTREE_COPIES`], though never copied: the
-/// config Claude Code reads from the main checkout, the agents' project memory,
-/// and the worktrees themselves.
-const ALSO_EXCLUDED: [&str; 5] = [
-    ".claude/agents/",
-    ".claude/commands/",
-    ".claude/skills/",
-    ".claude/agent-memory/",
-    ".claude/worktrees/",
-];
+/// agents' project memory and the worktrees themselves.
+const ALSO_EXCLUDED: [&str; 2] = [".claude/agent-memory/", ".claude/worktrees/"];
 
 /// Opens ocgen's block in `.git/info/exclude`, followed by the project's folder
 /// from the repository's top (`.` at the top), so projects in one repository
@@ -115,7 +112,7 @@ so `.worktreeinclude` copies them."
     };
     format!(
         "{} Claude config file(s) are neither committed nor git-ignored, so worktree sessions \
-(`claude --worktree`, desktop) start without them — no settings, hooks or rules: {list}. {fix}",
+(`claude --worktree`, desktop) start without them — no settings, hooks, rules, agents or skills: {list}. {fix}",
         g.missing.len()
     )
 }
