@@ -2304,9 +2304,10 @@ A git worktree is a fresh checkout of **tracked** files. `claude --worktree <nam
 desktop worktree sessions, ocgen's multi-session delivery, `/workstreams` workers and
 `isolation: worktree` subagents all start in one. A worktree session needs the project's settings, hooks and rules: without them
 there is no approval gate, no confidence gates or loop guard, no permission deny list, and the
-model is whatever your `~/.claude/settings.json` names. Agents, commands and skills are different:
-Claude Code loads them from the main checkout when a worktree has none. Skills need Claude Code
-2.1.277+ for that.
+model is whatever your `~/.claude/settings.json` names. It needs the agents, commands and skills
+in its own checkout too. Claude Code can fall back to the main checkout's, but the model can't: a
+user-run skill such as `/deliver` is never in its skills list, so with no `.claude/skills/` in the
+worktree it decides the skill doesn't exist.
 
 Committing `.claude/` is optional. Both ways work:
 
@@ -2316,7 +2317,7 @@ Committing `.claude/` is optional. Both ways work:
   `.claude/` settings, rules, hooks, agents, skills, agent memory and state, plus `CLAUDE.md`,
   `.mcp.json` and `.claude/worktrees/`. Because the config is now git-ignored, the generated `.worktreeinclude`
   copies the settings, rules, hooks, status line, output styles, state file, `/intent` templates,
-  `CLAUDE.md` and `.mcp.json` into each new worktree. The copy is a snapshot taken when the
+  agents, commands, skills, `CLAUDE.md` and `.mcp.json` into each new worktree. The copy is a snapshot taken when the
   worktree is created. `git status` doesn't show these files in this clone.
 - **In git:** commit `.claude/` and ignore only the local parts: `.claude/settings.local.json`,
   `.claude/worktrees/`, `.claude/notes/`, `.claude/loop-guard/` and `.claude/team/execution-*`.
