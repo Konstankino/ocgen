@@ -2043,7 +2043,7 @@ and inside the ocgen binary (`ocgen hook <name>`). The generated hook command us
 binary when a compatible ocgen is installed, and the script otherwise:
 
 ```sh
-if [ "$(ocgen hook --check 2>/dev/null)" = "ocgen-hooks 22" ]; then ocgen hook team-approval-gate; else sh ".../team-approval-gate.sh"; fi
+if [ "$(ocgen hook --check 2>/dev/null)" = "ocgen-hooks 23" ]; then ocgen hook team-approval-gate; else sh ".../team-approval-gate.sh"; fi
 ```
 
 - **The binary gives you** real JSON parsing instead of `grep`, and hooks that work on
@@ -2052,9 +2052,11 @@ if [ "$(ocgen hook --check 2>/dev/null)" = "ocgen-hooks 22" ]; then ocgen hook t
   The exceptions are `inquire-notes`, which renders the notes pages (the `/workstreams` board's
   too), opens them on `note`, opens a `/brief` brief's editor after each write and on `brief`, and asks for each document's other language version, `intent-draft`, which opens `/intent`'s issue draft (and, on `adr`, its intent files)
   in the browser, `intent-approvers`, which checks drafts against the current approvers, and
-  `recap-github` and `github-read`, which answer `/recap`'s and Claude's GitHub requests: their scripts do nothing, so without
+  `recap-github` and `github-read`, which answer `/recap`'s and Claude's GitHub requests, and
+  `worktree-notes`, which carries a worktree's notes into the main checkout: their scripts do nothing, so without
   ocgen the ledgers stay Markdown only, a brief gets no page, nothing asks for a document's other language, `draft`, `note`, `adr` and `brief` reach Claude as typed, only `ocgen verify` and `ocgen edit intent` report a draft that misses an
-  approver, `/recap` reports GitHub as not checked, and Claude asks you to run gh.
+  approver, `/recap` reports GitHub as not checked, Claude asks you to run gh, and removing a
+  worktree deletes its notes.
   They need only a POSIX `sh` (Git Bash on Windows): `jq` is used when present and is never
   required (without it, JSON escapes are decoded, and a command holding a `\b`, `\f` or `\u`
   escape is treated as high-impact), and Windows paths (`C:\Users\...`) are handled in both
@@ -2335,6 +2337,17 @@ Committing `.claude/` is optional. Both ways work:
 - **Study in the main checkout:** `/inquire` is read-only. Notes written inside a worktree are
   lost when it's removed, and the isolation checks stop a worktree session from writing to the
   main checkout. `/inquire` warns if you run it in a worktree.
+- **Notes when a worktree goes:** notes (`.claude/notes/`, `.claude/briefs/` and
+  `.claude/intent/drafts/`) are git-ignored, so the main checkout never sees a worktree's own.
+  Claude Code also counts them as no change, so removing the worktree would delete them without
+  asking. When Claude removes a worktree with `ExitWorktree`, the `worktree-notes` hook lists the
+  notes the main checkout lacks and asks you first. Approve, and they're copied into the main
+  checkout once the worktree is gone. A note the main checkout has in another version stays as it
+  is, and the worktree's is saved beside it as `<name>.from-<worktree>.md`. Deny, and the
+  worktree stays. Runtime state (`.json`) isn't copied. Claude Code has no hook before it removes
+  a worktree any other way, such as when a `claude --worktree` session ends or a desktop session
+  is archived. There, the notes go with the worktree, so keep the worktree, or copy the notes out
+  first. This needs the ocgen binary.
 
 Subagent isolation (`/fanout`, the implementer's `isolation: worktree`) works the same either way.
 The parent session in your main checkout owns the settings, and its hooks fire for the

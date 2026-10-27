@@ -1419,7 +1419,7 @@ fn inquire_notes_renders_the_view_and_the_script_is_a_no_op() {
     assert_eq!(o.code, 0);
     assert!(o.stderr.starts_with("inquire-notes:"), "{o:?}");
     assert!(ocgen::hooks::NAMES.contains(&"inquire-notes"));
-    assert_eq!(ocgen::hooks::PROTOCOL, "ocgen-hooks 22");
+    assert_eq!(ocgen::hooks::PROTOCOL, "ocgen-hooks 23");
 }
 
 // ---------------------------------------------------------- intent-draft --

@@ -23,7 +23,7 @@ use serde_json::Value;
 /// embedded in the ocgen that generated the project (hook scripts can't be
 /// overridden from the template dir), so they implement the same protocol —
 /// unless someone edits the project's copies by hand.
-pub const PROTOCOL: &str = "ocgen-hooks 22";
+pub const PROTOCOL: &str = "ocgen-hooks 23";
 
 /// How long Claude Code lets a gate that runs the project check (SubagentStop,
 /// TaskCompleted) take, in seconds: its hook `timeout`. Claude Code treats a
@@ -36,7 +36,7 @@ pub const CHECK_GATE_TIMEOUT: u64 = 3600;
 pub const CHECK_TIMEOUT_MAX: u64 = CHECK_GATE_TIMEOUT - 60;
 
 /// Every hook `ocgen hook <name>` accepts (matching the script names minus `.sh`).
-pub const NAMES: [&str; 18] = [
+pub const NAMES: [&str; 19] = [
     "subagent-confidence-gate",
     "team-task-completed",
     "team-task-created",
@@ -55,6 +55,7 @@ pub const NAMES: [&str; 18] = [
     "github-read",
     "session-end",
     "shell-sandbox",
+    "worktree-notes",
 ];
 
 /// The safety gates: a gate that can't start, crashes, times out or exits with
@@ -414,6 +415,7 @@ pub fn run(name: &str, payload: &str, env: &HashMap<String, String>) -> Outcome 
         "github-read" => h.github_read(),
         "session-end" => h.session_end(),
         "shell-sandbox" => h.shell_sandbox(),
+        "worktree-notes" => h.worktree_notes(),
         other => Outcome {
             code: 1,
             stdout: String::new(),
@@ -1418,6 +1420,174 @@ impl<'a> Hook<'a> {
             let _ = fs::remove_dir_all(&dir);
         }
         Outcome::allow()
+    }
+
+    /// ExitWorktree, before and after a `remove`. Notes are git-ignored, so a
+    /// worktree's own never reach the main checkout, and Claude Code counts them
+    /// as no change: the removal would delete them silently. PreToolUse stages
+    /// the notes the main checkout lacks (outside the repository, under
+    /// `~/.claude/ocgen/worktree-notes/`) and asks the user; PostToolUse, which
+    /// runs only once the approved removal is done, copies them in. A denied
+    /// removal copies nothing. A probe asks but stages nothing.
+    fn worktree_notes(&self) -> Outcome {
+        let action = self
+            .json
+            .pointer("/tool_input/action")
+            .and_then(Value::as_str);
+        if self.field("tool_name") != "ExitWorktree" || action != Some("remove") {
+            return Outcome::allow();
+        }
+        match self.field("hook_event_name").as_str() {
+            "PreToolUse" => self.stage_worktree_notes(),
+            "PostToolUse" => self.land_worktree_notes(),
+            _ => Outcome::allow(),
+        }
+    }
+
+    /// The folder this session works in: the event's `cwd`, else the project's.
+    fn cwd(&self) -> PathBuf {
+        match self.field("cwd") {
+            c if !c.is_empty() => PathBuf::from(c),
+            _ => self.project(),
+        }
+    }
+
+    /// Where this session's staged notes live: one folder per repository and
+    /// session, so worktrees of one repository share the key.
+    fn notes_staging(&self, repo: &Path) -> PathBuf {
+        self.home()
+            .join(".claude/ocgen/worktree-notes")
+            .join(crate::approval::project_key(repo))
+            .join(safe(&self.field("session_id")))
+    }
+
+    fn stage_worktree_notes(&self) -> Outcome {
+        let cwd = self.cwd();
+        let abs = |what: &str| git_line(&cwd, &["rev-parse", "--path-format=absolute", what]);
+        let (Some(git_dir), Some(common), Some(top)) = (
+            abs("--git-dir"),
+            abs("--git-common-dir"),
+            abs("--show-toplevel"),
+        ) else {
+            return Outcome::allow();
+        };
+        // The main checkout's own session isn't in a linked worktree.
+        let Some(main_top) = Path::new(&common).parent().filter(|_| git_dir != common) else {
+            return Outcome::allow();
+        };
+        // The project's folder in its repository: the same in every checkout.
+        let prefix = git_line(&self.project(), &["rev-parse", "--show-prefix"]).unwrap_or_default();
+        let prefix = prefix.trim_end_matches('/');
+        let at = |root: &Path| match prefix {
+            "" => root.to_path_buf(),
+            p => root.join(p),
+        };
+        let (wt, main) = (at(Path::new(&top)), at(main_top));
+        let name = safe(
+            &Path::new(&top)
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+        );
+        let mut carry = Vec::new();
+        for dir in WORKTREE_NOTE_DIRS {
+            for rel in note_files(&wt, dir) {
+                if let Some(dest) = note_destination(&wt.join(&rel), &main, &rel, &name) {
+                    carry.push((rel, dest));
+                }
+            }
+        }
+        if carry.is_empty() {
+            return Outcome::allow();
+        }
+        if !self.probe() {
+            let staging = self.notes_staging(&cwd);
+            let _ = fs::remove_dir_all(&staging);
+            for (rel, dest) in &carry {
+                let to = staging.join("files").join(dest);
+                let copied = to.parent().is_some_and(|d| fs::create_dir_all(d).is_ok())
+                    && fs::copy(wt.join(rel), &to).is_ok();
+                if !copied {
+                    let _ = fs::remove_dir_all(&staging);
+                    return Outcome {
+                        code: 0,
+                        stdout: String::new(),
+                        stderr: format!(
+                            "worktree-notes: could not stage {rel}; the worktree's notes are not copied\n"
+                        ),
+                    };
+                }
+            }
+            let _ = fs::write(staging.join("target"), crate::paths::for_shell(&main));
+        }
+        const SHOWN: usize = 8;
+        let mut list = carry
+            .iter()
+            .take(SHOWN)
+            .map(|(rel, dest)| {
+                if rel == dest {
+                    rel.clone()
+                } else {
+                    format!("{rel} (as {dest})")
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        if carry.len() > SHOWN {
+            list.push_str(&format!(" and {} more", carry.len() - SHOWN));
+        }
+        let reason = format!(
+            "Removing this worktree deletes {} note file(s) the main checkout doesn't have: {list}. \
+             Approve to copy them into the main checkout ({}) and remove the worktree; a note the \
+             main checkout has in another version is kept and the worktree's is saved beside it. \
+             Deny to keep the worktree and its notes.",
+            carry.len(),
+            crate::paths::for_shell(&main)
+        );
+        let out = serde_json::json!({
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "ask",
+                "permissionDecisionReason": reason,
+            }
+        });
+        Outcome {
+            code: 0,
+            stdout: format!("{out}\n"),
+            stderr: String::new(),
+        }
+    }
+
+    fn land_worktree_notes(&self) -> Outcome {
+        let staging = self.notes_staging(&self.cwd());
+        let Ok(target) = fs::read_to_string(staging.join("target")) else {
+            return Outcome::allow();
+        };
+        let main = PathBuf::from(target.trim());
+        let files = staging.join("files");
+        let mut copied = Vec::new();
+        for rel in note_files(&files, "") {
+            // A note written in the main checkout since: kept, the copy beside it.
+            let name = "worktree";
+            let Some(dest) = note_destination(&files.join(&rel), &main, &rel, name) else {
+                continue;
+            };
+            let to = main.join(&dest);
+            if to.parent().is_some_and(|d| fs::create_dir_all(d).is_ok())
+                && fs::copy(files.join(&rel), &to).is_ok()
+            {
+                copied.push(dest);
+            }
+        }
+        let _ = fs::remove_dir_all(&staging);
+        if copied.is_empty() {
+            return Outcome::allow();
+        }
+        post_tool_note(format!(
+            "Copied {} note file(s) from the removed worktree into the main checkout: {}.",
+            copied.len(),
+            copied.join(", ")
+        ))
     }
 
     /// PostToolUse (Edit|Write): run the formatter in the project directory — or,
@@ -2946,6 +3116,99 @@ struct Guard {
     key: PathBuf,
     gate: String,
     subject: String,
+}
+
+/// The note folders a worktree session writes and the main checkout never sees:
+/// /inquire and /recap notes, /brief briefs and /intent drafts.
+const WORKTREE_NOTE_DIRS: [&str; 3] = [".claude/notes", ".claude/briefs", ".claude/intent/drafts"];
+
+/// `git -C dir <args>`'s first line of output, or `None` when it fails.
+fn git_line(dir: &Path, args: &[&str]) -> Option<String> {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(crate::paths::plain(dir))
+        .args(args)
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()
+        .filter(|o| o.status.success())?;
+    let line = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .next()?
+        .trim()
+        .to_string();
+    Some(line)
+}
+
+/// The notes under `root/dir`, relative to `root` with forward slashes, sorted:
+/// regular files only (no links), and no `.json` — that is runtime state (the
+/// recap's, a GitHub request), not a note.
+fn note_files(root: &Path, dir: &str) -> Vec<String> {
+    fn walk(path: &Path, rel: &str, out: &mut Vec<String>) {
+        let Ok(entries) = fs::read_dir(path) else {
+            return;
+        };
+        for e in entries.flatten() {
+            let Ok(meta) = fs::symlink_metadata(e.path()) else {
+                continue;
+            };
+            let name = e.file_name().to_string_lossy().into_owned();
+            let child = if rel.is_empty() {
+                name.clone()
+            } else {
+                format!("{rel}/{name}")
+            };
+            if meta.is_dir() {
+                walk(&e.path(), &child, out);
+            } else if meta.is_file() && !name.ends_with(".json") {
+                out.push(child);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(&root.join(dir), dir, &mut out);
+    out.sort();
+    out
+}
+
+/// Where note `rel` (the file at `from`) goes in the main checkout at `main`:
+/// `rel` when the main checkout lacks it, `None` when it has the same, else a
+/// name beside it that holds nothing else (`plan.from-<name>.md`). A dotfile
+/// the main checkout has in another version stays as it is.
+fn note_destination(from: &Path, main: &Path, rel: &str, name: &str) -> Option<String> {
+    let body = fs::read(from).ok()?;
+    let same = |r: &str| fs::read(main.join(r)).ok().map(|b| b == body);
+    match same(rel) {
+        None => return Some(rel.to_string()),
+        Some(true) => return None,
+        Some(false) => {}
+    }
+    let (dir, file) = match rel.rsplit_once('/') {
+        Some((d, f)) => (format!("{d}/"), f),
+        None => (String::new(), rel),
+    };
+    if file.starts_with('.') {
+        return None;
+    }
+    let (stem, ext) = match file.rsplit_once('.') {
+        Some((s, e)) if !s.is_empty() => (s, format!(".{e}")),
+        _ => (file, String::new()),
+    };
+    for n in 1.. {
+        let tag = if n == 1 {
+            String::new()
+        } else {
+            format!("-{n}")
+        };
+        let candidate = format!("{dir}{stem}.from-{name}{tag}{ext}");
+        match same(&candidate) {
+            None => return Some(candidate),
+            Some(true) => return None,
+            Some(false) => {}
+        }
+    }
+    None
 }
 
 /// `tr -c 'A-Za-z0-9._-' '_' | cut -c1-80` in the C locale the scripts run in:
