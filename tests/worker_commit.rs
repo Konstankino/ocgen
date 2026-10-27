@@ -52,6 +52,9 @@ impl Repo {
         git(m, &["init", "-q"]);
         git(m, &["config", "user.name", "t"]);
         git(m, &["config", "user.email", "t@example.com"]);
+        // Windows runners check files out with CRLF (core.autocrlf=true); the
+        // merged file is compared byte for byte.
+        git(m, &["config", "core.autocrlf", "false"]);
         write(&m.join("app.py"), "x = 1\n");
         write(&m.join(".gitignore"), ".claude/\n");
         git(m, &["add", "."]);
