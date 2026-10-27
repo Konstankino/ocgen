@@ -126,6 +126,14 @@ pub const SCOPE_GUARD_ROLE: &str = "scope-guard";
 /// reported as not done. Cuts are reverted by the coordinator, never a round.
 pub const SCOPE_GUARD_ROUNDS: u32 = 1;
 
+/// The role (archetype) whose subagent turns on the coordinator's privacy loop:
+/// check every change for personal or health data that could leak, after the
+/// scope check and before the adversary, and send its serious findings back.
+pub const PRIVACY_GUARD_ROLE: &str = "privacy-guard";
+
+/// Rework rounds the privacy loop allows before the rest is reported UNRESOLVED.
+pub const PRIVACY_GUARD_ROUNDS: u32 = 2;
+
 /// The answer lines the coordinator presets end with. When the answers are in
 /// another language, the one ending a coordinator's text gives way to ocgen's.
 const RESPONSE_LINES: [&str; 2] = ["Respond in English.", "Відповідай українською."];
@@ -767,12 +775,14 @@ struct SubCtx {
 struct Checkers {
     adversary: String,
     scope_guard: String,
+    privacy_guard: String,
     /// Who rework goes to (empty without one, or without any check).
     implementer: String,
     /// Whether that implementer works in its own git worktree.
     implementer_isolated: bool,
     rounds: u32,
     scope_rounds: u32,
+    privacy_rounds: u32,
 }
 
 /// Probe order for locating a project's state file (target-agnostic discovery).
@@ -1057,8 +1067,11 @@ impl Project {
             .or_else(|| subs().find(|a| a.name == role))
     }
 
-    /// Who the check steps in /deliver and /intent name. Without an adversary
-    /// and a scope guard, every name is empty and the commands read as before.
+    /// Who the check steps in /deliver and /intent name. Without an adversary,
+    /// a scope guard and a privacy guard, every name is empty and the commands
+    /// read as before. The implementer is named only with the first two, as
+    /// /brief and /workstreams name it too: /deliver's privacy step names its
+    /// own.
     fn checkers(&self) -> Checkers {
         let adversary = self.subagent_for(ADVERSARY_ROLE);
         let scope_guard = self.subagent_for(SCOPE_GUARD_ROLE);
@@ -1068,10 +1081,15 @@ impl Project {
         Checkers {
             adversary: adversary.map(|a| a.name.clone()).unwrap_or_default(),
             scope_guard: scope_guard.map(|a| a.name.clone()).unwrap_or_default(),
+            privacy_guard: self
+                .subagent_for(PRIVACY_GUARD_ROLE)
+                .map(|a| a.name.clone())
+                .unwrap_or_default(),
             implementer: implementer.map(|a| a.name.clone()).unwrap_or_default(),
             implementer_isolated: implementer.is_some_and(|a| a.isolation.trim() == "worktree"),
             rounds: ADVERSARY_ROUNDS,
             scope_rounds: SCOPE_GUARD_ROUNDS,
+            privacy_rounds: PRIVACY_GUARD_ROUNDS,
         }
     }
 
@@ -1112,6 +1130,39 @@ impl Project {
                 },
             )
             .context("rendering the scope loop")?;
+        Ok(Some(text))
+    }
+
+    /// The coordinator's privacy loop, when the team has a privacy guard. Only
+    /// then is its template loaded, so other projects render exactly as before.
+    fn privacy_guard_loop(&self, env: &Environment) -> Result<Option<String>> {
+        let Some(guard) = self.subagent_for(PRIVACY_GUARD_ROLE) else {
+            return Ok(None);
+        };
+        let implementer = self.subagent_for("implementer");
+        let name = |role: &str| {
+            self.subagent_for(role)
+                .map(|a| a.name.as_str())
+                .unwrap_or_default()
+        };
+        // A stale override missing a variable fails instead of printing nothing.
+        let mut env = env.clone();
+        env.set_undefined_behavior(minijinja::UndefinedBehavior::Strict);
+        let text = env
+            .render_str(
+                &templates::load("coordination/privacy-guard.md.j2")?,
+                context! {
+                    privacy_guard => guard.name,
+                    implementer => implementer.map(|a| a.name.as_str()).unwrap_or_default(),
+                    implementer_isolated => implementer
+                        .is_some_and(|a| a.isolation.trim() == "worktree"),
+                    scope_guard => name(SCOPE_GUARD_ROLE),
+                    adversary => name(ADVERSARY_ROLE),
+                    rounds => PRIVACY_GUARD_ROUNDS,
+                    language => self.language,
+                },
+            )
+            .context("rendering the privacy loop")?;
         Ok(Some(text))
     }
 
@@ -1162,9 +1213,9 @@ impl Project {
     }
 
     /// A coordinator's text as written: its own, its answer line replaced when
-    /// the answers are in another language, then the scope loop, then the
-    /// adversary loop (the order they run in). Unchanged for a project that has
-    /// none of them.
+    /// the answers are in another language, then the scope loop, the privacy
+    /// loop and the adversary loop (the order they run in). Unchanged for a
+    /// project that has none of them.
     fn coordinator_text(&self, text: &str, env: &Environment) -> Result<String> {
         let mut out = text.to_string();
         if let Some(answer) = self.response_section(env)? {
@@ -1172,6 +1223,9 @@ impl Project {
             out = join_section(&own, &answer);
         }
         if let Some(l) = self.scope_guard_loop(env)? {
+            out = join_section(&out, &l);
+        }
+        if let Some(l) = self.privacy_guard_loop(env)? {
             out = join_section(&out, &l);
         }
         if let Some(l) = self.adversary_loop(env)? {
@@ -1566,6 +1620,7 @@ impl Project {
                         approvers => self.claude.intent.approvers.join(", "),
                         adversary => checks.adversary,
                         scope_guard => checks.scope_guard,
+                        privacy_guard => checks.privacy_guard,
                         implementer => checks.implementer,
                         implementer_isolated => checks.implementer_isolated,
                         worktree_implementer => worktree_implementer,
@@ -1574,6 +1629,7 @@ impl Project {
                         implementer_agent => named("implementer"),
                         rounds => checks.rounds,
                         scope_rounds => checks.scope_rounds,
+                        privacy_rounds => checks.privacy_rounds,
                         workstreams => self.claude.workflow.workstreams,
                         brief => self.brief_enabled(),
                     },

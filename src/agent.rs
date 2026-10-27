@@ -162,6 +162,7 @@ fn claude_color(c: &str) -> String {
         "warning" => "yellow",
         "success" => "green",
         "error" => "red",
+        "info" => "purple",
         other if other.starts_with('#') => "cyan",
         other => other,
     }
@@ -178,6 +179,7 @@ mod tests {
         assert_eq!(claude_color("warning"), "yellow");
         assert_eq!(claude_color("success"), "green");
         assert_eq!(claude_color("error"), "red");
+        assert_eq!(claude_color("info"), "purple");
         assert_eq!(claude_color("#4ec9b0"), "cyan");
         assert_eq!(claude_color("purple"), "purple"); // passthrough
     }
@@ -220,6 +222,7 @@ mod tests {
             ("reviewer", "fable", "high"),
             ("adversary", "opus", "high"),
             ("scope-guard", "sonnet", "high"),
+            ("privacy-guard", "opus", "high"),
             ("verifier", "sonnet", ""),
         ];
         for (role, model, effort) in want {

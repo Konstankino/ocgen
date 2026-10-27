@@ -104,7 +104,18 @@ check{% else %}check{% endif %} the whole change against the precedent list from
 - A Broken precedent with a reason I approved is not a finding. Send {% if implementer_agent %}`{{ implementer_agent }}`{% else %}the subagent that made the change{% endif %} the other
   Broken items and the duplicates, verbatim, then check once more. At most one round.
 - A precedent still broken after that is reported in phase 6 as broken, never as followed.
-{% if adversary %}
+{% if privacy_guard %}
+**Privacy check.** After the conformance check{% if adversary %}, and before the adversary check{% endif %},
+have `{{ privacy_guard }}` check the whole change for personal or health data that could leak — every change, even one
+that doesn't look like it touches personal data — the privacy loop in `.claude/rules/ocgen-team.md`:
+{% if worktree_implementer %}- First merge `{{ worktree_implementer }}`'s worktree branch into the working branch, or it checks code without the change.
+{% endif %}- Give it the goal, the base and the changed files. Never paste personal or health data into a prompt, a report
+  or a commit message: name the field and its `file:line`.
+- `Verdict: LEAK`: send {% if implementer_agent %}`{{ implementer_agent }}`{% else %}the subagent that made the change{% endif %} only its Critical and High findings, verbatim,
+  then have `{{ privacy_guard }}` check the fixes. At most {{ privacy_rounds }} rework rounds.
+- A Critical or High finding still open after that is **UNRESOLVED**: report it in phase 6 with its
+  evidence, never as done.
+{% endif %}{% if adversary %}
 **Adversary check.** When the plan's tasks are done, and before phase 6, have `{{ adversary }}` check the whole change —
 the adversary loop in `.claude/rules/ocgen-team.md`:
 {% if implementer_isolated %}- First merge `{{ implementer }}`'s worktree branch into the working branch, or it checks code without the change.
@@ -123,6 +134,8 @@ and each duplicate found.
 {% if scope_guard %}From the scope check, report the plan coverage (anything still missing, as not done), the blast radius,
 every cut (reverted, or kept with its reason), every Differs for me to accept or reject, and the Defer list as
 follow-ups.
+{% endif %}{% if privacy_guard %}From the privacy check, report its verdict, the rounds used and every finding still open as unresolved;
+put its Medium and Low findings under open risks.
 {% endif %}{% if intent %}
 If the goal came from an intent, draft the pull request that delivers it as
 `.claude/intent/drafts/pr-<the intent's draft name>.md` (the intent's issue draft is

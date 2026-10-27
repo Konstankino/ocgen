@@ -51,12 +51,17 @@ const AGENT_FIELDS: &[Field] = &[
     Field {
         label: "role",
         detail: "A free-text label describing the agent's job. It is shown in `ocgen landscape` \
-                 but is not written into the generated agent file. Two values matter. An enabled \
+                 but is not written into the generated agent file. Three values matter. An enabled \
                  subagent with role (or name) `scope-guard` makes the coordinator check the \
                  finished change against the plan before any review: it reverts the cuts \
                  itself, sends what is Partial or Missing back to the implementer for one \
                  round, and reports the blast radius; /deliver runs it at the end of execution \
-                 and /intent has it check the plan. One with role (or name) `adversary` makes \
+                 and /intent has it check the plan. One with role (or name) `privacy-guard` makes \
+                 the coordinator check every change for personal or health data (PII/PHI) that \
+                 could leak, after the scope check and before the adversary, and send \
+                 Critical/High findings back to the implementer for up to 2 rework rounds; \
+                 /deliver runs it after the conformance check. `ocgen new` adds it when you say \
+                 the project handles such data. One with role (or name) `adversary` makes \
                  the coordinator run its check last, send \
                  Critical/High findings back to the implementer for up to 2 rework rounds, and \
                  report what is left as UNRESOLVED. /deliver runs the same check after \
@@ -226,11 +231,12 @@ const CLAUDE_FIELDS: &[Field] = &[
     Field {
         label: "subagent controls",
         detail: "disallowedTools removes tools even if `tools` allows them (the explorer, reviewer, \
-                 verifier, adversary and scope-guard ship with Edit, Write, NotebookEdit denied, so \
-                 they have no file-editing tools; the verifier and adversary keep Bash to run \
-                 tests, the scope-guard to read git); effort \
-                 (low/medium/high/xhigh/max) trades cost for depth (the reviewer, adversary and \
-                 scope-guard use high); \
+                 verifier, adversary, scope-guard and privacy-guard ship with Edit, Write, \
+                 NotebookEdit denied, so they have no file-editing tools; the verifier and \
+                 adversary keep Bash to run tests, the scope-guard to read git, the privacy-guard \
+                 to read git and run the project's own scanner); effort \
+                 (low/medium/high/xhigh/max) trades cost for depth (the reviewer, adversary, \
+                 scope-guard and privacy-guard use high); \
                  permissionMode (plan/acceptEdits/dontAsk/default); memory (project = committed \
                  .claude/agent-memory/, local = git-ignored, user = every project); background; \
                  skills to preload; and the MCP servers it may use. All optional; set them in \
@@ -259,7 +265,7 @@ const CLAUDE_FIELDS: &[Field] = &[
         detail: "Claude subagent `maxTurns`: a hard ceiling on the agent's agentic turns. At the \
                  limit Claude Code returns its output marked partial, which can be resumed. \
                  Defaults come from the role (explorer 40, implementer 60, reviewer 30, verifier \
-                 40, adversary 40, scope-guard 30); '-' means unlimited.",
+                 40, adversary 40, scope-guard 30, privacy-guard 40); '-' means unlimited.",
         example: "60",
     },
     Field {
