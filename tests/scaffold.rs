@@ -1442,7 +1442,11 @@ fn claude_team_enabled_without_hook_stubs() {
         .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
         .collect();
     scripts.sort();
-    assert_eq!(scripts, ["github-read.sh", "https-only-fetch.sh"]);
+    // (plus the isolated implementer's commit, which isn't a team hook)
+    assert_eq!(
+        scripts,
+        ["github-read.sh", "https-only-fetch.sh", "worker-commit.sh"]
+    );
     // …but the /team command is still emitted.
     assert!(dir.path().join(".claude/skills/team/SKILL.md").is_file());
 }
@@ -1538,13 +1542,18 @@ fn team_confidence_zero_disables_gate() {
     assert!(s["env"].get("TEAM_PLAN_GATE").is_none());
     assert!(s["env"].get("TEAM_RISK_ROUNDS").is_none());
     assert!(s["env"].get("TEAM_APPROVAL_GATE").is_none());
-    // No approval gate: PreToolUse holds only the WebFetch guard.
+    // No approval gate: PreToolUse holds only the WebFetch guard and the
+    // worktree notes' carrier, each with its matcher.
     let pre: Vec<&serde_json::Value> = s["hooks"]["PreToolUse"]
         .as_array()
         .unwrap()
         .iter()
         .collect();
-    assert!(pre.iter().all(|g| g["matcher"] == "WebFetch"), "{pre:?}");
+    assert!(
+        pre.iter()
+            .all(|g| g["matcher"] == "WebFetch" || g["matcher"] == "ExitWorktree"),
+        "{pre:?}"
+    );
     assert!(!dir
         .path()
         .join(".claude/hooks/team-approval-gate.sh")
@@ -2040,7 +2049,13 @@ fn subagent_confidence_gate_wires_independently_of_teams() {
     // Only the WebFetch guard's list: no confidence gate settings.
     let env: Vec<&String> = s2["env"].as_object().unwrap().keys().collect();
     assert_eq!(env, ["OCGEN_WEBFETCH_DOMAINS"]);
-    assert!(s2["hooks"].get("SubagentStop").is_none());
+    // SubagentStop keeps only the isolated implementer's commit, no gate.
+    assert!(
+        !s2["hooks"]["SubagentStop"]
+            .to_string()
+            .contains("subagent-confidence-gate"),
+        "{s2:#}"
+    );
     assert!(!dir2
         .path()
         .join(".claude/hooks/subagent-confidence-gate.sh")
@@ -2799,7 +2814,7 @@ fn workflow_without_loop_guard_field_backfills_three() {
 // ------------------------------------------------------------ worktrees -----
 
 #[test]
-fn worktreeinclude_carries_claude_config_but_not_live_or_runtime_dirs() {
+fn worktreeinclude_carries_claude_config_but_not_runtime_dirs() {
     let mut p = base_project("English");
     p.target = Target::ClaudeCode;
     p.project_name = "wti".into();
@@ -2808,22 +2823,22 @@ fn worktreeinclude_carries_claude_config_but_not_live_or_runtime_dirs() {
     let dir = tempdir().unwrap();
     p.scaffold(dir.path(), false).unwrap();
     let wti = read(dir.path(), ".worktreeinclude");
-    for want in [".env"].into_iter().chain(ocgen::gitcheck::WORKTREE_COPIES) {
+    for want in [
+        ".env",
+        ".claude/agents/**",
+        ".claude/commands/**",
+        ".claude/skills/**",
+    ]
+    .into_iter()
+    .chain(ocgen::gitcheck::WORKTREE_COPIES)
+    {
         assert!(
             wti.lines().any(|l| l.trim() == want),
             "missing {want}:\n{wti}"
         );
     }
-    // Agents/commands/skills load from the main checkout when a worktree has
-    // none; runtime state must never be copied into a worktree.
-    for never in [
-        ".claude/agents",
-        ".claude/commands",
-        ".claude/skills",
-        "notes",
-        "loop-guard",
-        "worktrees",
-    ] {
+    // Runtime state must never be copied into a worktree.
+    for never in ["agent-memory", "notes", "loop-guard", "worktrees"] {
         assert!(
             !wti.lines()
                 .any(|l| !l.starts_with('#') && l.contains(never)),
@@ -5116,7 +5131,7 @@ fn verify_flags_safety_gates_that_fail_open() {
     let gate = |extra: serde_json::Value| {
         let mut h = serde_json::json!({
             "type": "command",
-            "command": "if [ \"$(ocgen hook --check 2>/dev/null)\" = \"ocgen-hooks 22\" ]; then ocgen hook team-approval-gate; else sh \".claude/hooks/team-approval-gate.sh\"; fi",
+            "command": "if [ \"$(ocgen hook --check 2>/dev/null)\" = \"ocgen-hooks 24\" ]; then ocgen hook team-approval-gate; else sh \".claude/hooks/team-approval-gate.sh\"; fi",
             "shell": "bash"
         });
         for (k, v) in extra.as_object().unwrap() {
@@ -6681,7 +6696,7 @@ fn inquire_registers_the_notes_hook() {
     assert_eq!(notes["matcher"], "Write|Edit|MultiEdit");
     let cmd = notes["hooks"][0]["command"].as_str().unwrap();
     assert!(
-        cmd.contains("ocgen hook inquire-notes") && cmd.contains("ocgen-hooks 22"),
+        cmd.contains("ocgen hook inquire-notes") && cmd.contains("ocgen-hooks 24"),
         "{cmd}"
     );
     assert_eq!(notes["hooks"][0]["shell"], "bash");

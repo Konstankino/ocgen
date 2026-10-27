@@ -106,10 +106,9 @@ fn uncommitted_claude_config_is_kept_out_of_git_so_worktrees_copy_it() {
     ] {
         assert!(ignored(dir.path(), rel), "{rel} not ignored:\n{text}");
     }
-    // Agents and skills don't need copying (Claude Code reads them from the main
-    // checkout), but they're config too: kept out of git with the rest.
     assert!(ignored(dir.path(), ".claude/agents/implementer.md"));
     assert!(ignored(dir.path(), ".claude/skills/fanout/SKILL.md"));
+    // Never copied, but kept out of git with the rest.
     assert!(ignored(
         dir.path(),
         ".claude/agent-memory/reviewer/MEMORY.md"
@@ -250,8 +249,10 @@ fn gaps_list_only_config_a_worktree_cannot_get() {
     let gaps = worktree_gaps(dir.path()).unwrap();
     let mut missing = gaps.missing.clone();
     missing.sort();
-    // Agents load from the main checkout, so they aren't a gap.
-    assert_eq!(missing, [".claude/settings.json", "CLAUDE.md"]);
+    assert_eq!(
+        missing,
+        [".claude/agents/a.md", ".claude/settings.json", "CLAUDE.md"]
+    );
     assert!(!gaps.committed);
     let warning = gitcheck::gaps_warning(&gaps);
     assert!(warning.contains("ocgen doctor"), "{warning}");
@@ -274,6 +275,60 @@ fn every_copied_pattern_is_in_the_worktreeinclude() {
         assert!(
             wti.lines().any(|l| l.trim() == want),
             "missing {want}:\n{wti}"
+        );
+    }
+}
+
+/// The files Claude Code copies into a new worktree: untracked, git-ignored and
+/// matched by `.worktreeinclude` (gitignore syntax).
+fn worktree_copy(dir: &Path) -> Vec<String> {
+    let list = |extra: &str| -> Vec<String> {
+        git_ok(dir, &["ls-files", "--others", "--ignored", extra])
+            .lines()
+            .map(str::to_string)
+            .collect()
+    };
+    let ignored = list("--exclude-standard");
+    list("--exclude-from=.worktreeinclude")
+        .into_iter()
+        .filter(|f| ignored.contains(f))
+        .collect()
+}
+
+/// A worktree session needs the skills where the model looks for them: a
+/// user-run skill such as /deliver is never in the model's skills list, so with
+/// no `.claude/skills/` in the worktree it concludes the skill doesn't exist.
+#[test]
+fn a_worktree_gets_the_agents_commands_and_skills() {
+    let dir = tempdir().unwrap();
+    git_ok(dir.path(), &["init", "-q"]);
+    claude_project("copy").scaffold(dir.path(), false).unwrap();
+    for (rel, body) in [
+        (".claude/commands/legacy.md", "x\n"),
+        (".claude/skills/deliver/reference/notes.md", "x\n"),
+        (".claude/agent-memory/reviewer/MEMORY.md", "x\n"),
+        (".claude/worktrees/w1/x", "x\n"),
+    ] {
+        let path = dir.path().join(rel);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, body).unwrap();
+    }
+
+    let copied = worktree_copy(dir.path());
+    for want in [
+        ".claude/skills/deliver/SKILL.md",
+        ".claude/skills/deliver/reference/notes.md",
+        ".claude/agents/implementer.md",
+        ".claude/commands/legacy.md",
+        ".claude/settings.json",
+        "CLAUDE.md",
+    ] {
+        assert!(copied.iter().any(|f| f == want), "{want}: {copied:#?}");
+    }
+    for never in [".claude/agent-memory/", ".claude/worktrees/"] {
+        assert!(
+            !copied.iter().any(|f| f.starts_with(never)),
+            "{never}: {copied:#?}"
         );
     }
 }
@@ -311,7 +366,7 @@ fn verify_warns_when_a_worktree_would_miss_config() {
     let (status, detail) = worktree_check(dir.path());
     assert_eq!(status, Status::Warn);
     assert!(
-        detail.contains("`.claude/hooks/") && detail.contains("ocgen doctor"),
+        detail.contains("`.claude/agents/") && detail.contains("ocgen doctor"),
         "{detail}"
     );
 }

@@ -7,7 +7,8 @@
   покращення перелічи у звіті, а не вноси.
 - Коли всі зміни готові (в Agent Teams — усі задачі), виклич {{ scope_guard }} до будь-якого ревʼю{% if adversary %} і до {{ adversary }}{% endif %}.
 {% if implementer_isolated -%}
-- {{ implementer }} працює в окремому git worktree: перед кожним викликом {{ scope_guard }} злий його гілку
+- {{ implementer }} працює в окремому git worktree, і ocgen комітить його зміни в його гілку, коли він
+  завершує (ніколи не проси користувача комітити їх): перед кожним викликом {{ scope_guard }} злий його гілку
   в робочу, інакше {{ scope_guard }} перевірятиме код без змін.
 {% endif -%}
 - Передай {{ scope_guard }} мету й останній затверджений план або бриф дослівно, з критеріями приймання;
@@ -39,7 +40,8 @@ Scope check ({{ scope_guard }}):
   other improvements in your report instead of making them.
 - When every change is done (with Agent Teams, every task), call {{ scope_guard }} before any review{% if adversary %} and before {{ adversary }}{% endif %}.
 {% if implementer_isolated -%}
-- {{ implementer }} works in its own git worktree: merge its branch into the working branch before
+- {{ implementer }} works in its own git worktree, and ocgen commits its changes on its branch when it
+  stops (never ask the user to commit them): merge that branch into the working branch before
   every call to {{ scope_guard }}, or {{ scope_guard }} checks code without the change.
 {% endif -%}
 - Give {{ scope_guard }} the goal and the latest approved plan or brief, verbatim, with its acceptance

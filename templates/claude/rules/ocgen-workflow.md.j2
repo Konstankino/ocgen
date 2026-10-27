@@ -220,9 +220,8 @@ into one team (teammates share one working directory, and a team converges on a 
   `/workstreams` is that coordinator: it keeps the board and merges each branch once it is checked.{% endif %}
 - A worktree is a fresh checkout of tracked files. Committing `.claude/` is optional: while nothing
   under it is committed, ocgen keeps the config out of git in this clone (`.git/info/exclude`) and
-  `.worktreeinclude` copies the settings, hooks, rules, `CLAUDE.md` and `.mcp.json` into each new
-  worktree; agents and skills load from the main checkout. `ocgen verify` warns when a worktree
-  would start without them.{% if fanout %} Worktrees branch from your current commit
+  `.worktreeinclude` copies the settings, hooks, rules, agents, skills, `CLAUDE.md` and `.mcp.json`
+  into each new worktree. `ocgen verify` warns when a worktree would start without them.{% if fanout %} Worktrees branch from your current commit
   (`worktree.baseRef: head`), so they include unpushed work.{% endif %}
 {% endif %}
 {% if workstreams %}

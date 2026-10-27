@@ -981,6 +981,23 @@ impl Project {
             || self.brief_enabled()
     }
 
+    /// Whether subagents work in worktrees of their own: an agent set to
+    /// `isolation: worktree`, or /fanout's workers.
+    pub fn isolates_workers(&self) -> bool {
+        self.claude.workflow.fanout
+            || self
+                .agents
+                .iter()
+                .any(|a| !a.disable && a.isolation.trim() == "worktree")
+    }
+
+    /// Whether the project writes notes a worktree session could leave behind:
+    /// /inquire and /recap notes, /brief briefs, /intent drafts.
+    pub fn keeps_notes(&self) -> bool {
+        let w = &self.claude.workflow;
+        w.inquire || w.recap || w.intent || self.brief_enabled()
+    }
+
     /// Whether the /brief skill is rendered: the flag, at least one target
     /// (/deliver, /inquire or /workstreams) to write a brief for, and no user
     /// skill named `brief` (a project from before the name was reserved keeps its
@@ -1897,6 +1914,18 @@ impl Project {
         if self.claude.workflow.recap {
             let body = templates::load_embedded("claude/hooks/recap-github.sh")?;
             components.push(("hooks/recap-github.sh".to_string(), body));
+        }
+        // A worktree-isolated worker's changes are committed on its branch when
+        // it stops, so the coordinator's merge takes them.
+        if self.isolates_workers() {
+            let body = templates::load_embedded("claude/hooks/worker-commit.sh")?;
+            components.push(("hooks/worker-commit.sh".to_string(), body));
+        }
+        // A worktree's notes reach the main checkout, on approval, when
+        // ExitWorktree removes it.
+        if self.keeps_notes() {
+            let body = templates::load_embedded("claude/hooks/worktree-notes.sh")?;
+            components.push(("hooks/worktree-notes.sh".to_string(), body));
         }
         // Claude's GitHub requests are answered by this hook, outside any sandbox,
         // with or without one.
@@ -2902,6 +2931,32 @@ impl Project {
             "PostToolUse",
             json!({ "matcher": "Write|Edit|MultiEdit", "hooks": [ read ] }),
         );
+        if self.isolates_workers() {
+            // An isolated worker has no shell to commit with, and Claude Code
+            // refuses the coordinator's git commands in another worktree: commit
+            // what it leaves on its own branch when it stops. Not a gate: if it
+            // fails, the change stays uncommitted and it says so.
+            push(
+                "SubagentStop",
+                json!({ "hooks": [ command_hook(hook_cmd(prefix, dir, "worker-commit.sh")) ] }),
+            );
+        }
+        if self.keeps_notes() {
+            // Notes are git-ignored and count as no change, so removing a worktree
+            // would delete its own silently: before ExitWorktree removes one, the
+            // hook stages the notes the main checkout lacks and asks; after the
+            // removal it copies them in. Not a gate: if it fails, the removal goes
+            // ahead as Claude Code would do it.
+            let carry = command_hook(hook_cmd(prefix, dir, "worktree-notes.sh"));
+            push(
+                "PreToolUse",
+                json!({ "matcher": "ExitWorktree", "hooks": [ carry.clone() ] }),
+            );
+            push(
+                "PostToolUse",
+                json!({ "matcher": "ExitWorktree", "hooks": [ carry ] }),
+            );
+        }
         // Deterministic line for every WebFetch: HTTPS, trusted docs sites only.
         push(
             "PreToolUse",

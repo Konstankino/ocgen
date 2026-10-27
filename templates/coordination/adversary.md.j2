@@ -3,7 +3,8 @@
 - Коли решта агентів завершила роботу, виклич {{ adversary }} останнім, перед фінальним звітом.
   Передай йому задачу, змінені файли й твердження агентів дослівно.
 {% if implementer_isolated -%}
-- {{ implementer }} працює в окремому git worktree: перед кожним викликом {{ adversary }}
+- {{ implementer }} працює в окремому git worktree, і ocgen комітить його зміни в його гілку, коли він
+  завершує (ніколи не проси користувача комітити їх): перед кожним викликом {{ adversary }}
   злий його гілку в робочу, інакше {{ adversary }} перевірятиме код без змін.
 {% endif -%}
 - `Verdict: PASS` — переходь до фінального звіту; знахідки Medium і Low внеси в зауваження й ризики.
@@ -23,7 +24,8 @@ Adversary check ({{ adversary }}):
 - When the other agents have finished, call {{ adversary }} last, right before your final report.
   Give it the task, the changed files and the other agents' claims, quoted.
 {% if implementer_isolated -%}
-- {{ implementer }} works in its own git worktree: merge its branch into the working branch before
+- {{ implementer }} works in its own git worktree, and ocgen commits its changes on its branch when it
+  stops (never ask the user to commit them): merge that branch into the working branch before
   every call to {{ adversary }}, or {{ adversary }} checks code without the change.
 {% endif -%}
 - `Verdict: PASS` — go on to the final report; put its Medium and Low findings under remarks and risks.

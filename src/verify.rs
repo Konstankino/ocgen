@@ -1273,6 +1273,10 @@ fn effective(layers: &Layers, expected: &Value) -> Check {
 /// and each reads anything else as 0.
 fn weakens(key: &str, want: Option<&str>, got: Option<&str>, ocgen: &Value) -> bool {
     let hook = |event: &str| ocgen.pointer(&format!("/hooks/{event}")).is_some();
+    // The worker gate, not just any SubagentStop hook (the worker commit is one).
+    let worker_gate = ocgen
+        .pointer("/hooks/SubagentStop")
+        .is_some_and(|v| v.to_string().contains("subagent-confidence-gate"));
     let on = |k: &str| ocgen.pointer(&format!("/env/{k}")).and_then(Value::as_str) == Some("1");
     // [the sh scripts' reading, the Rust hook's]; sh's `[ -gt ]` can't hold more
     // than an i64.
@@ -1317,7 +1321,7 @@ fn weakens(key: &str, want: Option<&str>, got: Option<&str>, ocgen: &Value) -> b
         "OCGEN_CHECK_CMD" => {
             want.is_some_and(|w| !w.trim().is_empty()) && got.is_none_or(|g| g.trim().is_empty())
         }
-        "SUBAGENT_READONLY_ROLES" => hook("SubagentStop") && adds(),
+        "SUBAGENT_READONLY_ROLES" => worker_gate && adds(),
         "TEAM_READONLY_ROLES" => hook("TeammateIdle") && on("TEAM_RISK_ROUNDS") && adds(),
         "OCGEN_WEBFETCH_DOMAINS" => want.is_some() && adds(),
         // 0 (or unreadable) never releases a gate; with ocgen's 0, any budget does.
@@ -1325,7 +1329,7 @@ fn weakens(key: &str, want: Option<&str>, got: Option<&str>, ocgen: &Value) -> b
             let w = reads(want)[0];
             want.is_some() && reads(got).iter().any(|&g| g > 0 && (w == 0 || g < w))
         }
-        "TEAM_TASK_GATE" => hook("SubagentStop") && got == Some("1") && want != Some("1"),
+        "TEAM_TASK_GATE" => worker_gate && got == Some("1") && want != Some("1"),
         "OCGEN_HOOK_PROBE" => got.is_some(),
         // Replaces gh in /recap's GitHub hook and in the GitHub read, which run
         // with the user's gh login outside the sandbox; ocgen never sets them
@@ -3592,7 +3596,10 @@ mod tests {
     #[test]
     fn weakening_is_judged_as_the_hooks_read_the_values() {
         let gates = serde_json::json!({
-            "hooks": { "SubagentStop": [], "TeammateIdle": [] },
+            "hooks": {
+                "SubagentStop": [ { "hooks": [ { "command": "ocgen hook subagent-confidence-gate" } ] } ],
+                "TeammateIdle": [],
+            },
             "env": { "TEAM_RISK_ROUNDS": "1" },
         });
         let w = |key, want, got| weakens(key, want, got, &gates);

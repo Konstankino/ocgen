@@ -3,7 +3,8 @@
 - Коли всі зміни готові{% if scope_guard %}, після {{ scope_guard }}{% endif %}{% if adversary %}{% if scope_guard %} і{% else %},{% endif %} до {{ adversary }}{% endif %}, виклич {{ privacy_guard }} на всю зміну — на кожну,
   навіть таку, що начебто не стосується персональних даних.
 {% if implementer_isolated -%}
-- {{ implementer }} працює в окремому git worktree: перед кожним викликом {{ privacy_guard }} злий його гілку
+- {{ implementer }} працює в окремому git worktree, і ocgen комітить його зміни в його гілку, коли він
+  завершує (ніколи не проси користувача комітити їх): перед кожним викликом {{ privacy_guard }} злий його гілку
   в робочу, інакше {{ privacy_guard }} перевірятиме код без змін.
 {% endif -%}
 - Передай {{ privacy_guard }} задачу, базу, змінені файли й те, що зміна робить із даними. Ніколи не вставляй
@@ -25,7 +26,8 @@ Privacy check ({{ privacy_guard }}):
 - When every change is done{% if scope_guard %}, after {{ scope_guard }}{% endif %}{% if adversary %}{% if scope_guard %} and{% else %},{% endif %} before {{ adversary }}{% endif %}, call {{ privacy_guard }} on the whole change —
   every change, even one that doesn't look like it touches personal data.
 {% if implementer_isolated -%}
-- {{ implementer }} works in its own git worktree: merge its branch into the working branch before
+- {{ implementer }} works in its own git worktree, and ocgen commits its changes on its branch when it
+  stops (never ask the user to commit them): merge that branch into the working branch before
   every call to {{ privacy_guard }}, or {{ privacy_guard }} checks code without the change.
 {% endif -%}
 - Give {{ privacy_guard }} the task, the base, the changed files and what the change does with data.
