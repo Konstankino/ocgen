@@ -4017,12 +4017,12 @@ fn session_end_hook_is_quiet_when_the_worktree_is_gone() {
             .spawn()
             .unwrap();
         use std::io::Write;
-        child
-            .stdin
-            .take()
-            .unwrap()
-            .write_all(br#"{"hook_event_name":"SessionEnd","session_id":"s-1","reason":"other"}"#)
-            .unwrap();
+        // With the worktree gone the hook exits before reading stdin and closes
+        // the pipe; a BrokenPipe on our write is expected, so ignore the write result.
+        let _ =
+            child.stdin.take().unwrap().write_all(
+                br#"{"hook_event_name":"SessionEnd","session_id":"s-1","reason":"other"}"#,
+            );
         let out = child.wait_with_output().unwrap();
         (
             out.status.code(),
