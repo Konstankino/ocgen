@@ -515,14 +515,14 @@ fn sandbox_yes() -> Vec<&'static str> {
 /// every default, then `sandbox`.
 fn new_claude_answers<'a>(sandbox: &[&'a str]) -> Vec<&'a str> {
     let mut a = vec![
-        "", "", // agents: the default pipeline, no more
+        "", "", "", // agents: the default pipeline, no personal data, no more
         "", // what the project is for
         "", // CLAUDE.md
         "", // power-user defaults
         "", "", // extra hooks, formatter
         "", "", "", "", "", "", "", "",
         "", // intake … fanout, workstreams … inquire, recap
-        "", // /brief (index 16)
+        "", // /brief (index 17)
         "", "", "", "", "", "", "", // /intent, its settings and approvers
         "", "", "", // subagent confidence, check command, loop guard
         "", "", "", "", "", "", "", // Agent Teams and its gates
@@ -589,12 +589,12 @@ fn new_with_the_gate_on_sandboxes_by_default() {
 
 #[test]
 fn new_can_leave_out_recap() {
-    // Seven answers before the workflow group, then intake, improve-prompt,
+    // Eight answers before the workflow group, then intake, improve-prompt,
     // fanout, workstreams, verify-todos, prefer-explorer, deliver, inquire — then
     // recap.
     let mut answers = new_claude_answers(&[""]);
-    assert_eq!(answers[15], "");
-    answers[15] = "n";
+    assert_eq!(answers[16], "");
+    answers[16] = "n";
     script(&answers);
     let p = build_new(true, false);
     assert_eq!(script_remaining(), 0);
@@ -604,17 +604,64 @@ fn new_can_leave_out_recap() {
 
 #[test]
 fn new_can_leave_out_brief() {
-    // The /brief question follows /recap (index 15) and precedes /intent, so
+    // The /brief question follows /recap (index 16) and precedes /intent, so
     // every earlier answer keeps its place.
     let mut answers = new_claude_answers(&[""]);
-    assert_eq!(answers[16], "");
-    answers[16] = "n";
+    assert_eq!(answers[17], "");
+    answers[17] = "n";
     script(&answers);
     let p = build_new(true, false);
     assert_eq!(script_remaining(), 0);
     assert!(!p.claude.workflow.brief);
     assert!(p.claude.workflow.recap, "recap is untouched");
     assert!(p.claude.workflow.intent, "intent is untouched");
+}
+
+#[test]
+fn new_leaves_the_privacy_guard_out_by_default() {
+    script(&new_claude_answers(&[""]));
+    let p = build_new(true, false);
+    assert_eq!(script_remaining(), 0);
+    assert!(p.agents.iter().all(|a| a.role != "privacy-guard"));
+}
+
+#[test]
+fn new_adds_the_privacy_guard_for_personal_or_health_data() {
+    // The question follows the default team (index 1), before "Add another agent?".
+    let mut answers = new_claude_answers(&[""]);
+    assert_eq!(answers[1], "");
+    answers[1] = "y";
+    script(&answers);
+    let p = build_new(true, false);
+    assert_eq!(script_remaining(), 0);
+    let guard = p
+        .agents
+        .iter()
+        .find(|a| a.role == "privacy-guard")
+        .expect("privacy-guard added");
+    assert_eq!(guard.name, "privacy-guard");
+    assert_eq!(guard.model, "opus");
+    // It joins the default team, which stays whole.
+    assert_eq!(p.agents.len(), Manifest::load().unwrap().pipeline.len() + 1);
+
+    let tmp = tempfile::tempdir().unwrap();
+    p.scaffold(tmp.path(), false).unwrap();
+    assert!(read(tmp.path(), ".claude/rules/ocgen-team.md").contains("Privacy check"));
+}
+
+#[test]
+fn opencode_agents_add_the_privacy_guard_too() {
+    let m = Manifest::load().unwrap();
+    // The default team, personal data, no more agents.
+    script(&["", "y", ""]);
+    let agents =
+        super::collect_agents(&ColorfulTheme::default(), &m, &m.providers, "English").unwrap();
+    assert_eq!(script_remaining(), 0);
+    let guard = agents
+        .iter()
+        .find(|a| a.role == "privacy-guard")
+        .expect("privacy-guard added");
+    assert_eq!(guard.provider, m.providers[0].key);
 }
 
 #[test]

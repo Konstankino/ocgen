@@ -101,7 +101,9 @@ project it then asks for:
 3. **Utility model** — which provider + model the built-in compaction/title/summary
    agents use.
 4. **Agents** — start from the default 6-agent pipeline (coordinator, explorer,
-   implementer, scope-guard, reviewer, adversary), then add/rename as many as you like. For each agent you configure **every field OpenCode exposes**:
+   implementer, scope-guard, reviewer, adversary), then add/rename as many as you like. Right
+   after the default team loads, the wizard asks whether the project handles personal or health
+   data (PII/PHI); a yes adds the `privacy-guard` (see **The privacy check**). For each agent you configure **every field OpenCode exposes**:
    name, a starting **role/preset** (or `blank (custom role)`), **mode**
    (primary/subagent/all), **provider** and **model**, **variant**, **temperature**,
    **top_p**, **max steps**, **color**, **disable**, **hidden**, **description**, the
@@ -563,6 +565,7 @@ The default team gives each role a model that fits its job:
 | scope-guard | `sonnet` | `high` | Traces plan items to hunks: careful reading, and another model than the implementer's |
 | reviewer | `fable` | `high` | Another model than the implementer's, so it doesn't share its blind spots |
 | adversary | `opus` | `high` | Covers what the reviewer's model misses |
+| privacy-guard (when the project handles personal or health data) | `opus` | `high` | Follows data across files to where it ends up; a leak can't be taken back |
 | verifier (preset, not in the default team) | `sonnet` | inherit | Runs checks and reports pass/fail |
 
 These only seed new agents: a project keeps the models it recorded, and `ocgen doctor` doesn't
@@ -705,6 +708,39 @@ Teams without an adversary render exactly as before. To add one to an existing p
 team without either gets `scope-guard` preselected, then `adversary` the next time; in OpenCode,
 name the agent `scope-guard` or `adversary` and its preset is picked.
 
+**The privacy check.** For a project that handles personal or health data (PII/PHI), the
+`privacy-guard` checks every change for data that could leak by accident: into a log, an error
+message, a URL, a third party (analytics, telemetry, an error tracker, an AI API), a test fixture,
+a committed `.env` file or dump, or a response that returns more than the caller needs. It isn't
+in the default team: `ocgen new` asks, right after loading it, *Does this project handle personal
+or health data (PII/PHI)?* (default no), and a yes adds it. Add it to an existing project with
+`ocgen add agent` and its `privacy-guard` preset.
+
+It reads every changed file in full and follows each piece of personal or health data to wherever
+it goes, through code the change calls too. Each finding names the field or kind of data and its
+`file:line`, **never the value**, so the report doesn't spread what it found; it gives the path
+the data leaks through, where it ends up and the fix, marked Verified or Inferred. Health,
+identity-document, payment or credential data reaching somewhere it shouldn't is Critical, other
+personal data High; collecting or keeping more than needed is Medium. Its report starts with
+`Verdict: CLEAN` or `Verdict: LEAK` (any Critical or High finding). It has `Read, Grep, Glob, Bash`
+with the file tools denied (on OpenCode, only `git diff`, `log`, `status` and `grep`), so it can
+run the project's own PII or secret scanner when there is one.
+
+Whenever the team has an enabled subagent whose role (or name) is `privacy-guard`, ocgen adds its
+loop to the coordinator's instructions, after the scope loop and before the adversary loop:
+- When every change is done, call the privacy guard on the whole change — every change, even one
+  that doesn't look like it touches personal data. A worktree implementer's branch is merged first.
+- Never paste personal or health data into a prompt, a report or a commit message: name the field
+  and its `file:line`.
+- On LEAK, send the implementer exactly the Critical and High findings, then call the guard again.
+  After 2 rework rounds, report what is left as **UNRESOLVED**.
+
+**`/deliver`** runs the same check after the conformance check and before the adversary check,
+and its synthesis reports the verdict and anything unresolved. An agent can only catch so much:
+pair it with a deterministic scanner in the check command, and keep real records out of the
+working tree, since every agent that reads them sends them to the model. Teams without a privacy
+guard render exactly as before.
+
 **Workflow commands are skills.** Claude Code merged commands into skills, so ocgen renders
 its workflows as `.claude/skills/<name>/SKILL.md`. You still type `/deliver`, `/inquire` and so on.
 - **You start the side-effecting ones:** `/multi`, `/fanout`, `/workstreams`, `/deliver`, `/intent`,
@@ -805,11 +841,13 @@ and autocomplete it.
 
 **Subagent controls.** Beyond model, tools and color, each subagent can set:
 - `disallowedTools`: removes tools even if its tool list would allow them. The explorer,
-  reviewer, verifier, adversary and scope-guard ship with `Edit, Write, NotebookEdit` denied, so
-  they have no file-editing tools. The explorer and reviewer are **hard read-only**; the verifier
-  and adversary keep `Bash` to run tests, and the scope-guard to read git, so their read-only
-  status rests on their prompts.
-- `effort`: the reviewer, adversary and scope-guard use `high`, the explorer `medium`.
+  reviewer, verifier, adversary, scope-guard and privacy-guard ship with `Edit, Write,
+  NotebookEdit` denied, so they have no file-editing tools. The explorer and reviewer are **hard
+  read-only**; the verifier and adversary keep `Bash` to run tests, the scope-guard to read git,
+  and the privacy-guard to read git and run the project's own scanner, so their read-only status
+  rests on their prompts.
+- `effort`: the reviewer, adversary, scope-guard and privacy-guard use `high`, the explorer
+  `medium`.
 - `permissionMode`.
 - `memory`: `project` is committed under `.claude/agent-memory/`, `local` is git-ignored,
   `user` spans every project.
@@ -2245,7 +2283,7 @@ with a shared `.claude/hooks/loop-guard.sh`:
   retrying and go idle. The execution-approval gate denies the command **and halts the agent**
   (`continue: false`). The loop guard never lets an unapproved plan or a gated `git push` through.
 - **Turn ceilings.** Each subagent gets a `maxTurns` limit (explorer 40, implementer 60, reviewer
-  30, verifier 40, adversary 40, scope-guard 30). At the limit its output comes back marked partial and can be resumed once.
+  30, verifier 40, adversary 40, scope-guard 30, privacy-guard 40). At the limit its output comes back marked partial and can be resumed once.
 - **Loop discipline.** The workflow rule tells agents to change approach after two failures,
   report the blocker after the third, re-plan at most twice, and never inflate confidence to get
   past a gate. The coordinator must report every escalation as unresolved.
@@ -2428,6 +2466,7 @@ archetypes/*.toml        # agent role presets (mode, permissions, colour, text)
 mindset.md.j2            # the mindset every agent and the coordinator end with (accidents, not insiders)
 authorship.md.j2         # short commit messages, no AI credit: the Claude workflow rule's section, every OpenCode agent's text
 coordination/scope-guard.md.j2   # the coordinator's scope loop (when the team has a scope guard)
+coordination/privacy-guard.md.j2 # the coordinator's privacy loop (when the team has a privacy guard)
 coordination/adversary.md.j2     # the coordinator's adversary loop (when the team has one)
 coordination/response.md.j2      # the coordinator's answer line (when answers differ from instructions)
 opencode.json.j2         # the provider/model config template (loops over providers)

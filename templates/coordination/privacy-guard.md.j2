@@ -1,0 +1,46 @@
+{% if language == "Ukrainian" -%}
+Перевірка приватності ({{ privacy_guard }}):
+- Коли всі зміни готові{% if scope_guard %}, після {{ scope_guard }}{% endif %}{% if adversary %}{% if scope_guard %} і{% else %},{% endif %} до {{ adversary }}{% endif %}, виклич {{ privacy_guard }} на всю зміну — на кожну,
+  навіть таку, що начебто не стосується персональних даних.
+{% if implementer_isolated -%}
+- {{ implementer }} працює в окремому git worktree: перед кожним викликом {{ privacy_guard }} злий його гілку
+  в робочу, інакше {{ privacy_guard }} перевірятиме код без змін.
+{% endif -%}
+- Передай {{ privacy_guard }} задачу, базу, змінені файли й те, що зміна робить із даними. Ніколи не вставляй
+  персональні чи медичні дані в запит, звіт чи повідомлення коміту: називай поле і його `file:line`.
+- `Verdict: CLEAN` — рухайся далі; знахідки Medium і Low внеси в зауваження й ризики.
+- `Verdict: LEAK` — передай {% if implementer %}агентові {{ implementer }}{% else %}агентові, який вносив зміни,{% endif %}
+  лише знахідки Critical і High із цього звіту, дослівно (file:line, шлях, виправлення), потім
+  знову виклич {{ privacy_guard }}, щоб він перевірив виправлення.
+- Не більше {{ rounds }} кіл доопрацювання: до {{ rounds }} виправлень і {{ rounds + 1 }} викликів {{ privacy_guard }}.
+  Якщо після цього вердикт усе ще LEAK, зупинись і у фінальному звіті познач решту знахідок
+  як UNRESOLVED.
+- Якщо у звіті немає рядка `Verdict:`, виклич {{ privacy_guard }} ще раз; якщо вердикту знову немає,
+  познач перевірку як UNRESOLVED.
+- Підагенти не викликають одне одного: знахідки між {{ privacy_guard }} і {% if implementer %}{{ implementer }}{% else %}агентом, який вносив зміни,{% endif %}
+  передаєш лише ти.
+- У фінальному звіті вкажи вердикт {{ privacy_guard }}, кількість використаних кіл і всі знахідки UNRESOLVED.
+{%- else -%}
+Privacy check ({{ privacy_guard }}):
+- When every change is done{% if scope_guard %}, after {{ scope_guard }}{% endif %}{% if adversary %}{% if scope_guard %} and{% else %},{% endif %} before {{ adversary }}{% endif %}, call {{ privacy_guard }} on the whole change —
+  every change, even one that doesn't look like it touches personal data.
+{% if implementer_isolated -%}
+- {{ implementer }} works in its own git worktree: merge its branch into the working branch before
+  every call to {{ privacy_guard }}, or {{ privacy_guard }} checks code without the change.
+{% endif -%}
+- Give {{ privacy_guard }} the task, the base, the changed files and what the change does with data.
+  Never paste personal or health data into a prompt, a report or a commit message: name the field
+  and its `file:line`.
+- `Verdict: CLEAN` — go on; put its Medium and Low findings under remarks and risks.
+- `Verdict: LEAK` — send {{ implementer if implementer else "the subagent that made the change" }} only the Critical and High findings
+  from that report, verbatim (file:line, path, fix), then call {{ privacy_guard }} again to check
+  the fixes.
+- At most {{ rounds }} rework rounds: up to {{ rounds }} fixes and {{ rounds + 1 }} calls to {{ privacy_guard }}. If the
+  verdict is still LEAK after that, stop and list the remaining findings as UNRESOLVED in the
+  final report.
+- If the report has no `Verdict:` line, call {{ privacy_guard }} once more; if it still has none, mark
+  the check UNRESOLVED.
+- Subagents can't call each other: only you pass findings between {{ privacy_guard }} and
+  {{ implementer if implementer else "the subagent that made the change" }}.
+- In the final report, give {{ privacy_guard }}'s verdict, the rounds used and every UNRESOLVED finding.
+{%- endif %}

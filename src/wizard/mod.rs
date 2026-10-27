@@ -10,7 +10,7 @@ use dialoguer::{theme::ColorfulTheme, Editor};
 use ocgen::agent::{self, Agent};
 use ocgen::claude::{Output, Powerups, Team};
 use ocgen::manifest::{Manifest, Model, Provider};
-use ocgen::render::{ChangeKind, FileChange, Project};
+use ocgen::render::{ChangeKind, FileChange, Project, PRIVACY_GUARD_ROLE};
 use ocgen::target::Target;
 use ocgen::templates;
 use ocgen::validate::{self, unique_ident};
@@ -36,6 +36,7 @@ const HELP_NAME: &str = "Identifier → file name and @mention. Lowercase, no sp
 const HELP_PRESET: &str = "A starting point that fills the fields below; 'blank' starts empty.";
 const HELP_ROLE: &str = "Free-text job label (e.g. reviewer); not written to the file. \
      'scope-guard' makes the coordinator check the change against the plan before review; \
+     'privacy-guard' makes it check every change for personal or health data that could leak; \
      'adversary' makes it run this agent's check last.";
 const HELP_MODE: &str =
     "primary = invoked directly & delegates; subagent = only called by others; all = both.";
@@ -1748,6 +1749,9 @@ fn collect_claude_agents(
             Vec::new()
         }
     };
+    ask_privacy_guard(theme, &mut agents, || {
+        Agent::from_archetype_claude(PRIVACY_GUARD_ROLE, PRIVACY_GUARD_ROLE, language)
+    })?;
 
     loop {
         let prompt = if agents.is_empty() {
@@ -1772,6 +1776,33 @@ fn collect_claude_agents(
         )?);
     }
     Ok(agents)
+}
+
+/// After the default team loads, add the privacy guard when the project handles
+/// personal or health data. Without the default team (or with a guard already in
+/// it) nothing is asked: the guard is a preset like any other.
+fn ask_privacy_guard(
+    theme: &ColorfulTheme,
+    agents: &mut Vec<Agent>,
+    guard: impl FnOnce() -> Result<Agent>,
+) -> Result<()> {
+    let has_guard = agents
+        .iter()
+        .any(|a| a.role == PRIVACY_GUARD_ROLE || a.name == PRIVACY_GUARD_ROLE);
+    if agents.is_empty() || has_guard {
+        return Ok(());
+    }
+    if ask_confirm(
+        theme,
+        "Does this project handle personal or health data (PII/PHI)?",
+        "Yes adds privacy-guard, a read-only agent the coordinator runs on every change to catch personal or health data leaking into logs, URLs, third parties or test data.",
+        false,
+    )? {
+        let a = guard()?;
+        println!("  Added: {}", a.name);
+        agents.push(a);
+    }
+    Ok(())
 }
 
 /// Project facts the Claude agent editor offers as choices.
@@ -2873,6 +2904,14 @@ fn collect_agents(
             Vec::new()
         }
     };
+    ask_privacy_guard(theme, &mut agents, || {
+        Agent::from_archetype(
+            PRIVACY_GUARD_ROLE,
+            PRIVACY_GUARD_ROLE,
+            language,
+            &default_provider,
+        )
+    })?;
 
     loop {
         let prompt = if agents.is_empty() {
