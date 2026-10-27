@@ -2043,7 +2043,7 @@ and inside the ocgen binary (`ocgen hook <name>`). The generated hook command us
 binary when a compatible ocgen is installed, and the script otherwise:
 
 ```sh
-if [ "$(ocgen hook --check 2>/dev/null)" = "ocgen-hooks 23" ]; then ocgen hook team-approval-gate; else sh ".../team-approval-gate.sh"; fi
+if [ "$(ocgen hook --check 2>/dev/null)" = "ocgen-hooks 24" ]; then ocgen hook team-approval-gate; else sh ".../team-approval-gate.sh"; fi
 ```
 
 - **The binary gives you** real JSON parsing instead of `grep`, and hooks that work on
@@ -2337,6 +2337,14 @@ Committing `.claude/` is optional. Both ways work:
 - **Study in the main checkout:** `/inquire` is read-only. Notes written inside a worktree are
   lost when it's removed, and the isolation checks stop a worktree session from writing to the
   main checkout. `/inquire` warns if you run it in a worktree.
+- **An isolated worker's changes are committed for you:** the implementer (`isolation: worktree`)
+  and `/fanout` workers edit in a worktree of their own but have no shell to commit with, and
+  Claude Code refuses the coordinator's git commands in another worktree. So when such a subagent
+  stops, the `worker-commit` hook (SubagentStop) commits what it left on its own
+  `worktree-agent-*` branch, and the coordinator merges that branch. Git-ignored files stay out,
+  and your repository's git hooks run. Nothing else is committed: not the main checkout, nor a
+  `claude --worktree` session's worktree. If the commit fails (no git identity, a pre-commit hook
+  refusing), the change stays uncommitted and the hook says so.
 - **Notes when a worktree goes:** notes (`.claude/notes/`, `.claude/briefs/` and
   `.claude/intent/drafts/`) are git-ignored, so the main checkout never sees a worktree's own.
   Claude Code also counts them as no change, so removing the worktree would delete them without

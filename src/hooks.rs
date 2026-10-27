@@ -23,7 +23,7 @@ use serde_json::Value;
 /// embedded in the ocgen that generated the project (hook scripts can't be
 /// overridden from the template dir), so they implement the same protocol —
 /// unless someone edits the project's copies by hand.
-pub const PROTOCOL: &str = "ocgen-hooks 23";
+pub const PROTOCOL: &str = "ocgen-hooks 24";
 
 /// How long Claude Code lets a gate that runs the project check (SubagentStop,
 /// TaskCompleted) take, in seconds: its hook `timeout`. Claude Code treats a
@@ -36,7 +36,7 @@ pub const CHECK_GATE_TIMEOUT: u64 = 3600;
 pub const CHECK_TIMEOUT_MAX: u64 = CHECK_GATE_TIMEOUT - 60;
 
 /// Every hook `ocgen hook <name>` accepts (matching the script names minus `.sh`).
-pub const NAMES: [&str; 19] = [
+pub const NAMES: [&str; 20] = [
     "subagent-confidence-gate",
     "team-task-completed",
     "team-task-created",
@@ -56,6 +56,7 @@ pub const NAMES: [&str; 19] = [
     "session-end",
     "shell-sandbox",
     "worktree-notes",
+    "worker-commit",
 ];
 
 /// The safety gates: a gate that can't start, crashes, times out or exits with
@@ -416,6 +417,7 @@ pub fn run(name: &str, payload: &str, env: &HashMap<String, String>) -> Outcome 
         "session-end" => h.session_end(),
         "shell-sandbox" => h.shell_sandbox(),
         "worktree-notes" => h.worktree_notes(),
+        "worker-commit" => h.worker_commit(),
         other => Outcome {
             code: 1,
             stdout: String::new(),
@@ -1441,6 +1443,71 @@ impl<'a> Hook<'a> {
             "PreToolUse" => self.stage_worktree_notes(),
             "PostToolUse" => self.land_worktree_notes(),
             _ => Outcome::allow(),
+        }
+    }
+
+    /// SubagentStop: commit what a worktree-isolated worker left uncommitted, on
+    /// its own branch. The implementer and /fanout workers have no shell to
+    /// commit with, and Claude Code refuses the coordinator's git commands in
+    /// another worktree, so its merge would find nothing. Only Claude Code's
+    /// agent worktrees count (`worktree-agent-*` branches): never the main
+    /// checkout, nor a session's worktree. Git-ignored files stay out; the
+    /// repository's own git hooks run. Never blocks; a probe changes nothing.
+    fn worker_commit(&self) -> Outcome {
+        if self.probe() {
+            return Outcome::allow();
+        }
+        let cwd = self.cwd();
+        let abs = |what: &str| git_line(&cwd, &["rev-parse", "--path-format=absolute", what]);
+        let (Some(git_dir), Some(common)) = (abs("--git-dir"), abs("--git-common-dir")) else {
+            return Outcome::allow();
+        };
+        let branch =
+            git_line(&cwd, &["symbolic-ref", "--quiet", "--short", "HEAD"]).unwrap_or_default();
+        if git_dir == common || !branch.starts_with("worktree-agent-") {
+            return Outcome::allow();
+        }
+        let dirty = git_line(&cwd, &["status", "--porcelain", "--untracked-files=all"]);
+        if dirty.is_none() {
+            return Outcome::allow();
+        }
+        let who = match safe(&self.field("agent_type")) {
+            w if w.is_empty() => "subagent".to_string(),
+            w => w,
+        };
+        let subject = format!("chore({who}): the subagent's changes");
+        let body = "Committed by ocgen's worker-commit hook when the subagent stopped, so its branch merges.";
+        // Another git command holding the index (the worker gate runs beside
+        // this hook) is waited out briefly; any other failure is final, so the
+        // repository's commit hooks run once.
+        let lock = Path::new(&git_dir).join("index.lock");
+        let commit = || {
+            for _ in 0..5 {
+                if git_ok(&cwd, &["add", "-A"])
+                    && git_ok(&cwd, &["commit", "-q", "-m", &subject, "-m", body])
+                {
+                    return true;
+                }
+                if !lock.exists() {
+                    return false;
+                }
+                std::thread::sleep(Duration::from_secs(1));
+            }
+            false
+        };
+        let committed = commit();
+        let say = if committed {
+            format!("ocgen committed {who}'s changes on {branch}; merge that branch to take them.")
+        } else {
+            git_ok(&cwd, &["reset", "-q"]);
+            format!(
+                "ocgen could not commit {who}'s changes on {branch} (git commit failed); they are still uncommitted in its worktree."
+            )
+        };
+        Outcome {
+            code: 0,
+            stdout: format!("{}\n", serde_json::json!({ "systemMessage": say })),
+            stderr: String::new(),
         }
     }
 
@@ -3139,6 +3206,19 @@ fn git_line(dir: &Path, args: &[&str]) -> Option<String> {
         .trim()
         .to_string();
     Some(line)
+}
+
+/// Whether `git -C dir <args>` succeeds (its output discarded).
+fn git_ok(dir: &Path, args: &[&str]) -> bool {
+    Command::new("git")
+        .arg("-C")
+        .arg(crate::paths::plain(dir))
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
 }
 
 /// The notes under `root/dir`, relative to `root` with forward slashes, sorted:

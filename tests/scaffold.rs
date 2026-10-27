@@ -1442,7 +1442,11 @@ fn claude_team_enabled_without_hook_stubs() {
         .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
         .collect();
     scripts.sort();
-    assert_eq!(scripts, ["github-read.sh", "https-only-fetch.sh"]);
+    // (plus the isolated implementer's commit, which isn't a team hook)
+    assert_eq!(
+        scripts,
+        ["github-read.sh", "https-only-fetch.sh", "worker-commit.sh"]
+    );
     // …but the /team command is still emitted.
     assert!(dir.path().join(".claude/skills/team/SKILL.md").is_file());
 }
@@ -2045,7 +2049,13 @@ fn subagent_confidence_gate_wires_independently_of_teams() {
     // Only the WebFetch guard's list: no confidence gate settings.
     let env: Vec<&String> = s2["env"].as_object().unwrap().keys().collect();
     assert_eq!(env, ["OCGEN_WEBFETCH_DOMAINS"]);
-    assert!(s2["hooks"].get("SubagentStop").is_none());
+    // SubagentStop keeps only the isolated implementer's commit, no gate.
+    assert!(
+        !s2["hooks"]["SubagentStop"]
+            .to_string()
+            .contains("subagent-confidence-gate"),
+        "{s2:#}"
+    );
     assert!(!dir2
         .path()
         .join(".claude/hooks/subagent-confidence-gate.sh")
@@ -5121,7 +5131,7 @@ fn verify_flags_safety_gates_that_fail_open() {
     let gate = |extra: serde_json::Value| {
         let mut h = serde_json::json!({
             "type": "command",
-            "command": "if [ \"$(ocgen hook --check 2>/dev/null)\" = \"ocgen-hooks 23\" ]; then ocgen hook team-approval-gate; else sh \".claude/hooks/team-approval-gate.sh\"; fi",
+            "command": "if [ \"$(ocgen hook --check 2>/dev/null)\" = \"ocgen-hooks 24\" ]; then ocgen hook team-approval-gate; else sh \".claude/hooks/team-approval-gate.sh\"; fi",
             "shell": "bash"
         });
         for (k, v) in extra.as_object().unwrap() {
@@ -6686,7 +6696,7 @@ fn inquire_registers_the_notes_hook() {
     assert_eq!(notes["matcher"], "Write|Edit|MultiEdit");
     let cmd = notes["hooks"][0]["command"].as_str().unwrap();
     assert!(
-        cmd.contains("ocgen hook inquire-notes") && cmd.contains("ocgen-hooks 23"),
+        cmd.contains("ocgen hook inquire-notes") && cmd.contains("ocgen-hooks 24"),
         "{cmd}"
     );
     assert_eq!(notes["hooks"][0]["shell"], "bash");

@@ -981,6 +981,16 @@ impl Project {
             || self.brief_enabled()
     }
 
+    /// Whether subagents work in worktrees of their own: an agent set to
+    /// `isolation: worktree`, or /fanout's workers.
+    pub fn isolates_workers(&self) -> bool {
+        self.claude.workflow.fanout
+            || self
+                .agents
+                .iter()
+                .any(|a| !a.disable && a.isolation.trim() == "worktree")
+    }
+
     /// Whether the project writes notes a worktree session could leave behind:
     /// /inquire and /recap notes, /brief briefs, /intent drafts.
     pub fn keeps_notes(&self) -> bool {
@@ -1904,6 +1914,12 @@ impl Project {
         if self.claude.workflow.recap {
             let body = templates::load_embedded("claude/hooks/recap-github.sh")?;
             components.push(("hooks/recap-github.sh".to_string(), body));
+        }
+        // A worktree-isolated worker's changes are committed on its branch when
+        // it stops, so the coordinator's merge takes them.
+        if self.isolates_workers() {
+            let body = templates::load_embedded("claude/hooks/worker-commit.sh")?;
+            components.push(("hooks/worker-commit.sh".to_string(), body));
         }
         // A worktree's notes reach the main checkout, on approval, when
         // ExitWorktree removes it.
@@ -2915,6 +2931,16 @@ impl Project {
             "PostToolUse",
             json!({ "matcher": "Write|Edit|MultiEdit", "hooks": [ read ] }),
         );
+        if self.isolates_workers() {
+            // An isolated worker has no shell to commit with, and Claude Code
+            // refuses the coordinator's git commands in another worktree: commit
+            // what it leaves on its own branch when it stops. Not a gate: if it
+            // fails, the change stays uncommitted and it says so.
+            push(
+                "SubagentStop",
+                json!({ "hooks": [ command_hook(hook_cmd(prefix, dir, "worker-commit.sh")) ] }),
+            );
+        }
         if self.keeps_notes() {
             // Notes are git-ignored and count as no change, so removing a worktree
             // would delete its own silently: before ExitWorktree removes one, the

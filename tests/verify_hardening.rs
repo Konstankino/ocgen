@@ -810,7 +810,12 @@ fn a_key_no_generated_gate_reads_is_not_a_failure() {
     p.claude.workflow.intent = false;
     p.scaffold(dir.path(), false).unwrap();
     let s = settings_of(dir.path());
-    assert!(s["hooks"].get("SubagentStop").is_none(), "{s:#?}");
+    assert!(
+        !s["hooks"]["SubagentStop"]
+            .to_string()
+            .contains("subagent-confidence-gate"),
+        "{s:#?}"
+    );
     assert!(s["hooks"].get("PreToolUse").is_some(), "{s:#?}");
     let unread = json!({ "env": {
         "SUBAGENT_READONLY_ROLES": "implementer general-purpose",

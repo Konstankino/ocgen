@@ -187,7 +187,7 @@ fn claude_coordinator_runs_the_adversary_loop() {
         "UNRESOLVED",
         // The implementer works in a worktree: its branch must be merged first.
         "implementer works in its own git worktree",
-        "merge its branch",
+        "merge that branch",
     ] {
         assert!(coord.contains(must), "missing {must:?} in:\n{coord}");
     }
