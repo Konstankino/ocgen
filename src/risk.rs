@@ -32,7 +32,10 @@ pub const HIGH_IMPACT_PARTS: [&str; 20] = [
     // A git alias that pushes (`git -c alias.p=push p`, `git config alias.p push`).
     r"git[[:space:]].*alias\.[^=[:space:]]+[[:space:]=]+[^[:space:]]*(push|merge)",
     r"gh[[:space:]]+(pr[[:space:]]+merge|release|repo[[:space:]]+delete|api[[:space:]]|workflow[[:space:]]+run)",
-    r"aws[[:space:]]+[a-z0-9-]+[[:space:]]+[a-z0-9-]*(delete|terminate|create|put|update|modify|remove|rm|mv|cp|sync|stop|start|reboot|run-instances|deregister|detach|attach|associate|disassociate|scale|apply|invoke|publish|import|export|restore|purge|send-)",
+    // An aws word that starts with a mutating verb (`cp`, `delete-bucket`), after
+    // any options: `--profile dev` before the service can't hide one, and a read
+    // that merely contains a verb (`list-attached-role-policies`) isn't one.
+    r"(^|[^[:alnum:]_.-])aws([[:space:]]+[^[:space:];&|)<>`]+)*[[:space:]]+(delete|terminate|create|put|update|modify|remove|rm|mv|cp|sync|stop|start|reboot|run-instances|deregister|detach|attach|associate|disassociate|scale|apply|invoke|publish|import|export|restore|purge|send)(-[a-z0-9-]*)?{END}",
     r"(gcloud|az)[[:space:]].*(delete|create|update|deploy|remove|apply)",
     r"(terraform|tofu){OPT}[[:space:]]+(apply|destroy){END}",
     r"pulumi{OPT}[[:space:]]+(up|update|destroy){END}",

@@ -2043,7 +2043,7 @@ and inside the ocgen binary (`ocgen hook <name>`). The generated hook command us
 binary when a compatible ocgen is installed, and the script otherwise:
 
 ```sh
-if [ "$(ocgen hook --check 2>/dev/null)" = "ocgen-hooks 24" ]; then ocgen hook team-approval-gate; else sh ".../team-approval-gate.sh"; fi
+if [ "$(ocgen hook --check 2>/dev/null)" = "ocgen-hooks 25" ]; then ocgen hook team-approval-gate; else sh ".../team-approval-gate.sh"; fi
 ```
 
 - **The binary gives you** real JSON parsing instead of `grep`, and hooks that work on
@@ -2126,7 +2126,12 @@ ocgen approve --revoke     # re-lock now
   path. It matches through global flags, quoting and shell operators (`git -C . push`,
   `git "push"`, `pnpm -r publish`, `docker buildx build --push`, `curl --json …`,
   `git -c alias.p=push p`), and catches deploy and publish scripts and make targets
-  (`sh ./deploy.sh`, `make deploy`); reading or grepping those files is still allowed. It is
+  (`sh ./deploy.sh`, `make deploy`); reading or grepping those files is still allowed. An `aws`
+  call is judged by its operation: a word after `aws` that starts with a mutating verb
+  (`s3 cp`, `delete-bucket`, `terminate-instances`) is gated wherever it stands, so
+  `aws --profile dev s3 cp …` is caught, while reads such as `describe-*`, `list-*` and `get-*`
+  pass, `iam list-attached-role-policies` included. `logs start-query` starts a billable job and
+  stays gated; a value that is itself such a word (`--name delete-me`) is gated too. It is
   still a text match, so a variable, `$(…)`, a `cd` or a script from an earlier call can phrase
   around it. **With the sandbox on** — the default with the gate on macOS, Linux and WSL2 —
   shell commands can't write the approval store and, unless you opt in, run without the

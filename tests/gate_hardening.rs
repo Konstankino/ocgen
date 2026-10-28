@@ -742,6 +742,59 @@ fn common_publish_and_deploy_phrasings_are_gated() {
     }
 }
 
+/// An `aws` call is judged by its operation word, wherever it stands: a global
+/// option before the service (`--profile dev`) must not hide a mutation, and a
+/// read whose name merely contains a verb (`list-attached-…`) is not one.
+#[test]
+fn aws_calls_are_gated_by_their_operation() {
+    let dir = project();
+    let gated = [
+        "aws s3 cp build.tgz s3://bucket/build.tgz",
+        "aws --profile dev s3 cp build.tgz s3://bucket/build.tgz",
+        "aws --profile=dev s3 rm s3://bucket/x",
+        "aws --debug s3 rm s3://bucket/x --recursive",
+        "aws --no-cli-pager --region eu-west-1 ec2 terminate-instances --instance-ids i-1",
+        "aws s3 --profile dev sync . s3://bucket",
+        "aws --output json s3 mv s3://bucket/a s3://bucket/b",
+        "aws --profile dev lambda invoke --function-name f out.json",
+        "aws sqs send-message --queue-url q --message-body x",
+        "aws --region us-east-1 iam attach-role-policy --role-name r --policy-arn p",
+        "aws ec2 start-instances --instance-ids i-1",
+        // Starts a billable query job: kept behind the gate.
+        "aws logs start-query --log-group-name g --query-string x",
+        "/usr/local/bin/aws --profile dev s3 cp a s3://bucket/a",
+        "cd infra && aws --profile dev dynamodb delete-table --table-name t",
+    ];
+    for cmd in gated {
+        assert!(
+            ocgen::risk::high_impact(&ocgen::risk::normalize(cmd)).is_some(),
+            "should be high-impact: {cmd}"
+        );
+        expect(dir.path(), &bash(cmd), 2);
+    }
+    let ordinary = [
+        "aws sts get-caller-identity --profile dev",
+        "aws --profile dev sts get-caller-identity",
+        "aws --region eu-west-1 --output json ec2 describe-instances",
+        "aws s3api list-buckets",
+        "aws s3 ls",
+        "aws --profile dev s3 ls s3://bucket/delete-me/",
+        "aws iam list-attached-role-policies --role-name r",
+        "aws ec2 describe-export-tasks",
+        "aws ec2 describe-transit-gateway-attachments",
+        "aws ec2 describe-instances --filters Name=instance-state-name,Values=stopped",
+        "aws ec2 describe-instances | grep start",
+        "laws s3 rm x",
+    ];
+    for cmd in ordinary {
+        assert!(
+            ocgen::risk::high_impact(&ocgen::risk::normalize(cmd)).is_none(),
+            "should NOT be high-impact: {cmd}"
+        );
+        expect(dir.path(), &bash(cmd), 0);
+    }
+}
+
 #[test]
 fn ask_rules_cover_the_same_phrasings() {
     let ask = ocgen::claude::HIGH_IMPACT_ASK;
