@@ -1,45 +1,7 @@
 ---
-description: {% if language == "Ukrainian" %}Побудувати й затвердити спільний план команди до виконання{% else %}Build and approve the team's shared plan before execution{% endif %}
+description: Build and approve the team's shared plan before execution
 argument-hint: "[what the team should accomplish]"
 ---
-{% if language == "Ukrainian" -%}
-Мета: $ARGUMENTS
-
-Спроєктуй **спільний план** команди разом із користувачем, перш ніж хтось почне роботу.
-
-## 1. Інтерв'ю
-Став добре продумані питання по одному (2–4 варіанти за замовчуванням, рекомендований першим,
-з однорядковим поясненням). Охопи обсяг, обмеження, критерії успіху, крайні випадки та те, що
-поза межами. Решту виведи самостійно й зазнач, що саме припустив.
-
-## 2. Спільний список задач
-Запиши намір і нумерований список задач у `.claude/team/plan.md`. Дай кожній задачі id і
-виконавця — teammate на ім'я: `Owner: <teammate-name>`. Називай teammate за роллю, з номером,
-якщо роль має кількох (`implementer-1`, `implementer-2`); ролі: {% for sub in subagents %}{{ sub.name }}{% if not loop.last %}, {% endif %}{% endfor %}.
-Дві задачі не повинні редагувати одні й ті самі файли. Задача може звузити перевірку проєкту
-рядком `Check:` в описі — та сама перевірка з аргументами (напр. `Check: cargo test -p parser`);
-інші рядки `Check:` ігноруються.
-
-## 3. Реєстр ризиків — раунд пом'якшення для КОЖНОГО ризику
-У тому ж файлі перелічи всі передбачувані ризики. Кожен ризик — **одним рядком** з
-`Owner: <teammate-name>` (teammate, відповідальний за пом'якшення) та `Mitigation: pending`, напр.
-`- Risk: втрата даних — Owner: implementer-1 — Mitigation: pending`. Жоден ризик не проходить без
-власника й раунду пом'якшення — лишай `pending`, доки не оброблено, потім `done` або `accepted`.
-Хук `TeammateIdle` тримає teammate лише поки відкритий ризик, що **йому належить**; власник-роль
-(`Owner: implementer`) нікого не тримає, бо роль можуть мати кілька teammate.
-
-## 4. Презентація та доопрацювання
-Презентуй план і **явно запроси заперечення з аргументами**. Відповідай на питання й вноси
-запитані зміни/покращення. Повторюй, доки користувач не схвалить. НЕ спавни виконавців і не
-створюй задач виконання на цьому етапі.
-
-## 5. Схвалення
-Після схвалення заміни будь-який рядок `Status:` у `.claude/team/plan.md` на
-`Status: APPROVED session=${CLAUDE_SESSION_ID}`, потім передай роботу `/team`. Схвалення діє лише
-для цього плану й цього запуску команди: зміна плану чи нова сесія робить його застарілим, і план
-треба схвалити знову. Кожен teammate завершує задачу останнім повідомленням із рядком
-`Confidence: NN%` і має бути впевненим ≥ {{ confidence_threshold }}% перед її завершенням.
-{%- else -%}
 Goal: $ARGUMENTS
 
 Design the team's **shared plan** collaboratively before any teammate starts work.
@@ -77,4 +39,3 @@ Once the user approves, replace any `Status:` line in `.claude/team/plan.md` wit
 holds for this plan and this team run only: editing the plan, or a later session, makes it stale
 until the user approves again. Each teammate must end its task with a last message carrying a line
 `Confidence: NN%` and be ≥ {{ confidence_threshold }}% confident before completing a task.
-{%- endif %}

@@ -601,8 +601,11 @@ fn ukrainian_language_variant_renders() {
     p.agents = agent::default_pipeline("Ukrainian", "mac").unwrap();
     let dir = tempdir().unwrap();
     p.scaffold(dir.path(), false).unwrap();
+    // Commands stay English whatever the instruction language.
     let multi = read(dir.path(), ".opencode/commands/multi.md");
-    assert!(multi.contains("Запусти")); // Ukrainian command body
+    assert!(multi.contains("description: Several models in parallel on one task"));
+    assert!(multi.contains("Then consolidate the answers"));
+    assert!(!multi.contains("Запусти"));
 }
 
 #[test]

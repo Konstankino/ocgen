@@ -148,7 +148,8 @@ chose.
 
 A project has two languages:
 - the **instruction language** (`language`) for the agents' prompts and descriptions, and for
-  the command and skill texts;
+  the skills you seed with `ocgen add skill`; the generated commands (`/deliver`, `/team`,
+  `/multi`, …) are always English;
 - the **answer language** (`response_language`) for what you read.
 
 New projects default to **English instructions with Ukrainian answers**. Models follow English
