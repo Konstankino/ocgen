@@ -45,6 +45,10 @@ pub struct Archetype {
     /// Claude Code `effort` default for this role.
     #[serde(default)]
     pub claude_effort: Option<String>,
+    /// A research role: it starts on the manifest's research model (the most
+    /// capable one) instead of `default_model` / `claude_model`.
+    #[serde(default)]
+    pub research: bool,
 }
 
 impl Archetype {

@@ -3,6 +3,7 @@ description: Review a change with this project's agents in parallel, keep only t
 argument-hint: "[empty = this branch against its base | #PR or a PR URL | a branch | a path]"
 allowed-tools: {{ allowed_tools }}
 effort: high
+model: {{ research_model }}
 ---
 Review this change and record what the review finds: $ARGUMENTS
 
@@ -30,6 +31,8 @@ Settings for this project — `/intent`'s, shared (change them with `ocgen edit 
 {% if reading_copies %}
 {% include "intent/reading-copy.md" %}
 {% endif %}
+{{ guidance }}
+
 ## 0. Choose the target and pin it
 Work out what to review from the arguments, then record its base and head commits (`git rev-parse`):
 every agent reviews those, even if the branch moves while you work.

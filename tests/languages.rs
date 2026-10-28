@@ -315,3 +315,67 @@ fn the_shipped_manifest_asks_both_languages() {
     let at = keys.iter().position(|k| *k == "language").unwrap();
     assert_eq!(keys[at + 1], "response_language");
 }
+
+// ------------------------------------------------------------- commands --
+
+/// The generated commands are English whatever the instruction language, so a
+/// Ukrainian project gets every instruction an English one does: `/team`,
+/// `/team-plan` and `/multi` render byte for byte the same in both.
+#[test]
+fn commands_carry_the_same_instructions_in_every_language() {
+    for target in BOTH {
+        let render = |prompts: &str| {
+            let mut p = project(target, prompts, prompts, false);
+            p.claude.team.enabled = true;
+            p.claude.team.plan_gate = true;
+            p.claude.team.confidence_threshold = 96;
+            rendered(&p)
+        };
+        let (en, uk) = (render("English"), render("Ukrainian"));
+        let commands: Vec<&String> = en
+            .keys()
+            .filter(|k| {
+                ["/team/", "/team-plan/", "/multi/", "commands/multi.md"]
+                    .iter()
+                    .any(|c| k.contains(c))
+            })
+            .collect();
+        let want = if target == Target::ClaudeCode { 3 } else { 1 };
+        assert_eq!(commands.len(), want, "{target:?}: {commands:?}");
+        for k in commands {
+            assert_eq!(en[k], uk[k], "{target:?}: {k} differs by language");
+            // A sentence from the middle and the last one of each command.
+            for (name, middle, last) in [
+                (
+                    "/team-plan/",
+                    "a role as owner (`Owner: implementer`) holds no one",
+                    "be ≥ 96% confident before completing a task.",
+                ),
+                (
+                    "/team/",
+                    "3–5 teammates is the sweet spot.",
+                    "task and risk owners in the plan are these names.",
+                ),
+                (
+                    "/multi/",
+                    "Delegate it to each subagent in turn",
+                    "flag disagreements, and give a final decision.",
+                ),
+                (
+                    "commands/multi.md",
+                    "on the task: $ARGUMENTS",
+                    "flag disagreements, and give a final decision.",
+                ),
+            ] {
+                if k.contains(name) {
+                    assert!(uk[k].contains(middle), "{k}: {middle}");
+                    assert!(uk[k].contains(last), "{k}: {last}");
+                    // The shared guidance closes the commands that have no steps.
+                    if name != "/team-plan/" {
+                        assert!(uk[k].trim_end().ends_with("</guidance>"), "{k}");
+                    }
+                }
+            }
+        }
+    }
+}

@@ -71,12 +71,17 @@ impl Agent {
     /// and default provider. Every field is copied so later edits are independent.
     pub fn from_archetype(name: &str, archetype: &str, lang: &str, provider: &str) -> Result<Self> {
         let arch = Archetype::load(archetype)?;
+        let model = if arch.research {
+            crate::manifest::Manifest::load()?.defaults.research_model()
+        } else {
+            arch.default_model.clone()
+        };
         Ok(Agent {
             name: name.to_string(),
             role: archetype.to_string(),
             mode: arch.mode.clone(),
             provider: provider.to_string(),
-            model: arch.default_model.clone(),
+            model,
             temperature: arch.temperature.clone(),
             steps: arch.steps,
             color: arch.color.clone(),
@@ -113,12 +118,19 @@ impl Agent {
         } else {
             arch.body_for(lang)
         };
+        let model = if arch.research {
+            crate::manifest::Manifest::load()?
+                .defaults
+                .claude_research_model()
+        } else {
+            arch.claude_model()
+        };
         Ok(Agent {
             name: name.to_string(),
             role: archetype.to_string(),
             mode: arch.mode.clone(),
             provider: String::new(),
-            model: arch.claude_model(),
+            model,
             tools: arch.tools(),
             color: claude_color(&arch.color),
             description: arch.description_for(lang),
@@ -189,7 +201,7 @@ mod tests {
         // Subagent role: alias + tools from the archetype, provider cleared.
         let rev = Agent::from_archetype_claude("explorer", "reviewer", "English").unwrap();
         assert_eq!(rev.mode, "subagent");
-        assert_eq!(rev.model, "fable");
+        assert_eq!(rev.model, "opus");
         assert_eq!(rev.tools, "Read, Grep, Glob");
         assert_eq!(rev.provider, "");
         assert!(!rev.description.is_empty());
@@ -213,17 +225,17 @@ mod tests {
 
     #[test]
     fn claude_defaults_fit_each_role() {
-        // (role, model, effort): opus where mistakes cost the most, a cheaper model
-        // for the read-heavy roles, and a reviewer on another model.
+        // (role, model, effort): opus everywhere — the research roles start on the
+        // manifest's research model, the most capable — and the review at max.
         let want = [
             ("coordinator", "opus", ""),
-            ("explorer", "sonnet", "medium"),
+            ("explorer", "opus", "high"),
             ("implementer", "opus", ""),
-            ("reviewer", "fable", "high"),
+            ("reviewer", "opus", "max"),
             ("adversary", "opus", "high"),
-            ("scope-guard", "sonnet", "high"),
+            ("scope-guard", "opus", "high"),
             ("privacy-guard", "opus", "high"),
-            ("verifier", "sonnet", ""),
+            ("verifier", "opus", ""),
         ];
         for (role, model, effort) in want {
             let a = Agent::from_archetype_claude(role, role, "English").unwrap();
@@ -233,25 +245,15 @@ mod tests {
                 "{role}"
             );
         }
-        let model = |role: &str| {
-            Agent::from_archetype_claude(role, role, "English")
-                .unwrap()
-                .model
-        };
-        // A reviewer on the implementer's model tends to miss the same things.
-        assert_ne!(model("reviewer"), model("implementer"));
-        assert_ne!(model("adversary"), model("reviewer"));
-        // The scope guard checks the implementer's work against the plan.
-        assert_ne!(model("scope-guard"), model("implementer"));
-
-        // The OpenCode defaults stay as they are.
+        // OpenCode: the research roles start on the manifest's research model, the
+        // others keep their archetype's.
         for (role, local) in [
-            ("explorer", "gemma-26b"),
+            ("explorer", "qwen3-35b-a3b"),
             ("implementer", "qwen3-coder-30b"),
-            ("reviewer", "gemma-26b"),
+            ("reviewer", "qwen3-35b-a3b"),
             ("adversary", "devstral-24b"),
-            ("scope-guard", "gemma-26b"),
-            ("verifier", "qwen3.5-9b"),
+            ("scope-guard", "qwen3-35b-a3b"),
+            ("verifier", "qwen3-35b-a3b"),
         ] {
             let a = Agent::from_archetype(role, role, "English", "mac").unwrap();
             assert_eq!(a.model, local, "{role}");

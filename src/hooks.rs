@@ -23,7 +23,7 @@ use serde_json::Value;
 /// embedded in the ocgen that generated the project (hook scripts can't be
 /// overridden from the template dir), so they implement the same protocol —
 /// unless someone edits the project's copies by hand.
-pub const PROTOCOL: &str = "ocgen-hooks 24";
+pub const PROTOCOL: &str = "ocgen-hooks 26";
 
 /// How long Claude Code lets a gate that runs the project check (SubagentStop,
 /// TaskCompleted) take, in seconds: its hook `timeout`. Claude Code treats a
@@ -36,7 +36,7 @@ pub const CHECK_GATE_TIMEOUT: u64 = 3600;
 pub const CHECK_TIMEOUT_MAX: u64 = CHECK_GATE_TIMEOUT - 60;
 
 /// Every hook `ocgen hook <name>` accepts (matching the script names minus `.sh`).
-pub const NAMES: [&str; 20] = [
+pub const NAMES: [&str; 21] = [
     "subagent-confidence-gate",
     "team-task-completed",
     "team-task-created",
@@ -53,11 +53,20 @@ pub const NAMES: [&str; 20] = [
     "intent-approvers",
     "recap-github",
     "github-read",
+    "aws-read",
     "session-end",
     "shell-sandbox",
     "worktree-notes",
     "worker-commit",
 ];
+
+/// Recorded approvals one write of an intent file or draft has checked against
+/// their GitHub comments, so the hook stays within its timeout.
+pub const SIGN_OFF_CHECKS: usize = 5;
+
+/// The `intent-approvers` hook's `timeout` in Claude Code, in seconds: room for
+/// [`SIGN_OFF_CHECKS`] reads of 8 seconds each.
+pub const INTENT_APPROVERS_TIMEOUT: u64 = 90;
 
 /// The safety gates: a gate that can't start, crashes, times out or exits with
 /// anything but 0 or 2 blocks what it guards (`onFailure: "block"`, Claude Code
@@ -414,6 +423,7 @@ pub fn run(name: &str, payload: &str, env: &HashMap<String, String>) -> Outcome 
         "intent-approvers" => h.intent_approvers(),
         "recap-github" => h.recap_github(),
         "github-read" => h.github_read(),
+        "aws-read" => h.aws_read(),
         "session-end" => h.session_end(),
         "shell-sandbox" => h.shell_sandbox(),
         "worktree-notes" => h.worktree_notes(),
@@ -2819,6 +2829,7 @@ impl<'a> Hook<'a> {
                 intent::NO_APPROVERS
             ));
         }
+        reasons.extend(self.check_sign_offs(&root, &file, &rel));
         if kind == intent::Kind::Draft {
             let wraps = std::fs::read_to_string(&file)
                 .map(|t| intent::hard_wraps(&t))
@@ -2845,6 +2856,57 @@ impl<'a> Hook<'a> {
             stdout: format!("{out}\n"),
             stderr: String::new(),
         }
+    }
+
+    /// The recorded approvals in `file` that link a GitHub comment, each checked
+    /// against the comment itself: its author must be that approver's own login,
+    /// on the issue or pull request the link names. Read-only, with the user's gh
+    /// login, on the project's own remotes, at most [`SIGN_OFF_CHECKS`] of them.
+    /// What it can't check is said to be unconfirmed, never passed.
+    fn check_sign_offs(&self, root: &Path, file: &Path, rel: &str) -> Vec<String> {
+        if self.probe() {
+            return Vec::new();
+        }
+        let text = std::fs::read_to_string(file).unwrap_or_default();
+        let gh = crate::recap::Gh {
+            program: self.env("OCGEN_GITHUB_GH").trim().to_string(),
+            limit: Duration::from_secs(self.env_num("OCGEN_SIGN_OFF_TIMEOUT", 8)),
+        };
+        let mut reasons = Vec::new();
+        for a in crate::intent::linked_approvals(&text)
+            .iter()
+            .take(SIGN_OFF_CHECKS)
+        {
+            if a.handle.contains('/') {
+                reasons.push(format!(
+                    "ocgen: {rel} records @{}'s approval at {}: a team's sign-off can't be checked \
+                     by one comment's author — confirm with the user who signed off for the team.",
+                    a.handle, a.link
+                ));
+                continue;
+            }
+            match crate::github::read_comment(root, &gh, &a.owner, &a.repo, a.comment) {
+                Ok((login, number))
+                    if login.eq_ignore_ascii_case(&a.handle) && number == a.number => {}
+                Ok((login, number)) if number != a.number => reasons.push(format!(
+                    "ocgen: {rel} records @{}'s approval at {}, but that comment is on #{number}, \
+                     not #{} (by @{login}). Fix the line, and don't start the work on it.",
+                    a.handle, a.link, a.number
+                )),
+                Ok((login, _)) => reasons.push(format!(
+                    "ocgen: {rel} records @{}'s approval at {}, but that comment is by @{login}. \
+                     A sign-off counts only from the approver's own login: set the line back to \
+                     pending, and don't start the work until @{} approves.",
+                    a.handle, a.link, a.handle
+                )),
+                Err(why) => reasons.push(format!(
+                    "ocgen: couldn't check @{}'s approval at {} in {rel} ({why}): treat it as \
+                     unconfirmed until the comment is read.",
+                    a.handle, a.link
+                )),
+            }
+        }
+        reasons
     }
 
     /// PostToolUse (Write|Edit|MultiEdit): when /recap writes its GitHub request,
@@ -2880,6 +2942,26 @@ impl<'a> Hook<'a> {
         };
         let note = crate::github::answer(&root, &gh, crate::github::BUDGET, self.probe());
         post_tool_note(note)
+    }
+
+    /// PostToolUse (Write|Edit|MultiEdit): when Claude writes its AWS request, run
+    /// the calls that only read metadata with the user's own AWS CLI and the
+    /// project's dev profile — after checking that the profile is the dev
+    /// account — and hand Claude the output in the note, written nowhere. A hook
+    /// runs outside the Bash sandbox, which withholds `~/.aws` from Claude's
+    /// shell. Any other write passes untouched. Never fails a write.
+    fn aws_read(&self) -> Outcome {
+        let Some(root) = self.wrote(crate::aws::REQUEST) else {
+            return Outcome::allow();
+        };
+        let settings = crate::render::Project::load_state(&root)
+            .map(|p| p.claude.aws)
+            .unwrap_or_default();
+        let cli = crate::aws::Cli {
+            program: self.env("OCGEN_AWS_CLI").trim().to_string(),
+            limit: Duration::from_secs(self.env_num("OCGEN_AWS_TIMEOUT", 20)),
+        };
+        post_tool_note(crate::aws::answer(&root, &settings, &cli, self.probe()))
     }
 
     /// The project, when this event is a file tool's write of its file `rel`.

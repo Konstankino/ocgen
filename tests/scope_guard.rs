@@ -76,7 +76,8 @@ fn the_archetype_seeds_a_read_only_claude_subagent() {
     let a = Agent::from_archetype_claude("scope-guard", "scope-guard", "English").unwrap();
     assert_eq!(a.role, "scope-guard");
     assert_eq!(a.mode, "subagent");
-    assert_eq!(a.model, "sonnet");
+    // Its verdict is research: the research model.
+    assert_eq!(a.model, "opus");
     assert_eq!(a.tools, "Read, Grep, Glob, Bash");
     assert_eq!(a.disallowed_tools, "Edit, Write, NotebookEdit");
     assert_eq!(a.steps, Some(30));
@@ -89,7 +90,7 @@ fn the_archetype_seeds_a_read_only_claude_subagent() {
 fn the_archetype_seeds_an_opencode_subagent_that_runs_only_git_reads() {
     let a = Agent::from_archetype("scope-guard", "scope-guard", "English", "mac").unwrap();
     assert_eq!(a.mode, "subagent");
-    assert_eq!(a.model, "gemma-26b");
+    assert_eq!(a.model, "qwen3-35b-a3b");
     assert_eq!(a.color, "success");
     assert_eq!(a.steps, Some(30));
     for rule in [
@@ -181,7 +182,7 @@ fn claude_writes_the_scope_guard_agent_file() {
         "name: scope-guard\n",
         "description: Checks the change against the plan",
         "tools: Read, Grep, Glob, Bash\n",
-        "model: sonnet\n",
+        "model: opus\n",
         "color: green\n",
         "maxTurns: 30\n",
         "disallowedTools: Edit, Write, NotebookEdit\n",
@@ -360,7 +361,7 @@ fn opencode_writes_the_guard_and_lets_the_coordinator_call_it() {
     let md = read(dir.path(), ".opencode/agents/scope-guard.md");
     for line in [
         "mode: subagent\n",
-        "model: mac/gemma-26b\n",
+        "model: mac/qwen3-35b-a3b\n",
         "steps: 30\n",
         "color: success\n",
         "  edit: deny\n",

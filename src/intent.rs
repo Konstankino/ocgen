@@ -178,6 +178,49 @@ pub fn pending(text: &str) -> bool {
         .is_none_or(|s| s.to_ascii_lowercase().starts_with("proposed"))
 }
 
+/// A recorded approval that links the GitHub comment it rests on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinkedApproval {
+    /// The approver as written, without the `@` (`alice`, or `org/team`).
+    pub handle: String,
+    pub owner: String,
+    pub repo: String,
+    /// The issue's or pull request's number.
+    pub number: u64,
+    /// The comment's ID (`#issuecomment-<id>`).
+    pub comment: u64,
+    /// The link as written.
+    pub link: String,
+}
+
+/// The approvals in `text` that link an issue or pull-request comment: a line
+/// that names an approver (`@login`), says `approved`, and links
+/// `https://github.com/<owner>/<repo>/(issues|pull)/<n>#issuecomment-<id>` —
+/// the Sign-off lines of an intent file and the ticked Needs-from lines of a
+/// draft. A line whose approver is a pending or rejected one isn't one.
+pub fn linked_approvals(text: &str) -> Vec<LinkedApproval> {
+    static RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    let re = RE.get_or_init(|| {
+        Regex::new(
+            r"@([A-Za-z0-9][A-Za-z0-9-]*(?:/[A-Za-z0-9_.-]+)?)\b[^\n]*?\bapproved\b[^\n]*?(https://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/(?:issues|pull)/([0-9]+)#issuecomment-([0-9]+))",
+        )
+        .expect("valid regex")
+    });
+    text.lines()
+        .filter_map(|l| re.captures(l))
+        .filter_map(|c| {
+            Some(LinkedApproval {
+                handle: c[1].to_string(),
+                owner: c[3].to_string(),
+                repo: c[4].to_string(),
+                number: c[5].parse().ok()?,
+                comment: c[6].parse().ok()?,
+                link: c[2].to_string(),
+            })
+        })
+        .collect()
+}
+
 /// The gaps of file `path` against `approvers`; `None` when it is fine,
 /// decided, or unreadable.
 pub fn check_file(path: &Path, approvers: &[String]) -> Option<Gaps> {

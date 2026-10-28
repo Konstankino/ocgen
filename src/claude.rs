@@ -63,6 +63,12 @@ pub struct SkillPreset {
     pub context_fork: bool,
     #[serde(default)]
     pub agent: String,
+    /// A research skill: it runs on the project's research model.
+    #[serde(default)]
+    pub research: bool,
+    /// The skill's `effort` (empty = the session's).
+    #[serde(default)]
+    pub effort: String,
     /// Language-keyed numbered-step body.
     pub body: HashMap<String, String>,
 }
@@ -78,6 +84,7 @@ impl SkillPreset {
             disable_model_invocation: self.disable_model_invocation,
             context_fork: self.context_fork,
             agent: self.agent.clone(),
+            effort: self.effort.clone(),
             ..Default::default()
         }
     }
@@ -120,9 +127,44 @@ pub struct ClaudeConfig {
     pub permissions: PermissionRules,
     /// How `/intent` numbers intent files and sizes the GitHub issue draft.
     pub intent: IntentSettings,
+    /// The model research runs on: the research roles' model and the one the
+    /// skills name when they hand research to a subagent (empty = `opus`).
+    pub research_model: String,
+    /// The opt-in read-only check against the project's AWS dev account
+    /// (`ocgen edit aws`).
+    pub aws: AwsSettings,
     /// Keys this ocgen doesn't know (written by a newer one), kept as they are.
     #[serde(flatten)]
     pub extra: serde_json::Map<String, serde_json::Value>,
+}
+
+/// The research model a Claude project gets when it names none: an alias,
+/// which follows the newest model of its family.
+pub const DEFAULT_RESEARCH_MODEL: &str = "opus";
+
+/// The read-only check of claims against the project's AWS dev account
+/// (`ocgen edit aws`). Off unless the project opts in and names the profile and
+/// the account; then the agents read AWS through the `aws-read` hook.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AwsSettings {
+    pub enabled: bool,
+    /// The AWS CLI profile of the dev account (in the user's `~/.aws`).
+    pub profile: String,
+    /// The region the calls use (empty = the profile's own).
+    pub region: String,
+    /// The dev account's 12-digit ID: every answer first checks it.
+    pub account_id: String,
+}
+
+impl AwsSettings {
+    /// Whether the check renders: switched on, with a profile and a valid account.
+    pub fn active(&self) -> bool {
+        self.enabled
+            && crate::validate::aws_profile(&self.profile).is_ok()
+            && crate::validate::aws_account_id(&self.account_id).is_ok()
+            && (self.region.is_empty() || crate::validate::aws_region(&self.region).is_ok())
+    }
 }
 
 /// Where the `/intent` templates live in a project. Written once with ocgen's

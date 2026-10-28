@@ -16,6 +16,7 @@ pub const VERSION: &str = match option_env!("OCGEN_BUILD_VERSION") {
 pub mod agent;
 pub mod approval;
 pub mod archetype;
+pub mod aws;
 pub mod claude;
 mod clock;
 pub mod diff;

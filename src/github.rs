@@ -1286,3 +1286,56 @@ pub fn answer(root: &Path, gh: &Gh, budget: Duration, probe: bool) -> String {
         Err(e) => format!("ocgen could not write {ANSWER} ({e}): GitHub wasn't read — say so."),
     }
 }
+
+// ---------------------------------------------------------- sign-off check --
+
+/// Who wrote issue comment `id` on `owner/repo`, and the number of the issue or
+/// pull request it is on: one read-only `gh api` GET with the user's login, on
+/// the project's own github.com remotes only, like every request here. For the
+/// `intent-approvers` hook, which checks that a recorded approval is the
+/// approver's own comment.
+pub fn read_comment(
+    root: &Path,
+    gh: &Gh,
+    owner: &str,
+    repo: &str,
+    id: u64,
+) -> Result<(String, u64), String> {
+    let remotes = remotes(root);
+    if !remotes.iter().any(|r| r.is(owner, repo)) {
+        return Err(format!(
+            "{owner}/{repo} isn't a github.com remote of this project"
+        ));
+    }
+    let args: Vec<String> = [
+        "api",
+        "--hostname",
+        "github.com",
+        "--method",
+        "GET",
+        &format!("repos/{owner}/{repo}/issues/comments/{id}"),
+    ]
+    .map(String::from)
+    .to_vec();
+    match gh.call(root, &args, "", gh.limit) {
+        Err(e) if e.starts_with("could not start") => Err(GH_MISSING.to_string()),
+        Err(e) => Err(format!("gh {e}")),
+        Ok((0, out, _)) => {
+            let v: Value =
+                serde_json::from_str(&out).map_err(|e| format!("gh's answer isn't JSON ({e})"))?;
+            let login = v
+                .pointer("/user/login")
+                .and_then(Value::as_str)
+                .ok_or("the comment names no author")?
+                .to_string();
+            let number = v
+                .get("issue_url")
+                .and_then(Value::as_str)
+                .and_then(|u| u.rsplit('/').next())
+                .and_then(|n| n.parse().ok())
+                .ok_or("the comment names no issue")?;
+            Ok((login, number))
+        }
+        Ok((code, _, err)) => Err(first_line(&err, code)),
+    }
+}

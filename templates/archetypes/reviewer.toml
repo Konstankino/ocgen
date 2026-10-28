@@ -13,13 +13,14 @@ permissions = """
   webfetch: deny
 """
 
-# Claude Code defaults for this role. Another model than the implementer's, so
-# the review doesn't share its blind spots.
-claude_model = "fable"
+# Claude Code defaults for this role. A review checks claims, which is research,
+# so it starts on the research model (`research`) at the highest effort.
+research = true
+claude_model = "opus"
 tools = "Read, Grep, Glob"
 claude_max_turns = 30
 claude_disallowed_tools = "Edit, Write, NotebookEdit"
-claude_effort = "high"
+claude_effort = "max"
 
 [description]
 Ukrainian = "Незалежне ревʼю іншою моделлю: коректність, дизайн, ризики; тільки читання"

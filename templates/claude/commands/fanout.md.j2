@@ -1,8 +1,12 @@
 ---
 description: Fan work out to worktree-isolated subagents so parallel edits never collide
 argument-hint: "[the task to parallelize]"
+model: {{ research_model }}
+effort: high
 ---
 Parallelize this work across isolated worktrees: $ARGUMENTS
+
+{{ guidance }}
 
 ## 1. Split into independent slices
 Break the task into slices that touch **disjoint sets of files** and have no cross-dependencies.
