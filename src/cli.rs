@@ -453,6 +453,25 @@ pub enum EditWhat {
         #[command(flatten)]
         changes: IntentCli,
     },
+    /// Check claims against the project's AWS dev account, read-only (Claude
+    /// projects only).
+    ///
+    /// Agents check what is deployed (a resource exists, a setting has a value,
+    /// an IAM policy allows something) through the `aws-read` hook: it runs
+    /// outside the sandbox with your AWS CLI and this profile, checks the
+    /// account first, runs only calls that read metadata (describe-*, list-*,
+    /// get-*, minus those that return secrets or contents) and saves nothing.
+    /// Give the profile a role with read-only access: IAM is what keeps it
+    /// read-only. With flags the changes apply directly; without flags the
+    /// command asks.
+    #[command(after_help = AWS_EXAMPLES)]
+    Aws {
+        /// Directory of the existing project.
+        #[arg(short, long, default_value = ".")]
+        path: String,
+        #[command(flatten)]
+        changes: AwsCli,
+    },
     /// The documentation sites agents may fetch: one list for every agent, skill
     /// and team member (both targets).
     ///
@@ -510,6 +529,43 @@ Examples:
   ocgen edit intent --issue-template                       # edit the issue structure in $EDITOR
   ocgen edit intent --reset-intent-template                # back to ocgen's default
   ocgen edit intent --disable                              # remove /intent from the project";
+
+const AWS_EXAMPLES: &str = "\
+Examples:
+  ocgen edit aws --profile acme-dev --account 123456789012 --region eu-west-1
+  ocgen edit aws --show        # the current settings
+  ocgen edit aws               # interactive
+  ocgen edit aws --disable     # turn the check off (the settings are kept)";
+
+/// AWS dev account check changes given on the command line (`ocgen edit aws`).
+#[derive(clap::Args, Default)]
+pub struct AwsCli {
+    /// The AWS CLI profile of the dev account (in your ~/.aws).
+    #[arg(long, value_name = "PROFILE")]
+    pub profile: Option<String>,
+    /// The dev account's 12-digit ID: every answer checks it first.
+    #[arg(long, value_name = "ID")]
+    pub account: Option<String>,
+    /// The region the calls use ("" = the profile's own).
+    #[arg(long, value_name = "REGION")]
+    pub region: Option<String>,
+    /// Turn the check off (the settings are kept).
+    #[arg(long)]
+    pub disable: bool,
+    /// Show the current settings and change nothing.
+    #[arg(long, conflicts_with = "disable")]
+    pub show: bool,
+}
+
+impl AwsCli {
+    pub fn is_empty(&self) -> bool {
+        self.profile.is_none()
+            && self.account.is_none()
+            && self.region.is_none()
+            && !self.disable
+            && !self.show
+    }
+}
 
 /// `/intent` changes given on the command line (`ocgen edit intent`).
 #[derive(clap::Args, Default)]

@@ -403,12 +403,13 @@ fn undo(from: &str) -> String {
 /// settings, minus the keys that name a command to run.
 fn probe_env_key(key: &str) -> bool {
     const PREFIXES: [&str; 4] = ["OCGEN_", "TEAM_", "LOOP_GUARD_", "SUBAGENT_"];
-    const COMMANDS: [&str; 5] = [
+    const COMMANDS: [&str; 6] = [
         "OCGEN_CHECK_CMD",
         "OCGEN_FORMAT_CMD",
         "OCGEN_NOTES_BROWSER",
         "OCGEN_RECAP_GH",
         "OCGEN_GITHUB_GH",
+        "OCGEN_AWS_CLI",
     ];
     (PREFIXES.iter().any(|p| key.starts_with(p)) || key == "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS")
         && !COMMANDS.contains(&key)
@@ -1331,10 +1332,12 @@ fn weakens(key: &str, want: Option<&str>, got: Option<&str>, ocgen: &Value) -> b
         }
         "TEAM_TASK_GATE" => worker_gate && got == Some("1") && want != Some("1"),
         "OCGEN_HOOK_PROBE" => got.is_some(),
-        // Replaces gh in /recap's GitHub hook and in the GitHub read, which run
-        // with the user's gh login outside the sandbox; ocgen never sets them
-        // (tests only).
-        "OCGEN_RECAP_GH" | "OCGEN_GITHUB_GH" => got.is_some_and(|g| !g.trim().is_empty()),
+        // Replaces gh in /recap's GitHub hook and in the GitHub read, and the AWS
+        // CLI in the AWS read, which run with the user's own login outside the
+        // sandbox; ocgen never sets them (tests only).
+        "OCGEN_RECAP_GH" | "OCGEN_GITHUB_GH" | "OCGEN_AWS_CLI" => {
+            got.is_some_and(|g| !g.trim().is_empty())
+        }
         // The reset that keeps git from asking a keychain (claude::GIT_HELPER_RESET).
         "GIT_CONFIG_COUNT" | "GIT_CONFIG_KEY_0" | "GIT_CONFIG_VALUE_0" => {
             want.is_some() && got != want
@@ -3551,6 +3554,7 @@ mod tests {
             "OCGEN_CHECK_CMD",
             "OCGEN_RECAP_GH",
             "OCGEN_GITHUB_GH",
+            "OCGEN_AWS_CLI",
         ] {
             assert!(!probe_env_key(key), "{key}");
         }
@@ -3665,6 +3669,8 @@ mod tests {
         assert!(!w("OCGEN_RECAP_GH", None, Some(" ")));
         assert!(w("OCGEN_GITHUB_GH", None, Some("sh ./x")));
         assert!(!w("OCGEN_GITHUB_GH", None, Some(" ")));
+        assert!(w("OCGEN_AWS_CLI", None, Some("sh ./x")));
+        assert!(!w("OCGEN_AWS_CLI", None, Some(" ")));
         assert!(!w("OCGEN_NO_JQ", None, Some("1")));
 
         // No worker gate, no risk gate: their lists and switches loosen nothing.

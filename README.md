@@ -556,21 +556,33 @@ Claude Code has no per-agent providers or base URLs, an agent's model is a Claud
 provider and utility-model questions are replaced by an alias plus a **tools** allow-list
 per agent.
 
-The default team gives each role a model that fits its job:
+The default team gives each role a model that fits its job. Research runs on the most capable
+model: the **research model**, `opus` unless the manifest says otherwise (`[defaults]
+claude_research_model`; an alias follows the newest model of its family, so it doesn't go stale).
+The roles that gather or test evidence start on it:
 
 | Role | Model | Effort | Why |
 |---|---|---|---|
 | coordinator (the session's `model` in `settings.json`) | `opus` | session's | Planning errors cascade |
-| explorer | `sonnet` | `medium` | Reads the most and decides the least; others check its findings |
+| explorer | research model | `high` | Research: reading code, gathering evidence, searching for precedent |
 | implementer | `opus` | inherit | Writes the code |
-| scope-guard | `sonnet` | `high` | Traces plan items to hunks: careful reading, and another model than the implementer's |
-| reviewer | `fable` | `high` | Another model than the implementer's, so it doesn't share its blind spots |
-| adversary | `opus` | `high` | Covers what the reviewer's model misses |
+| scope-guard | research model | `high` | Its verdict checks the change against the plan |
+| reviewer | research model | `max` | A review checks claims; it gets the most thinking |
+| adversary | `opus` | `high` | Hunts the accidents the others missed |
 | privacy-guard (when the project handles personal or health data) | `opus` | `high` | Follows data across files to where it ends up; a leak can't be taken back |
-| verifier (preset, not in the default team) | `sonnet` | inherit | Runs checks and reports pass/fail |
+| verifier (preset, not in the default team) | research model | inherit | Runs checks and concludes pass or fail |
+
+Every generated skill (`/deliver`, `/inquire`, `/intent`, …) runs on the research model too, at
+`high` effort (`/intent` at `xhigh`), and tells Claude to name it whenever it hands research to a
+subagent. Only bookkeeping that draws no conclusions stays cheaper: `/inquire`'s ledger helper runs
+on `haiku`. On Opus 5.5 ($4 / $20 per million input / output tokens) against Sonnet 5.5 ($2 / $10),
+the explorer, verifier and scope guard cost twice as much per token, and the explorer's `high`
+effort spends more tokens than `medium` did. An OpenCode project's research model is the manifest's
+`research_model` (else `primary_model`) on its first provider.
 
 These only seed new agents: a project keeps the models it recorded, and `ocgen doctor` doesn't
-change them. Change one with `ocgen edit agent <name>`.
+change them. Change one with `ocgen edit agent <name>`, or the research model with
+`claude.research_model` in the project state and `ocgen doctor`.
 
 ```bash
 ocgen new ./my-team --target claude
@@ -1987,6 +1999,74 @@ WSL1) `gh` may run, but the request stays the read-only way. Every Claude projec
   `OCGEN_GITHUB_GH`, the tests' stand-in for gh.
 - **Writing to GitHub stays yours.** Nothing here comments, labels, merges or files an issue.
 
+#### Shared guidance: evidence, research and changes
+
+Every skill and agent that makes or checks claims, or that changes code or writes pull requests
+and issues, carries one shared block of rules (`templates/guidance.md.j2`). Each rule has a slug
+the agents cite it by:
+
+- **For everyone:** `research-on-most-capable-model` — research (reading code, gathering and
+  testing evidence, searching for precedent, checking the environment, drafting the design) runs
+  on the research model, and a subagent given research gets that model explicitly, never the
+  agent type's default. Only bookkeeping that draws no conclusions may run cheaper.
+- **Claims** (`/inquire`, `/brief`, `/recap`; the explorer, verifier, reviewer, scope guard,
+  adversary and privacy guard): `evidence-required` (a `file:line` read in this session, or with
+  the AWS check a read-only call, quoted — anything else is **unconfirmed**, or `Inferred` where a
+  ledger tags claims), `test-the-evidence`, `environment-state`, `no-environment-data-copy`, and
+  `aws-dev-account-check` when the project opted in to it.
+- **Changes** (`/fanout`, `/team-plan`; the implementer): `start-from-base-branch`,
+  `intent-review-before-code`, `precedent-search` (with the workflow rule's **Precedents** list),
+  `precedent-boundary-check`, `follow-conventions` and `numbers-from-test-output`.
+- **Both:** `/deliver`, `/intent`, `/review-intent`, `/workstreams`, `/team` and `/multi`.
+
+The commands carry the block in English, like the rest of their text; an agent carries it in the
+project's instruction language. `/intake`, `/refine`, `/improve-prompt`, the coordinator and your
+own agents carry none of it. The `forked-research` skill preset (`ocgen add skill`) has the claim
+rules written into its seeded text, without the AWS check, and runs on the research model.
+
+**intent-review-before-code is checked, not only asked.** When /intent records a sign-off that
+links a GitHub comment (`@alice — approved 2026-10-01: https://github.com/o/r/issues/12#issuecomment-1`),
+the `intent-approvers` hook reads that comment with your gh login — a GET on the project's own
+remotes, like `github-read` — and tells Claude when it is by someone else, on another issue, or
+couldn't be read (unconfirmed, never passed). A team (`@org/team`) can't be checked by one
+comment's author, so Claude is told to confirm it with you. At most 5 such reads per write, 8
+seconds each (`OCGEN_SIGN_OFF_TIMEOUT`).
+
+#### Checking claims against an AWS dev account (`ocgen edit aws`)
+
+Off by default: most projects don't use AWS. A project that does can let its agents check claims
+about what is deployed — a resource exists, a setting has a value, an IAM policy allows
+something, a resource lives in a region — against its **dev** account, read-only:
+
+```bash
+ocgen edit aws --profile acme-dev --account 123456789012 --region eu-west-1
+ocgen edit aws --show
+ocgen edit aws --disable
+```
+
+- **Why a hook.** Under ocgen's defaults Claude can't run `aws` itself: the power-user defaults
+  deny reading `~/.aws`, the sandbox withholds it and the `AWS_*` variables and has no AWS hosts
+  on its network allowlist, and with Agent Teams the approval gate holds `s3 cp`. None of that is
+  loosened.
+  Instead Claude writes `.claude/notes/aws/request.json` (`{"calls": [["ec2",
+  "describe-vpcs"], …]}`), and the `aws-read` hook (`PostToolUse`, outside the sandbox, like
+  `github-read`) runs it with your AWS CLI and the dev profile.
+- **The account first.** Every answer starts with `aws sts get-caller-identity --profile <dev>`;
+  if the account isn't the configured one, nothing runs, and no other profile or account stands in.
+- **Only metadata reads.** `describe-*`, `list-*`, `get-*`, `s3 ls` and `sts
+  get-caller-identity` run — minus the reads that return secrets or contents:
+  `secretsmanager get-secret-value`, anything with `--with-decryption`, `s3api get-object`,
+  `lambda get-function`, `dynamodb get-item`, log events, query results, exports, passwords,
+  tokens and credentials. `--profile`, `--endpoint-url`, `--cli-input-*` and `file://` arguments
+  are refused. At most 10 calls per request, 20 seconds each (`OCGEN_AWS_TIMEOUT`).
+- **Saved nowhere.** The output comes back in the hook's note, at most 8 KiB per call and 24 KiB
+  in all, marked as untrusted data; nothing is written to disk.
+- **IAM is the limit.** The allowlist backs it up; it isn't a boundary. Give the profile a role
+  with read-only access to metadata only — and not to secret values or object contents.
+- **Needs ocgen and the AWS CLI** where Claude Code runs (the script fallback does nothing), and
+  a signed-in profile (`aws sso login --profile <dev>` when it uses SSO). Without them Claude
+  marks the claims unconfirmed and says why. Claude Code only: OpenCode has no hooks.
+
 #### Agent Teams
 
 [Agent Teams](https://code.claude.com/docs/en/agent-teams) coordinate several parallel
@@ -2044,7 +2124,7 @@ and inside the ocgen binary (`ocgen hook <name>`). The generated hook command us
 binary when a compatible ocgen is installed, and the script otherwise:
 
 ```sh
-if [ "$(ocgen hook --check 2>/dev/null)" = "ocgen-hooks 25" ]; then ocgen hook team-approval-gate; else sh ".../team-approval-gate.sh"; fi
+if [ "$(ocgen hook --check 2>/dev/null)" = "ocgen-hooks 26" ]; then ocgen hook team-approval-gate; else sh ".../team-approval-gate.sh"; fi
 ```
 
 - **The binary gives you** real JSON parsing instead of `grep`, and hooks that work on
@@ -2413,6 +2493,7 @@ for a plugin; `--team` is off by default. (The `--base-url` flag is OpenCode-onl
 | `ocgen add skill [dir]` | Author a new skill → `.claude/skills/<name>/SKILL.md` (name, description, allowed-tools, body). |
 | `ocgen edit intent -p <dir> [--prefix --digits --dir --max-words --branch --trust-domain/--untrust-domain --approver/--remove-approver --codeowners <path\|off> --codeowners-scope all\|intents\|off --enable/--disable --issue-template --intent-template --reset-…-template --show]` | Configure `/intent` (and `/review-intent`, which shares its settings): intent-file prefix, number width and directory, the issue word limit, the branch checked for taken numbers, the approvers who must sign off (GitHub handles), the project's existing CODEOWNERS it keeps their block in, and the project's issue / intent-file templates. No flags = interactive. |
 | `ocgen edit docs -p <dir> [--trust/--untrust <host>]… [--show]` | The documentation sites agents may fetch, one list for every agent, skill and team member (both targets). Claude: the WebFetch guard blocks every other site, and trusted ones never ask. OpenCode: each fetch asks, and the agents are told the list. No flags = show. |
+| `ocgen edit aws -p <dir> [--profile <p>] [--account <id>] [--region <r>] [--disable] [--show]` | The read-only AWS dev account check (Claude only): agents check what is deployed through the `aws-read` hook, the account checked first, metadata reads only, nothing saved. No flags = asks. |
 | `ocgen edit permissions -p <dir> --list` | What `settings.json` actually holds, list by list in the order Claude Code checks them, each rule marked ocgen's or yours; flags yours that have no effect (`no effect: ocgen's ask rule wins`) or replace a generated one. Writes nothing. |
 | `ocgen edit permissions -p <dir> [--allow/--ask/--deny/--remove <RULE>]…` | Add or remove your own permission rules. They are saved in the state file and merged with ocgen's in `settings.json` by strictness, deny > ask > allow, so each rule sits in one list: a rule stricter than a generated one takes its place (`--deny "Bash(git push:*)"` moves it from ask to deny), a looser one has no effect, and both are warned about. Generated rules (including the approval-gate guards) can't be removed; removing your stricter rule restores ocgen's. No flags = interactive. |
 | `ocgen edit skill [name] -p <dir>` | Edit an existing skill; renaming cleans up the old skill directory. Omit `[name]` to pick from a list. |
@@ -2479,6 +2560,17 @@ an override of `claude/notes/draft.html.j2` from then shows a brief as an issue 
 coverage strip. `ocgen landscape` warns about each: bring the default's `{% if brief %}` blocks
 into your copy.
 
+**The shared guidance and the research model need your overrides updated too.** An override of
+a command (`claude/commands/*.md.j2`) made before the shared guidance has no `{{ guidance }}` line
+and no `model:`/`effort:` front matter, so a skill rendered from it carries no rules and runs on
+the session's model: add the three lines from the default. An override of an archetype made
+before then keeps its old model — `explorer`, `verifier` and `scope-guard` on `sonnet`, the
+`reviewer` on `fable` — and lacks `research = true`; copy those lines from the default (the rules
+themselves come from the role, so they need nothing). An override `manifest.toml` without
+`research_model`/`claude_research_model` falls back to `primary_model` and `opus`. The
+`forked-research` preset in an override `claude/skill-presets.toml` keeps its old text until you
+copy the default's.
+
 **What can't be overridden.** Hook scripts, the statusline script (`claude/statusline.sh`) and
 the gate-protocol templates (`claude/commands/team.md.j2`, `team-plan.md.j2`, `fanout.md.j2`,
 `workstreams.md.j2` and `claude/rules/ocgen-team.md.j2`, which teach the plan, owner, check,
@@ -2492,6 +2584,7 @@ refuses them, and a copy left by an older ocgen is marked `[embedded; override i
 manifest.toml            # wizard questions (with help text) + default provider(s)
 archetypes/*.toml        # agent role presets (mode, permissions, colour, text)
 mindset.md.j2            # the mindset every agent and the coordinator end with (accidents, not insiders)
+guidance.md.j2           # the shared rules for claims, research and changes, per skill and agent
 authorship.md.j2         # short commit messages, no AI credit: the Claude workflow rule's section, every OpenCode agent's text
 coordination/scope-guard.md.j2   # the coordinator's scope loop (when the team has a scope guard)
 coordination/privacy-guard.md.j2 # the coordinator's privacy loop (when the team has a privacy guard)

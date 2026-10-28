@@ -68,6 +68,33 @@ pub struct Defaults {
     pub utility_provider: String,
     #[serde(default)]
     pub utility_model: String,
+    /// The OpenCode model research runs on (empty = `primary_model`): the most
+    /// capable of the provider's models.
+    #[serde(default)]
+    pub research_model: String,
+    /// The Claude model research runs on (empty = `opus`).
+    #[serde(default)]
+    pub claude_research_model: String,
+}
+
+impl Defaults {
+    /// The OpenCode research model: `research_model`, else `primary_model`.
+    pub fn research_model(&self) -> String {
+        [&self.research_model, &self.primary_model]
+            .into_iter()
+            .map(|m| m.trim())
+            .find(|m| !m.is_empty())
+            .unwrap_or_default()
+            .to_string()
+    }
+
+    /// The Claude research model: `claude_research_model`, else `opus`.
+    pub fn claude_research_model(&self) -> String {
+        match self.claude_research_model.trim() {
+            "" => crate::claude::DEFAULT_RESEARCH_MODEL.to_string(),
+            m => m.to_string(),
+        }
+    }
 }
 
 fn default_type() -> String {

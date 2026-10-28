@@ -104,7 +104,14 @@ archetype = "adversary"
 
 # Fallbacks. primary_model is used for the top-level "model" when no agent is
 # primary; utility_provider/utility_model drive the compaction/title/summary agents.
+# research_model is the most capable model research runs on: the research roles
+# (explorer, verifier, scope-guard, reviewer) start on it, and every skill names
+# it when it hands research to a subagent. Empty = primary_model.
+# claude_research_model is the same for Claude Code: an alias (opus) follows the
+# newest model of its family, so it doesn't go stale.
 [defaults]
 primary_model = "qwen3-35b-a3b"
 utility_provider = "mac"
 utility_model = "qwen3.5-9b"
+research_model = "qwen3-35b-a3b"
+claude_research_model = "opus"

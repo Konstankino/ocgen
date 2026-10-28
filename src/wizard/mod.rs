@@ -15,7 +15,7 @@ use ocgen::target::Target;
 use ocgen::templates;
 use ocgen::validate::{self, unique_ident};
 
-use crate::cli::{DocsCli, IntentCli, OutputArg, PermissionsCli, TargetArg, TeamCli};
+use crate::cli::{AwsCli, DocsCli, IntentCli, OutputArg, PermissionsCli, TargetArg, TeamCli};
 use crate::prompt::{
     ask, ask_color, ask_confirm, ask_multi, ask_optional_v, ask_select, ask_v, edit_multiline,
 };
@@ -1330,6 +1330,132 @@ fn trusted_docs_line(list: &[String]) -> String {
     } else {
         list.join(", ")
     }
+}
+
+/// `ocgen edit aws`: switch the AWS dev account check on or off and set its
+/// profile, account and region. Flags apply directly; without them it asks.
+pub fn run_edit_aws(path: String, changes: AwsCli) -> Result<()> {
+    let (root, mut project) = Project::discover(Path::new(&path))?;
+    if project.target != Target::ClaudeCode {
+        bail!("the AWS dev account check is a Claude Code feature; this project targets OpenCode.");
+    }
+    let was = project.claude.aws.clone();
+    if !changes.show {
+        let mut aws = was.clone();
+        if changes.is_empty() {
+            let theme = ColorfulTheme::default();
+            aws = configure_aws(&theme, &was)?;
+        } else if changes.disable {
+            aws.enabled = false;
+        } else {
+            if let Some(p) = &changes.profile {
+                validate::aws_profile(p.trim()).map_err(|e| anyhow!("--profile: {e}"))?;
+                aws.profile = p.trim().to_string();
+            }
+            if let Some(a) = &changes.account {
+                validate::aws_account_id(a.trim()).map_err(|e| anyhow!("--account: {e}"))?;
+                aws.account_id = a.trim().to_string();
+            }
+            if let Some(r) = &changes.region {
+                let r = r.trim();
+                if !r.is_empty() {
+                    validate::aws_region(r).map_err(|e| anyhow!("--region: {e}"))?;
+                }
+                aws.region = r.to_string();
+            }
+            aws.enabled = true;
+            if !aws.active() {
+                bail!("the AWS dev account check needs a profile and an account: --profile <name> --account <12 digits>");
+            }
+        }
+        if aws != was {
+            project.claude.aws = aws;
+            let written = project.scaffold(&root, true)?;
+            report_written(&written);
+        }
+    }
+    print_aws(&project.claude.aws);
+    Ok(())
+}
+
+/// Ask whether to check claims against an AWS dev account, and its profile,
+/// account and region.
+fn configure_aws(
+    theme: &ColorfulTheme,
+    seed: &ocgen::claude::AwsSettings,
+) -> Result<ocgen::claude::AwsSettings> {
+    let mut aws = seed.clone();
+    aws.enabled = ask_confirm(
+        theme,
+        "Check claims against an AWS dev account, read-only?",
+        "Agents check what is deployed through the aws-read hook: your AWS CLI and this profile, \
+         the account checked first, only calls that read metadata, nothing saved. Give the \
+         profile a read-only role.",
+        seed.enabled,
+    )?;
+    if !aws.enabled {
+        return Ok(aws);
+    }
+    let profile = (!seed.profile.is_empty()).then_some(seed.profile.as_str());
+    aws.profile = ask_v(
+        theme,
+        "AWS CLI profile of the dev account",
+        "A profile in your ~/.aws, e.g. acme-dev.",
+        profile,
+        validate::aws_profile,
+    )?;
+    let account = (!seed.account_id.is_empty()).then_some(seed.account_id.as_str());
+    aws.account_id = ask_v(
+        theme,
+        "The dev account's ID (12 digits)",
+        "Every answer first checks that the profile is this account, and runs nothing otherwise.",
+        account,
+        validate::aws_account_id,
+    )?;
+    aws.region = ask_v(
+        theme,
+        "Region (empty = the profile's own)",
+        "The region the calls use, e.g. eu-west-1.",
+        Some(&seed.region),
+        |r| {
+            if r.is_empty() {
+                Ok(())
+            } else {
+                validate::aws_region(r)
+            }
+        },
+    )?;
+    Ok(aws)
+}
+
+/// The AWS dev account check as `ocgen edit aws --show` prints it.
+fn print_aws(aws: &ocgen::claude::AwsSettings) {
+    ui::section("AWS dev account check");
+    ui::kv(
+        "check",
+        if aws.active() {
+            "on — agents read AWS through the aws-read hook"
+        } else {
+            "off"
+        },
+    );
+    let or_none = |v: &str| {
+        if v.is_empty() {
+            ui::muted("none")
+        } else {
+            v.to_string()
+        }
+    };
+    ui::kv("profile", &or_none(&aws.profile));
+    ui::kv("account", &or_none(&aws.account_id));
+    ui::kv(
+        "region",
+        &if aws.region.is_empty() {
+            ui::muted("the profile's own")
+        } else {
+            aws.region.clone()
+        },
+    );
 }
 
 pub fn run_edit_intent(path: String, changes: IntentCli) -> Result<()> {

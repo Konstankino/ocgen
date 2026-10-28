@@ -19,10 +19,12 @@ permissions = """
   webfetch: deny
 """
 
-# Claude Code defaults for this role. Tracing plan items to hunks is careful reading,
-# not deep reasoning, so sonnet; Bash only for git reads, with the file tools denied,
-# so it lands in the read-only roles the gates exempt.
-claude_model = "sonnet"
+# Claude Code defaults for this role. Its verdict checks the change against the
+# plan, which is research, so it starts on the research model (`research`); Bash
+# only for git reads, with the file tools denied, so it lands in the read-only
+# roles the gates exempt.
+research = true
+claude_model = "opus"
 tools = "Read, Grep, Glob, Bash"
 claude_max_turns = 30
 claude_disallowed_tools = "Edit, Write, NotebookEdit"

@@ -3,6 +3,7 @@ description: Turn an issue or idea into an approved intent — improve the promp
 argument-hint: "[the problem or idea | {{ prefix }}-NNNN or issue-<slug> to resume | #issue or issue URL to link — empty to list]"
 allowed-tools: {{ allowed_tools }}
 effort: xhigh
+model: {{ research_model }}
 ---
 Work out the intent for: $ARGUMENTS
 
@@ -33,6 +34,8 @@ Settings for this project (change them with `ocgen edit intent`):
 {% if reading_copies %}
 {% include "intent/reading-copy.md" %}
 {% endif %}
+{{ guidance }}
+
 ## 0. Route the arguments
 - **Empty** (or `list`): list the intents that have no issue yet, newest first — the intent files in
   `{{ dir }}/` with no `Issue:` line (number, title, status), and the issue drafts of intents without one,

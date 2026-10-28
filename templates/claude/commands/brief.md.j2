@@ -3,6 +3,8 @@ description: Write the brief a workflow skill needs before it starts — an inte
 when_to_use: Use when asked to write, prepare or draft a brief, a spec or a task description before a change, a study or a split into workstreams, or to prepare what /deliver, /inquire or /workstreams will be given — not to do the work itself, not a requirements checklist (/intake), not a rewrite of an existing prompt (/improve-prompt).
 argument-hint: "[goal, or a brief's slug — empty to pick one]"
 allowed-tools: {{ allowed_tools }}
+model: {{ research_model }}
+effort: high
 ---
 Write the brief for: $ARGUMENTS
 
@@ -22,6 +24,8 @@ skill reads it instead of interviewing me again. These hold throughout:
 - Keep the headings and the `Key:` lines exactly as in the template below: ocgen parses them for
   the page{% if not english_prompts %}. Write the text itself in {{ prompt_language }} unless I ask for another
   language{% endif %}.
+
+{{ guidance }}
 
 ## 0. Resume, or start
 

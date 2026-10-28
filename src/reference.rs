@@ -445,9 +445,31 @@ const CLAUDE_FIELDS: &[Field] = &[
                  issue. Named in every intent file and issue draft, each pending until you report \
                  their sign-off with a link; the intent is Accepted only when every approver has \
                  approved, and /deliver won't start before that unless you explicitly confirm the \
-                 bypass. Your own approval of a plan only approves it for drafting. None = the \
-                 drafts say \"No approvers configured\" and /intent asks whether to proceed.",
+                 bypass. A recorded approval that links a GitHub comment is checked against it: \
+                 the comment must be by that approver's own login. Your own approval of a plan \
+                 only approves it for drafting. None = the drafts say \"No approvers configured\" \
+                 and /intent asks whether to proceed.",
         example: "--approver @alice --approver @org/architects",
+    },
+    Field {
+        label: "research model",
+        detail: "The model research runs on: the research agents (explorer, verifier, scope \
+                 guard, reviewer) start on it, every generated skill runs on it, and the shared \
+                 guidance tells each skill and agent to name it when it hands research to a \
+                 subagent. An alias follows the newest model of its family, so it doesn't go \
+                 stale. New projects take it from the manifest (claude_research_model; OpenCode: \
+                 research_model). Set claude.research_model in the state and run doctor.",
+        example: "opus  (claude.research_model)",
+    },
+    Field {
+        label: "AWS dev account check",
+        detail: "Off by default. On, every skill and agent that makes or checks claims may check \
+                 what is deployed against this AWS account, read-only, through the aws-read hook: \
+                 your AWS CLI and this profile, outside the sandbox, the account checked first, \
+                 only describe-*/list-*/get-* calls (minus those that return secrets or \
+                 contents), the output handed back and saved nowhere. Give the profile a role with \
+                 read-only access: IAM is what keeps it read-only.",
+        example: "ocgen edit aws --profile acme-dev --account 123456789012 --region eu-west-1",
     },
     Field {
         label: "CODEOWNERS",
