@@ -47,6 +47,10 @@ pub struct Project {
     pub utility_model: String,
     /// Fallback model id (under `utility_provider`) when no agent is `primary`.
     pub default_primary_model: String,
+    /// The OpenCode model research runs on (empty = `default_primary_model`);
+    /// a Claude project's is `claude.research_model`.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub research_model: String,
     pub agents: Vec<Agent>,
     /// Claude Code–only settings (ignored for the OpenCode target).
     pub claude: ClaudeConfig,
@@ -133,6 +137,56 @@ pub const PRIVACY_GUARD_ROLE: &str = "privacy-guard";
 
 /// Rework rounds the privacy loop allows before the rest is reported UNRESOLVED.
 pub const PRIVACY_GUARD_ROUNDS: u32 = 2;
+
+/// Which groups of the shared guidance (`templates/guidance.md.j2`) a skill or
+/// an agent carries: the rules for making or checking claims, the rules for
+/// changing code or writing pull requests and issues, or both. Every one also
+/// gets the research-model rule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Guidance {
+    pub claims: bool,
+    pub changes: bool,
+}
+
+impl Guidance {
+    pub const CLAIMS: Self = Self {
+        claims: true,
+        changes: false,
+    };
+    pub const CHANGES: Self = Self {
+        claims: false,
+        changes: true,
+    };
+    pub const BOTH: Self = Self {
+        claims: true,
+        changes: true,
+    };
+}
+
+/// The guidance each of ocgen's own roles (an agent's `role`, its archetype)
+/// carries. A role of the user's own, and the coordinator, which runs the skills
+/// that carry it, get none.
+pub fn role_guidance(role: &str) -> Option<Guidance> {
+    match role {
+        "explorer" | "verifier" | "reviewer" | "adversary" | "scope-guard" | PRIVACY_GUARD_ROLE => {
+            Some(Guidance::CLAIMS)
+        }
+        "implementer" => Some(Guidance::CHANGES),
+        _ => None,
+    }
+}
+
+/// The guidance each generated command carries, by its name.
+pub fn command_guidance(name: &str) -> Option<Guidance> {
+    match name {
+        "inquire" | "brief" | "recap" => Some(Guidance::CLAIMS),
+        "fanout" | "team-plan" => Some(Guidance::CHANGES),
+        "deliver" | "intent" | "review-intent" | "workstreams" | "team" | "multi" => {
+            Some(Guidance::BOTH)
+        }
+        _ => None,
+    }
+}
 
 /// The answer lines the coordinator presets end with. When the answers are in
 /// another language, the one ending a coordinator's text gives way to ocgen's.
@@ -854,7 +908,12 @@ impl Project {
             utility_provider: manifest.defaults.utility_provider.clone(),
             utility_model: manifest.defaults.utility_model.clone(),
             default_primary_model: manifest.defaults.primary_model.clone(),
+            research_model: manifest.defaults.research_model.clone(),
             agents: Vec::new(),
+            claude: ClaudeConfig {
+                research_model: manifest.defaults.claude_research_model.clone(),
+                ..Default::default()
+            },
             ..Default::default()
         }
     }
@@ -884,6 +943,54 @@ impl Project {
         )
         .map(|n| n.trim().to_string())
         .context("rendering the mindset")
+    }
+
+    /// The shared guidance for what a template does ([`Guidance`]), in
+    /// `language`: the research-model rule always, the rules for claims and
+    /// for changes as `groups` asks, and the AWS check only in a Claude project
+    /// that opted in to it.
+    fn guidance(&self, env: &Environment, language: &str, groups: Guidance) -> Result<String> {
+        let claude = self.target == Target::ClaudeCode;
+        let aws = &self.claude.aws;
+        env.render_str(
+            &templates::load("guidance.md.j2")?,
+            context! {
+                language => canonical_language(language),
+                claims => groups.claims,
+                changes => groups.changes,
+                claude => claude,
+                research_model => self.research_model(),
+                aws => claude && aws.active(),
+                aws_profile => aws.profile,
+                aws_region => aws.region,
+                aws_account => aws.account_id,
+                aws_request => crate::aws::REQUEST,
+            },
+        )
+        .map(|n| n.trim().to_string())
+        .context("rendering the shared guidance")
+    }
+
+    /// The model research runs on, as the agents and skills name it: a Claude
+    /// alias, or an OpenCode `provider/model`.
+    pub fn research_model(&self) -> String {
+        if self.target == Target::ClaudeCode {
+            let m = self.claude.research_model.trim();
+            return if m.is_empty() {
+                crate::claude::DEFAULT_RESEARCH_MODEL.to_string()
+            } else {
+                m.to_string()
+            };
+        }
+        let model = [&self.research_model, &self.default_primary_model]
+            .into_iter()
+            .map(|m| m.trim())
+            .find(|m| !m.is_empty())
+            .unwrap_or_default();
+        match self.providers.first() {
+            Some(p) if !model.is_empty() => format!("{}/{model}", p.key),
+            _ => model.to_string(),
+        }
     }
 
     /// How agents write commits, and that nothing they write credits AI help:
@@ -1335,10 +1442,17 @@ impl Project {
             } else {
                 None
             };
+            let guidance = role_guidance(&agent.role)
+                .map(|g| self.guidance(&env, lang, g))
+                .transpose()?;
             let with_note = |text: &str| {
                 let text = match &note {
                     Some(n) => with_paragraph(text, n),
                     None => text.to_string(),
+                };
+                let text = match &guidance {
+                    Some(g) => with_paragraph(&text, g),
+                    None => text,
                 };
                 let text = with_paragraph(&text, &workspace);
                 let text = with_paragraph(&text, &authorship);
@@ -1410,6 +1524,7 @@ impl Project {
                         primary => context! { name => primary.name },
                         subagents => &subs,
                         language => lang,
+                        guidance => self.guidance(&env, "English", Guidance::BOTH)?,
                     },
                 )
                 .context("rendering multi command")?;
@@ -1469,6 +1584,10 @@ impl Project {
             } else {
                 agent.body.clone()
             };
+            let body = match role_guidance(&agent.role) {
+                Some(g) => with_paragraph(&body, &self.guidance(&env, &self.language, g)?),
+                None => body,
+            };
             let body = with_paragraph(&body, &mindset);
             let agent_val = context! {
                 name => agent.name,
@@ -1493,11 +1612,29 @@ impl Project {
             components.push((format!("agents/{}.md", agent.name), md));
         }
 
+        // Every command runs on the research model; the shared guidance, in
+        // English like the commands, goes to the ones that make or check claims or
+        // change code. Rendered here, before /intent's partials change `env`.
+        let research_model = self.research_model();
+        let mut guides: BTreeMap<&str, String> = BTreeMap::new();
+        for name in crate::claude::WORKFLOW_SKILLS {
+            let text = match command_guidance(name) {
+                Some(g) => self.guidance(&env, "English", g)?,
+                None => String::new(),
+            };
+            guides.insert(name, text);
+        }
+
         if !subs.is_empty() {
             let cmd = env
                 .render_str(
                     &templates::load("claude/commands/multi.md.j2")?,
-                    context! { subagents => &subs, language => lang },
+                    context! {
+                        subagents => &subs,
+                        language => lang,
+                        research_model => research_model,
+                        guidance => &guides["multi"],
+                    },
                 )
                 .context("rendering multi command")?;
             components.push(("commands/multi.md".to_string(), cmd));
@@ -1507,7 +1644,11 @@ impl Project {
                 "commands/intake.md".to_string(),
                 env.render_str(
                     &templates::load("claude/commands/intake.md.j2")?,
-                    context! { language => lang },
+                    context! {
+                        language => lang,
+                        research_model => research_model,
+                        guidance => &guides["intake"],
+                    },
                 )
                 .context("rendering intake command")?,
             ));
@@ -1517,7 +1658,11 @@ impl Project {
                 "commands/refine.md".to_string(),
                 env.render_str(
                     &templates::load("claude/commands/refine.md.j2")?,
-                    context! { language => lang },
+                    context! {
+                        language => lang,
+                        research_model => research_model,
+                        guidance => &guides["refine"],
+                    },
                 )
                 .context("rendering refine command")?,
             ));
@@ -1527,7 +1672,11 @@ impl Project {
                 "commands/improve-prompt.md".to_string(),
                 env.render_str(
                     &templates::load("claude/commands/improve-prompt.md.j2")?,
-                    context! { language => lang },
+                    context! {
+                        language => lang,
+                        research_model => research_model,
+                        guidance => &guides["improve-prompt"],
+                    },
                 )
                 .context("rendering improve-prompt command")?,
             ));
@@ -1537,7 +1686,11 @@ impl Project {
                 "commands/fanout.md".to_string(),
                 env.render_str(
                     &templates::load("claude/commands/fanout.md.j2")?,
-                    context! { language => lang },
+                    context! {
+                        language => lang,
+                        research_model => research_model,
+                        guidance => &guides["fanout"],
+                    },
                 )
                 .context("rendering fanout command")?,
             ));
@@ -1564,6 +1717,8 @@ impl Project {
                 env.render_str(
                     &templates::load("claude/commands/brief.md.j2")?,
                     context! {
+                        research_model => research_model,
+                        guidance => &guides["brief"],
                         language => lang,
                         allowed_tools => crate::claude::BRIEF_TOOLS.join(", "),
                         explorer => self.fork_agent_default(),
@@ -1589,6 +1744,8 @@ impl Project {
                 env.render_str(
                     &templates::load("claude/commands/workstreams.md.j2")?,
                     context! {
+                        research_model => research_model,
+                        guidance => &guides["workstreams"],
                         allowed_tools => crate::claude::WORKSTREAMS_TOOLS.join(", "),
                         explorer => self.fork_agent_default(),
                         implementer => checks.implementer.clone(),
@@ -1631,6 +1788,8 @@ impl Project {
                 env.render_str(
                     &templates::load("claude/commands/deliver.md.j2")?,
                     context! {
+                        research_model => research_model,
+                        guidance => &guides["deliver"],
                         language => lang,
                         inquire => self.claude.workflow.inquire,
                         intent => self.claude.workflow.intent,
@@ -1689,6 +1848,8 @@ impl Project {
                 })
                 .collect();
             let intent_ctx = context! {
+                research_model => research_model,
+                guidance => &guides["intent"],
                 answer_language => canonical_language(self.response_language()),
                 reading_copies => self.writes_reading_copies(),
                 copies => minijinja::Value::from_serialize(&copies),
@@ -1738,6 +1899,8 @@ impl Project {
                 env.render_str(
                     &templates::load("claude/commands/review-intent.md.j2")?,
                     context! {
+                        research_model => research_model,
+                        guidance => &guides["review-intent"],
                         review => true,
                         allowed_tools => crate::claude::review_read_tools().join(", "),
                         review_agent => review_agent.map_or("general-purpose", |a| a.name.as_str()),
@@ -1754,6 +1917,8 @@ impl Project {
                 env.render_str(
                     &templates::load("claude/commands/inquire.md.j2")?,
                     context! {
+                        research_model => research_model,
+                        guidance => &guides["inquire"],
                         language => lang,
                         answer_language => crate::render::canonical_language(self.response_language()),
                         english_answers => self.response_language().eq_ignore_ascii_case("English"),
@@ -1773,6 +1938,8 @@ impl Project {
                 env.render_str(
                     &templates::load("claude/commands/recap.md.j2")?,
                     context! {
+                        research_model => research_model,
+                        guidance => &guides["recap"],
                         allowed_tools => crate::claude::RECAP_TOOLS.join(", "),
                         // The gate holds every `git merge`: /recap prints the
                         // current branch's fast-forward instead of running it.
@@ -1826,6 +1993,8 @@ impl Project {
                 .render_str(
                     &templates::load("claude/commands/team.md.j2")?,
                     context! {
+                        research_model => research_model,
+                        guidance => &guides["team"],
                         subagents => &subs,
                         language => lang,
                         plan_gate => self.claude.team.plan_gate,
@@ -1838,6 +2007,8 @@ impl Project {
                     .render_str(
                         &templates::load("claude/commands/team-plan.md.j2")?,
                         context! {
+                            research_model => research_model,
+                            guidance => &guides["team-plan"],
                             subagents => &subs,
                             language => lang,
                             confidence_threshold => self.claude.team.confidence_threshold,
@@ -1931,6 +2102,11 @@ impl Project {
         // with or without one.
         let body = templates::load_embedded("claude/hooks/github-read.sh")?;
         components.push(("hooks/github-read.sh".to_string(), body));
+        // The AWS dev account check's reads, when the project opted in.
+        if self.claude.aws.active() {
+            let body = templates::load_embedded("claude/hooks/aws-read.sh")?;
+            components.push(("hooks/aws-read.sh".to_string(), body));
+        }
         // Native Windows: the commands Claude runs are refused there.
         if self.claude.sandbox.enabled {
             let body = templates::load_embedded("claude/hooks/shell-sandbox.sh")?;
@@ -2569,6 +2745,9 @@ impl Project {
         if s.context_fork && s.agent == "Explore" {
             s.agent = self.fork_agent_default().into();
         }
+        if preset.research {
+            s.model = self.research_model();
+        }
         s
     }
 
@@ -2907,9 +3086,13 @@ impl Project {
             // The approvers are baked into the /intent skill, so a session started
             // before they changed drafts with the old list: check each write
             // against the state instead.
+            // It also reads the GitHub comment each recorded approval links, so it
+            // gets room for those reads.
+            let mut approvers = command_hook(hook_cmd(prefix, dir, "intent-approvers.sh"));
+            approvers["timeout"] = json!(crate::hooks::INTENT_APPROVERS_TIMEOUT);
             push(
                 "PostToolUse",
-                json!({ "matcher": "Write|Edit|MultiEdit", "hooks": [ command_hook(hook_cmd(prefix, dir, "intent-approvers.sh")) ] }),
+                json!({ "matcher": "Write|Edit|MultiEdit", "hooks": [ approvers ] }),
             );
         }
         if self.claude.workflow.recap {
@@ -2931,6 +3114,18 @@ impl Project {
             "PostToolUse",
             json!({ "matcher": "Write|Edit|MultiEdit", "hooks": [ read ] }),
         );
+        if self.claude.aws.active() {
+            // The AWS dev account check: Claude writes an AWS request; the hook
+            // checks the dev profile's account, then runs the calls that only read
+            // metadata with the user's own AWS CLI, outside the sandbox that
+            // withholds `~/.aws` from Claude's shell, and answers in its note.
+            let mut aws = command_hook(hook_cmd(prefix, dir, "aws-read.sh"));
+            aws["timeout"] = json!(crate::aws::HOOK_TIMEOUT);
+            push(
+                "PostToolUse",
+                json!({ "matcher": "Write|Edit|MultiEdit", "hooks": [ aws ] }),
+            );
+        }
         if self.isolates_workers() {
             // An isolated worker has no shell to commit with, and Claude Code
             // refuses the coordinator's git commands in another worktree: commit

@@ -236,6 +236,48 @@ pub fn git_branch(s: &str) -> Result<(), String> {
     }
 }
 
+/// An AWS CLI profile name: letters, digits and `-_.`, not starting with `-`
+/// (it goes to the CLI as `--profile <name>`).
+pub fn aws_profile(s: &str) -> Result<(), String> {
+    let ok = !s.is_empty()
+        && !s.starts_with('-')
+        && s.len() <= 64
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c));
+    if ok {
+        Ok(())
+    } else {
+        Err(format!(
+            "'{s}' isn't an AWS profile name (letters, digits, '-', '_' and '.')"
+        ))
+    }
+}
+
+/// An AWS account ID: exactly 12 digits.
+pub fn aws_account_id(s: &str) -> Result<(), String> {
+    if s.len() == 12 && s.chars().all(|c| c.is_ascii_digit()) {
+        Ok(())
+    } else {
+        Err(format!("'{s}' isn't an AWS account ID (12 digits)"))
+    }
+}
+
+/// An AWS region such as `eu-west-1`: lowercase letters, digits and `-`.
+pub fn aws_region(s: &str) -> Result<(), String> {
+    let ok = s.len() >= 3
+        && s.len() <= 32
+        && s.contains('-')
+        && !s.starts_with('-')
+        && !s.ends_with('-')
+        && s.chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+    if ok {
+        Ok(())
+    } else {
+        Err(format!("'{s}' isn't an AWS region (e.g. eu-west-1)"))
+    }
+}
+
 /// A host name such as `docs.rs`: lowercase labels of letters, digits and `-`,
 /// at least one dot; no scheme, path or port. A leading `*.` trusts every
 /// subdomain (`*.amazon.com` — Claude Code matches any depth, but not

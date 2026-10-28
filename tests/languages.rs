@@ -369,7 +369,11 @@ fn commands_carry_the_same_instructions_in_every_language() {
             ] {
                 if k.contains(name) {
                     assert!(uk[k].contains(middle), "{k}: {middle}");
-                    assert!(uk[k].trim_end().ends_with(last), "{k}: {last}");
+                    assert!(uk[k].contains(last), "{k}: {last}");
+                    // The shared guidance closes the commands that have no steps.
+                    if name != "/team-plan/" {
+                        assert!(uk[k].trim_end().ends_with("</guidance>"), "{k}");
+                    }
                 }
             }
         }

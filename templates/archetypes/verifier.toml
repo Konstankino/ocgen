@@ -14,9 +14,10 @@ permissions = """
     "git push*": deny
 """
 
-# Claude Code defaults for this role. It runs checks and reports pass/fail, so a
-# cheaper model does.
-claude_model = "sonnet"
+# Claude Code defaults for this role. It runs checks and concludes pass or fail:
+# testing evidence is research, so it starts on the research model (`research`).
+research = true
+claude_model = "opus"
 tools = "Read, Grep, Glob, Bash"
 claude_max_turns = 40
 claude_disallowed_tools = "Edit, Write, NotebookEdit"

@@ -1,6 +1,8 @@
 ---
 description: Run the agent team on one task
 argument-hint: "[task]"
+model: {{ research_model }}
+effort: high
 ---
 Task: $ARGUMENTS
 
@@ -8,3 +10,5 @@ Delegate it to each subagent in turn and wait for each to finish:
 {% for sub in subagents %}- @{{ sub.name }}
 {% endfor %}
 Then consolidate the answers, flag disagreements, and give a final decision.
+
+{{ guidance }}

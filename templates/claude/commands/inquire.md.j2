@@ -3,12 +3,16 @@ description: Understand a codebase by asking questions — sharpen each one, ans
 when_to_use: Use when asked to study, learn or walk through how part of this codebase works, one question at a time with a saved ledger, or to resume such a study — not for a one-off question.
 argument-hint: "[topic or first question — empty to resume]"
 allowed-tools: Bash(ocgen notes open:*)
+model: {{ research_model }}
+effort: high
 ---
 Help me understand this codebase: $ARGUMENTS
 
 Be my research partner, not an oracle: answer with evidence, and coach me toward better questions
 — with hints, never by writing the next question for me.
 Stay read-only — the only file written is the ledger, and a background helper writes it (step 4).
+
+{{ guidance }}
 
 ## 0. Resume or orient
 Each topic has a ledger at `.claude/notes/<topic-slug>.md` — the slug is lowercase letters, digits

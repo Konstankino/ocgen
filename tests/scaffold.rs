@@ -752,7 +752,12 @@ fn default_pipeline_is_driven_by_the_manifest() {
     for (a, entry) in agents.iter().zip(&m.pipeline) {
         let arch = Archetype::load(&entry.archetype).unwrap();
         assert_eq!(a.mode, arch.mode);
-        assert_eq!(a.model, arch.default_model);
+        let model = if arch.research {
+            m.defaults.research_model()
+        } else {
+            arch.default_model.clone()
+        };
+        assert_eq!(a.model, model, "{}", entry.name);
         assert_eq!(a.provider, "mac");
     }
 }
@@ -954,10 +959,10 @@ fn claude_default_pipeline_scaffolds_a_full_project() {
 
     // coordinator is primary → coordinator (CLAUDE.md), not an agent file.
     assert!(!dir.path().join(".claude/agents/coordinator.md").exists());
-    // The explorer reads the most and decides the least: a cheaper model.
+    // The explorer researches: the research model, at high effort.
     let structure = read(dir.path(), ".claude/agents/explorer.md");
-    assert!(structure.contains("model: sonnet\n"));
-    assert!(structure.contains("effort: medium\n"));
+    assert!(structure.contains("model: opus\n"));
+    assert!(structure.contains("effort: high\n"));
     // The explorer can fetch web pages and search — needed for parallel research.
     assert!(structure.contains("tools: Read, Grep, Glob"));
     assert!(structure.contains("WebFetch") && structure.contains("WebSearch"));
@@ -965,10 +970,10 @@ fn claude_default_pipeline_scaffolds_a_full_project() {
     let implementer = read(dir.path(), ".claude/agents/implementer.md");
     assert!(implementer.contains("model: opus\n"));
     assert!(!implementer.contains("effort:"));
-    // The reviewer runs on another model than the implementer's.
+    // The review is research: the research model, at the highest effort.
     let grammar = read(dir.path(), ".claude/agents/reviewer.md");
-    assert!(grammar.contains("model: fable\n"));
-    assert!(grammar.contains("effort: high\n"));
+    assert!(grammar.contains("model: opus\n"));
+    assert!(grammar.contains("effort: max\n"));
     let adversary = read(dir.path(), ".claude/agents/adversary.md");
     assert!(adversary.contains("model: opus\n"));
     assert!(adversary.contains("effort: high\n"));
@@ -3565,7 +3570,7 @@ fn read_only_roles_are_enforced_and_reviewer_thinks_harder() {
             "{role}"
         );
     }
-    assert!(read(dir.path(), ".claude/agents/reviewer.md").contains("effort: high"));
+    assert!(read(dir.path(), ".claude/agents/reviewer.md").contains("effort: max"));
     let imp = read(dir.path(), ".claude/agents/implementer.md");
     assert!(!imp.contains("disallowedTools") && !imp.contains("effort:"));
     // Opt-in fields stay off by default.
@@ -5134,7 +5139,7 @@ fn verify_flags_safety_gates_that_fail_open() {
     let gate = |extra: serde_json::Value| {
         let mut h = serde_json::json!({
             "type": "command",
-            "command": "if [ \"$(ocgen hook --check 2>/dev/null)\" = \"ocgen-hooks 25\" ]; then ocgen hook team-approval-gate; else sh \".claude/hooks/team-approval-gate.sh\"; fi",
+            "command": "if [ \"$(ocgen hook --check 2>/dev/null)\" = \"ocgen-hooks 26\" ]; then ocgen hook team-approval-gate; else sh \".claude/hooks/team-approval-gate.sh\"; fi",
             "shell": "bash"
         });
         for (k, v) in extra.as_object().unwrap() {
@@ -6228,7 +6233,10 @@ fn deliver_waits_for_the_approvers_sign_off() {
     let mut p = claude_default("gate-off");
     p.claude.workflow.intent = false;
     p.scaffold(dir.path(), false).unwrap();
-    assert!(!read(dir.path(), ".claude/skills/deliver/SKILL.md").contains("sign-off"));
+    // Without /intent there is no intent file to check: the guidance's
+    // intent-review-before-code rule is all that is left.
+    let md = read(dir.path(), ".claude/skills/deliver/SKILL.md");
+    assert!(!md.contains("bypasses the approvers' sign-off") && !md.contains("Status: Accepted"));
 }
 
 /// Every pull request and issue Claude drafts asks the approvers to sign off,
@@ -6699,7 +6707,7 @@ fn inquire_registers_the_notes_hook() {
     assert_eq!(notes["matcher"], "Write|Edit|MultiEdit");
     let cmd = notes["hooks"][0]["command"].as_str().unwrap();
     assert!(
-        cmd.contains("ocgen hook inquire-notes") && cmd.contains("ocgen-hooks 25"),
+        cmd.contains("ocgen hook inquire-notes") && cmd.contains("ocgen-hooks 26"),
         "{cmd}"
     );
     assert_eq!(notes["hooks"][0]["shell"], "bash");

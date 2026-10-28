@@ -4,3 +4,5 @@ agent: {{ primary.name }}
 ---
 Run {% for sub in subagents %}@{{ sub.name }}{% if not loop.last %}, {% endif %}{% endfor %} on the task: $ARGUMENTS
 Then consolidate the answers, flag disagreements, and give a final decision.
+
+{{ guidance }}
