@@ -2092,8 +2092,8 @@ impl Project {
             let body = templates::load_embedded("claude/hooks/worker-commit.sh")?;
             components.push(("hooks/worker-commit.sh".to_string(), body));
         }
-        // A worktree's notes reach the main checkout, on approval, when
-        // ExitWorktree removes it.
+        // A worktree's notes reach the main checkout as they are written, and
+        // on approval when ExitWorktree removes it.
         if self.keeps_notes() {
             let body = templates::load_embedded("claude/hooks/worktree-notes.sh")?;
             components.push(("hooks/worktree-notes.sh".to_string(), body));
@@ -3138,10 +3138,13 @@ impl Project {
         }
         if self.keeps_notes() {
             // Notes are git-ignored and count as no change, so removing a worktree
-            // would delete its own silently: before ExitWorktree removes one, the
-            // hook stages the notes the main checkout lacks and asks; after the
-            // removal it copies them in. Not a gate: if it fails, the removal goes
-            // ahead as Claude Code would do it.
+            // would delete its own silently, and most removals run no hook (`:q`,
+            // an archived desktop session): in a worktree, the hook copies each
+            // note into the main checkout as it is written — after Claude's
+            // writes, and at the end of each turn for a shell's. Before
+            // ExitWorktree removes one, it stages the notes the main checkout
+            // still lacks and asks; after the removal it copies them in. Not a
+            // gate: if it fails, the removal goes ahead as Claude Code would do it.
             let carry = command_hook(hook_cmd(prefix, dir, "worktree-notes.sh"));
             push(
                 "PreToolUse",
@@ -3149,8 +3152,13 @@ impl Project {
             );
             push(
                 "PostToolUse",
-                json!({ "matcher": "ExitWorktree", "hooks": [ carry ] }),
+                json!({ "matcher": "ExitWorktree", "hooks": [ carry.clone() ] }),
             );
+            push(
+                "PostToolUse",
+                json!({ "matcher": "Write|Edit|MultiEdit", "hooks": [ carry.clone() ] }),
+            );
+            push("Stop", json!({ "hooks": [ carry ] }));
         }
         // Deterministic line for every WebFetch: HTTPS, trusted docs sites only.
         push(

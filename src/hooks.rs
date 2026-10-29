@@ -23,7 +23,7 @@ use serde_json::Value;
 /// embedded in the ocgen that generated the project (hook scripts can't be
 /// overridden from the template dir), so they implement the same protocol —
 /// unless someone edits the project's copies by hand.
-pub const PROTOCOL: &str = "ocgen-hooks 26";
+pub const PROTOCOL: &str = "ocgen-hooks 27";
 
 /// How long Claude Code lets a gate that runs the project check (SubagentStop,
 /// TaskCompleted) take, in seconds: its hook `timeout`. Claude Code treats a
@@ -1434,26 +1434,58 @@ impl<'a> Hook<'a> {
         Outcome::allow()
     }
 
-    /// ExitWorktree, before and after a `remove`. Notes are git-ignored, so a
-    /// worktree's own never reach the main checkout, and Claude Code counts them
-    /// as no change: the removal would delete them silently. PreToolUse stages
-    /// the notes the main checkout lacks (outside the repository, under
+    /// A linked worktree's notes, as they are written and when ExitWorktree
+    /// removes it. Notes are git-ignored, so a worktree's own never reach the
+    /// main checkout, and Claude Code counts them as no change: removing the
+    /// worktree would delete them silently, and most removals run no hook at
+    /// all (`:q` in a `claude --worktree` session, an archived desktop session).
+    /// So each note is copied into the main checkout as soon as it is written
+    /// ([`mirror_note`]): after Claude's writes (PostToolUse), and at the end of
+    /// each turn (Stop) for what a shell command or the draft editor wrote.
+    /// Before ExitWorktree removes a worktree, PreToolUse stages the notes the
+    /// main checkout still lacks (outside the repository, under
     /// `~/.claude/ocgen/worktree-notes/`) and asks the user; PostToolUse, which
     /// runs only once the approved removal is done, copies them in. A denied
-    /// removal copies nothing. A probe asks but stages nothing.
+    /// removal copies nothing. A probe asks but stages or copies nothing.
     fn worktree_notes(&self) -> Outcome {
-        let action = self
-            .json
-            .pointer("/tool_input/action")
-            .and_then(Value::as_str);
-        if self.field("tool_name") != "ExitWorktree" || action != Some("remove") {
+        let event = self.field("hook_event_name");
+        if self.field("tool_name") == "ExitWorktree" {
+            let action = self
+                .json
+                .pointer("/tool_input/action")
+                .and_then(Value::as_str);
+            return match (event.as_str(), action) {
+                ("PreToolUse", Some("remove")) => self.stage_worktree_notes(),
+                ("PostToolUse", Some("remove")) => self.land_worktree_notes(),
+                _ => Outcome::allow(),
+            };
+        }
+        if self.probe() {
             return Outcome::allow();
         }
-        match self.field("hook_event_name").as_str() {
-            "PreToolUse" => self.stage_worktree_notes(),
-            "PostToolUse" => self.land_worktree_notes(),
-            _ => Outcome::allow(),
+        match event.as_str() {
+            "PostToolUse" => {
+                let path = self
+                    .json
+                    .pointer("/tool_input/file_path")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                if !path.is_empty() {
+                    mirror_note(&self.cwd().join(path));
+                }
+            }
+            "Stop" => {
+                if let Some(l) = linked_worktree(&self.cwd(), &self.project()) {
+                    let rels: Vec<String> = WORKTREE_NOTE_DIRS
+                        .iter()
+                        .flat_map(|dir| note_files(&l.wt, dir))
+                        .collect();
+                    mirror_notes(&l, &rels);
+                }
+            }
+            _ => {}
         }
+        Outcome::allow()
     }
 
     /// SubagentStop: commit what a worktree-isolated worker left uncommitted, on
@@ -1540,32 +1572,10 @@ impl<'a> Hook<'a> {
 
     fn stage_worktree_notes(&self) -> Outcome {
         let cwd = self.cwd();
-        let abs = |what: &str| git_line(&cwd, &["rev-parse", "--path-format=absolute", what]);
-        let (Some(git_dir), Some(common), Some(top)) = (
-            abs("--git-dir"),
-            abs("--git-common-dir"),
-            abs("--show-toplevel"),
-        ) else {
-            return Outcome::allow();
-        };
         // The main checkout's own session isn't in a linked worktree.
-        let Some(main_top) = Path::new(&common).parent().filter(|_| git_dir != common) else {
+        let Some(Linked { wt, main, name }) = linked_worktree(&cwd, &self.project()) else {
             return Outcome::allow();
         };
-        // The project's folder in its repository: the same in every checkout.
-        let prefix = git_line(&self.project(), &["rev-parse", "--show-prefix"]).unwrap_or_default();
-        let prefix = prefix.trim_end_matches('/');
-        let at = |root: &Path| match prefix {
-            "" => root.to_path_buf(),
-            p => root.join(p),
-        };
-        let (wt, main) = (at(Path::new(&top)), at(main_top));
-        let name = safe(
-            &Path::new(&top)
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default(),
-        );
         let mut carry = Vec::new();
         for dir in WORKTREE_NOTE_DIRS {
             for rel in note_files(&wt, dir) {
@@ -3371,6 +3381,146 @@ fn note_destination(from: &Path, main: &Path, rel: &str, name: &str) -> Option<S
         }
     }
     None
+}
+
+/// A project's folder in a linked worktree and in its main checkout, and the
+/// worktree's name (its folder's, made [`safe`]).
+struct Linked {
+    wt: PathBuf,
+    main: PathBuf,
+    name: String,
+}
+
+/// The linked worktree `cwd` is in, for the project whose folder in the
+/// repository is `project`'s (the same in every checkout). `None` in the main
+/// checkout, or outside git.
+fn linked_worktree(cwd: &Path, project: &Path) -> Option<Linked> {
+    let abs = |what: &str| git_line(cwd, &["rev-parse", "--path-format=absolute", what]);
+    let (git_dir, common, top) = (
+        abs("--git-dir")?,
+        abs("--git-common-dir")?,
+        abs("--show-toplevel")?,
+    );
+    let main_top = Path::new(&common).parent().filter(|_| git_dir != common)?;
+    let prefix = git_line(project, &["rev-parse", "--show-prefix"]).unwrap_or_default();
+    let prefix = prefix.trim_end_matches('/');
+    let at = |root: &Path| match prefix {
+        "" => root.to_path_buf(),
+        p => root.join(p),
+    };
+    let name = safe(
+        &Path::new(&top)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+    );
+    Some(Linked {
+        wt: at(Path::new(&top)),
+        main: at(main_top),
+        name,
+    })
+}
+
+/// Where, in a worktree's project folder, the copies [`mirror_notes`] made are
+/// recorded: a folder that git-ignores itself and goes with the worktree.
+const MIRROR_RECORD: &str = ".claude/worktree-notes/copies.json";
+
+/// Copy `file`, just written, into the main checkout when it is a note (see
+/// [`note_files`]) in a linked worktree; anything else is left alone. The
+/// draft editor's save calls it too.
+pub fn mirror_note(file: &Path) {
+    let is_note = fs::symlink_metadata(file).is_ok_and(|m| m.is_file())
+        && !file.to_string_lossy().ends_with(".json");
+    if !is_note {
+        return;
+    }
+    // The project is the folder holding the note's folder.
+    let found = file.ancestors().skip(1).find_map(|a| {
+        let rel = file
+            .strip_prefix(a)
+            .ok()?
+            .to_string_lossy()
+            .replace('\\', "/");
+        WORKTREE_NOTE_DIRS
+            .iter()
+            .any(|d| rel.starts_with(&format!("{d}/")))
+            .then(|| (a.to_path_buf(), rel))
+    });
+    let Some((project, rel)) = found else {
+        return;
+    };
+    if let Some(l) = linked_worktree(&project, &project) {
+        mirror_notes(&l, &[rel]);
+    }
+}
+
+/// Copy notes `rels` of worktree `l` into its main checkout. A note goes where
+/// ocgen copied it before, over that copy, while the main checkout still holds
+/// it as copied (or not at all); otherwise where [`note_destination`] puts it,
+/// so a note the main checkout has in another version is never written over.
+/// Each copy is recorded in the worktree ([`MIRROR_RECORD`]) by its sum.
+fn mirror_notes(l: &Linked, rels: &[String]) {
+    let record = l.wt.join(MIRROR_RECORD);
+    let mut copies: serde_json::Map<String, Value> = fs::read_to_string(&record)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+    let before = copies.clone();
+    for rel in rels {
+        let from = l.wt.join(rel);
+        let Ok(body) = fs::read(&from) else {
+            continue;
+        };
+        let ours = copies.get(rel).and_then(|c| {
+            let dest = c["dest"].as_str()?;
+            let held = fs::read(l.main.join(dest)).ok();
+            held.is_none_or(|b| c["sum"].as_str() == Some(&cksum(&b)))
+                .then(|| dest.to_string())
+        });
+        let Some(dest) = ours.or_else(|| note_destination(&from, &l.main, rel, &l.name)) else {
+            continue;
+        };
+        let to = l.main.join(&dest);
+        if fs::read(&to).ok().as_deref() != Some(&body[..]) {
+            let copied = to.parent().is_some_and(|d| fs::create_dir_all(d).is_ok())
+                && fs::write(&to, &body).is_ok();
+            if !copied {
+                continue;
+            }
+            // Its folder git-ignores itself there too, as ocgen keeps every
+            // note folder, so a commit in the main checkout never takes it.
+            if let Some(dir) = WORKTREE_NOTE_DIRS
+                .iter()
+                .find(|d| rel.starts_with(&format!("{d}/")))
+            {
+                let ignore = l.main.join(dir).join(".gitignore");
+                if !ignore.exists() {
+                    let _ = fs::write(&ignore, "*\n");
+                }
+            }
+        }
+        copies.insert(
+            rel.clone(),
+            serde_json::json!({ "dest": dest, "sum": cksum(&body) }),
+        );
+    }
+    if copies == before {
+        return;
+    }
+    let Some(dir) = record.parent().filter(|d| fs::create_dir_all(d).is_ok()) else {
+        return;
+    };
+    let ignore = dir.join(".gitignore");
+    if !ignore.exists() {
+        let _ = fs::write(&ignore, "*\n");
+    }
+    // Written aside, then moved in: a reader never sees half a record.
+    let tmp = dir.join(format!("copies.{}.tmp", std::process::id()));
+    if fs::write(&tmp, Value::Object(copies).to_string()).is_ok()
+        && fs::rename(&tmp, &record).is_err()
+    {
+        let _ = fs::remove_file(&tmp);
+    }
 }
 
 /// `tr -c 'A-Za-z0-9._-' '_' | cut -c1-80` in the C locale the scripts run in:

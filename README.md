@@ -2124,7 +2124,7 @@ and inside the ocgen binary (`ocgen hook <name>`). The generated hook command us
 binary when a compatible ocgen is installed, and the script otherwise:
 
 ```sh
-if [ "$(ocgen hook --check 2>/dev/null)" = "ocgen-hooks 26" ]; then ocgen hook team-approval-gate; else sh ".../team-approval-gate.sh"; fi
+if [ "$(ocgen hook --check 2>/dev/null)" = "ocgen-hooks 27" ]; then ocgen hook team-approval-gate; else sh ".../team-approval-gate.sh"; fi
 ```
 
 - **The binary gives you** real JSON parsing instead of `grep`, and hooks that work on
@@ -2434,14 +2434,17 @@ Committing `.claude/` is optional. Both ways work:
 - **Notes when a worktree goes:** notes (`.claude/notes/`, `.claude/briefs/` and
   `.claude/intent/drafts/`) are git-ignored, so the main checkout never sees a worktree's own.
   Claude Code also counts them as no change, so removing the worktree would delete them without
-  asking. When Claude removes a worktree with `ExitWorktree`, the `worktree-notes` hook lists the
-  notes the main checkout lacks and asks you first. Approve, and they're copied into the main
-  checkout once the worktree is gone. A note the main checkout has in another version stays as it
-  is, and the worktree's is saved beside it as `<name>.from-<worktree>.md`. Deny, and the
-  worktree stays. Runtime state (`.json`) isn't copied. Claude Code has no hook before it removes
-  a worktree any other way, such as when a `claude --worktree` session ends or a desktop session
-  is archived. There, the notes go with the worktree, so keep the worktree, or copy the notes out
-  first. This needs the ocgen binary.
+  asking, and most removals run no hook first: `:q` in a `claude --worktree` session, an archived
+  desktop session. So in a worktree, the `worktree-notes` hook copies each note into the main
+  checkout as soon as it's written: after Claude's writes, when the draft editor saves, and at the
+  end of each turn for anything else, such as a shell command's. A later edit replaces ocgen's own
+  copy. A note the main checkout has in another version, or has changed since, stays as it is, and
+  the worktree's is saved beside it as `<name>.from-<worktree>.md`. The copies are recorded in
+  the worktree's `.claude/worktree-notes/`, which git ignores and which goes with the worktree.
+  Runtime state (`.json`) isn't copied. When Claude removes a worktree with `ExitWorktree`, the
+  hook lists any notes the main checkout still lacks and asks you first. Approve, and they're
+  copied in once the worktree is gone. Deny, and the worktree stays. This needs the ocgen binary.
+  Without it, notes stay in the worktree and go with it.
 
 Subagent isolation (`/fanout`, the implementer's `isolation: worktree`) works the same either way.
 The parent session in your main checkout owns the settings, and its hooks fire for the

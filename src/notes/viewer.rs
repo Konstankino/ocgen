@@ -998,6 +998,9 @@ impl Server {
         st.revs.insert(slug.to_string(), new.clone());
         Self::tell(&mut st, slug, &changed_event(&new));
         drop(st);
+        // In a linked worktree, the main checkout gets the saved text at once:
+        // a worktree can go with no hook to save its notes.
+        crate::hooks::mirror_note(&path);
         json_reply(&mut s, &json!({ "rev": new }));
     }
 
