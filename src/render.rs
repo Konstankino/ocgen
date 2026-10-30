@@ -965,6 +965,9 @@ impl Project {
                 aws_region => aws.region,
                 aws_account => aws.account_id,
                 aws_request => crate::aws::REQUEST,
+                aws_logs => claude && aws.fetches_logs(),
+                aws_logs_dir => crate::aws::LOGS_DIR,
+                aws_log_prefixes => aws.log_prefixes,
             },
         )
         .map(|n| n.trim().to_string())

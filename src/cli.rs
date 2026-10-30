@@ -461,8 +461,10 @@ pub enum EditWhat {
     /// outside the sandbox with your AWS CLI and this profile, checks the
     /// account first, runs only calls that read metadata (describe-*, list-*,
     /// get-*, minus those that return secrets or contents) and saves nothing.
-    /// Give the profile a role with read-only access: IAM is what keeps it
-    /// read-only. With flags the changes apply directly; without flags the
+    /// With --logs, agents can also fetch logs into .claude/aws-logs/ for local
+    /// analysis: CloudWatch Logs, CloudTrail, and S3 objects under the prefixes
+    /// you name. Give the profile a role with read-only access: IAM is what keeps
+    /// it read-only. With flags the changes apply directly; without flags the
     /// command asks.
     #[command(after_help = AWS_EXAMPLES)]
     Aws {
@@ -535,6 +537,9 @@ Examples:
   ocgen edit aws --profile acme-dev --account 123456789012 --region eu-west-1
   ocgen edit aws --show        # the current settings
   ocgen edit aws               # interactive
+  ocgen edit aws --logs --log-prefix s3://acme-logs/AWSLogs/
+                               # let agents fetch logs for local analysis
+  ocgen edit aws --no-logs     # stop that, and delete what was fetched
   ocgen edit aws --disable     # turn the check off (the settings are kept)";
 
 /// AWS dev account check changes given on the command line (`ocgen edit aws`).
@@ -549,7 +554,21 @@ pub struct AwsCli {
     /// The region the calls use ("" = the profile's own).
     #[arg(long, value_name = "REGION")]
     pub region: Option<String>,
-    /// Turn the check off (the settings are kept).
+    /// Let agents fetch logs into .claude/aws-logs/ for local analysis (git-ignored,
+    /// pruned after 7 days). The contents reach the model when read.
+    #[arg(long, conflicts_with_all = ["no_logs", "disable", "show"])]
+    pub logs: bool,
+    /// Stop log fetches, and delete what was fetched in this checkout.
+    #[arg(long, conflicts_with_all = ["disable", "show"])]
+    pub no_logs: bool,
+    /// An S3 prefix log fetches may read: s3://bucket/prefix/ (repeatable).
+    #[arg(long, value_name = "S3_PREFIX", conflicts_with_all = ["disable", "show"])]
+    pub log_prefix: Vec<String>,
+    /// Stop allowing an S3 prefix (repeatable).
+    #[arg(long, value_name = "S3_PREFIX", conflicts_with_all = ["disable", "show"])]
+    pub remove_log_prefix: Vec<String>,
+    /// Turn the check off (the settings are kept), and delete the logs fetched in
+    /// this checkout.
     #[arg(long)]
     pub disable: bool,
     /// Show the current settings and change nothing.
@@ -562,6 +581,10 @@ impl AwsCli {
         self.profile.is_none()
             && self.account.is_none()
             && self.region.is_none()
+            && !self.logs
+            && !self.no_logs
+            && self.log_prefix.is_empty()
+            && self.remove_log_prefix.is_empty()
             && !self.disable
             && !self.show
     }

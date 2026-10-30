@@ -278,6 +278,36 @@ pub fn aws_region(s: &str) -> Result<(), String> {
     }
 }
 
+/// The bucket and key of an `s3://bucket/key` address.
+pub fn s3_parts(s: &str) -> Option<(&str, &str)> {
+    s.strip_prefix("s3://")?.split_once('/')
+}
+
+/// An S3 prefix log fetches may read: `s3://bucket/key/`. The key isn't empty,
+/// so a whole bucket is never named by accident, and it ends in `/`, so
+/// `s3://b/logs/` can't also match `s3://b/logs-secret/`.
+pub fn aws_log_prefix(s: &str) -> Result<(), String> {
+    let bucket_ok = |b: &str| {
+        (3..=63).contains(&b.len())
+            && b.chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || "-.".contains(c))
+    };
+    let key_ok = |k: &str| {
+        k.ends_with('/')
+            && !k.chars().any(|c| c.is_control() || c.is_whitespace())
+            && k.split('/')
+                .rev()
+                .skip(1)
+                .all(|p| !p.is_empty() && p != "..")
+    };
+    match s3_parts(s) {
+        Some((b, k)) if bucket_ok(b) && key_ok(k) => Ok(()),
+        _ => Err(format!(
+            "'{s}' isn't an S3 log prefix (s3://bucket/some/prefix/, ending in '/')"
+        )),
+    }
+}
+
 /// A host name such as `docs.rs`: lowercase labels of letters, digits and `-`,
 /// at least one dot; no scheme, path or port. A leading `*.` trusts every
 /// subdomain (`*.amazon.com` — Claude Code matches any depth, but not

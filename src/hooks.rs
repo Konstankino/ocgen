@@ -23,7 +23,7 @@ use serde_json::Value;
 /// embedded in the ocgen that generated the project (hook scripts can't be
 /// overridden from the template dir), so they implement the same protocol —
 /// unless someone edits the project's copies by hand.
-pub const PROTOCOL: &str = "ocgen-hooks 27";
+pub const PROTOCOL: &str = "ocgen-hooks 28";
 
 /// How long Claude Code lets a gate that runs the project check (SubagentStop,
 /// TaskCompleted) take, in seconds: its hook `timeout`. Claude Code treats a
@@ -2957,9 +2957,10 @@ impl<'a> Hook<'a> {
     /// PostToolUse (Write|Edit|MultiEdit): when Claude writes its AWS request, run
     /// the calls that only read metadata with the user's own AWS CLI and the
     /// project's dev profile — after checking that the profile is the dev
-    /// account — and hand Claude the output in the note, written nowhere. A hook
-    /// runs outside the Bash sandbox, which withholds `~/.aws` from Claude's
-    /// shell. Any other write passes untouched. Never fails a write.
+    /// account — and hand Claude the output in the note, written nowhere; and, in
+    /// a project that opted in, fetch logs into `.claude/aws-logs/`. A hook runs
+    /// outside the Bash sandbox, which withholds `~/.aws` from Claude's shell.
+    /// Any other write passes untouched. Never fails a write.
     fn aws_read(&self) -> Outcome {
         let Some(root) = self.wrote(crate::aws::REQUEST) else {
             return Outcome::allow();
@@ -2970,6 +2971,8 @@ impl<'a> Hook<'a> {
         let cli = crate::aws::Cli {
             program: self.env("OCGEN_AWS_CLI").trim().to_string(),
             limit: Duration::from_secs(self.env_num("OCGEN_AWS_TIMEOUT", 20)),
+            budget: crate::aws::BUDGET,
+            keep_days: self.env_num("OCGEN_AWS_LOG_DAYS", crate::aws::KEEP_DAYS),
         };
         post_tool_note(crate::aws::answer(&root, &settings, &cli, self.probe()))
     }

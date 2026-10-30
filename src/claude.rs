@@ -155,6 +155,13 @@ pub struct AwsSettings {
     pub region: String,
     /// The dev account's 12-digit ID: every answer first checks it.
     pub account_id: String,
+    /// Let the agents fetch logs into `.claude/aws-logs/` for local analysis
+    /// (`ocgen edit aws --logs`). Off by default: it copies log contents to this
+    /// machine, which the guidance otherwise forbids.
+    pub logs: bool,
+    /// The S3 prefixes log fetches may read (`s3://bucket/prefix/`). A bucket can
+    /// hold anything, so none is readable until it is named here.
+    pub log_prefixes: Vec<String>,
 }
 
 impl AwsSettings {
@@ -164,6 +171,11 @@ impl AwsSettings {
             && crate::validate::aws_profile(&self.profile).is_ok()
             && crate::validate::aws_account_id(&self.account_id).is_ok()
             && (self.region.is_empty() || crate::validate::aws_region(&self.region).is_ok())
+    }
+
+    /// Whether the agents may fetch logs: the check is on, and so are log fetches.
+    pub fn fetches_logs(&self) -> bool {
+        self.active() && self.logs
     }
 }
 

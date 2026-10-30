@@ -1196,5 +1196,5 @@ fn the_notes_word_is_registered_with_the_ledgers() {
     // No new hook: `brief` rides on the notes hook, whose answers (the word,
     // the folders to watch, a brief's page) are protocol 22; a project on 21
     // falls back to its scripts until `ocgen doctor`.
-    assert_eq!(ocgen::hooks::PROTOCOL, "ocgen-hooks 27");
+    assert_eq!(ocgen::hooks::PROTOCOL, "ocgen-hooks 28");
 }

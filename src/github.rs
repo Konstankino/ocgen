@@ -1176,7 +1176,7 @@ fn fetch(root: &Path, gh: &Gh, budget: Duration, text: &str) -> Result<Answered,
 
 /// Write `text` as `dir/name` whole: a temp file, then a rename, so nothing is
 /// written through a file (or a link) already there.
-fn write_whole(dir: &Path, name: &str, text: &str) -> std::io::Result<()> {
+pub(crate) fn write_whole(dir: &Path, name: &str, text: &str) -> std::io::Result<()> {
     use std::io::Write;
     let tmp = dir.join(format!(".{name}.{}.tmp", std::process::id()));
     let _ = fs::remove_file(&tmp);
