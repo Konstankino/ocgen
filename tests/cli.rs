@@ -2,6 +2,7 @@
 //! These exercise main dispatch, the landscape/fields/doctor output, and the
 //! templates management commands (which the interactive wizard tests can't reach).
 
+use std::fs;
 use std::path::Path;
 
 use assert_cmd::Command;
@@ -1873,4 +1874,106 @@ fn edit_language_with_flags_regenerates_and_reports() {
         .assert()
         .failure()
         .stderr(contains("English, Ukrainian"));
+}
+
+fn aws_state(dir: &Path) -> ocgen::claude::AwsSettings {
+    Project::load_state(dir).unwrap().claude.aws
+}
+
+#[test]
+fn edit_aws_switches_log_fetches_on_and_off() {
+    let dir = tempdir().unwrap();
+    scaffold_claude(dir.path());
+    let run = |words: &[&str]| {
+        let mut c = ocgen();
+        c.args(["edit", "aws"])
+            .args(words)
+            .arg("-p")
+            .arg(dir.path());
+        c.assert()
+    };
+
+    // With the check off, these change no switch and need no profile.
+    run(&["--no-logs"]).success();
+    run(&["--log-prefix", "s3://acme-logs/logs/"]).success();
+    let s = aws_state(dir.path());
+    assert!(!s.enabled && !s.logs);
+    assert_eq!(s.log_prefixes, ["s3://acme-logs/logs/"]);
+    assert!(!dir.path().join(".claude/hooks/aws-read.sh").exists());
+
+    // --logs needs what the check needs.
+    run(&["--logs"]).failure().stderr(contains("--profile"));
+
+    run(&[
+        "--profile",
+        "acme-dev",
+        "--account",
+        "123456789012",
+        "--logs",
+        "--log-prefix",
+        "s3://acme-logs/metadata/",
+    ])
+    .success()
+    .stdout(contains("s3://acme-logs/metadata/"));
+    let s = aws_state(dir.path());
+    assert!(s.fetches_logs());
+    assert_eq!(s.log_prefixes.len(), 2);
+    let explorer = fs::read_to_string(dir.path().join(".claude/agents/explorer.md")).unwrap();
+    assert!(explorer.contains(ocgen::aws::LOGS_DIR));
+
+    // A prefix given twice is kept once; a bad one changes nothing.
+    run(&["--log-prefix", "s3://acme-logs/logs/"]).success();
+    assert_eq!(aws_state(dir.path()).log_prefixes.len(), 2);
+    run(&["--log-prefix", "s3://acme-logs/logs"])
+        .failure()
+        .stderr(contains("--log-prefix"));
+    assert_eq!(aws_state(dir.path()).log_prefixes.len(), 2);
+
+    run(&["--remove-log-prefix", "s3://acme-logs/logs/"]).success();
+    assert_eq!(
+        aws_state(dir.path()).log_prefixes,
+        ["s3://acme-logs/metadata/"]
+    );
+
+    // --no-logs leaves the check on and deletes what was fetched.
+    let fetched = dir.path().join(ocgen::aws::LOGS_DIR).join("1-s3");
+    fs::create_dir_all(&fetched).unwrap();
+    fs::write(fetched.join("0001-a.gz"), "x").unwrap();
+    run(&["--no-logs"])
+        .success()
+        .stdout(contains("Deleted 1 fetched log file"));
+    let s = aws_state(dir.path());
+    assert!(s.active() && !s.logs);
+    assert!(!dir.path().join(ocgen::aws::LOGS_DIR).exists());
+    let explorer = fs::read_to_string(dir.path().join(".claude/agents/explorer.md")).unwrap();
+    assert!(!explorer.contains(ocgen::aws::LOGS_DIR));
+
+    // --disable deletes them too, and nothing here turns the check back on.
+    run(&["--logs"]).success();
+    fs::create_dir_all(&fetched).unwrap();
+    fs::write(fetched.join("0001-a.gz"), "x").unwrap();
+    run(&["--disable"])
+        .success()
+        .stdout(contains("Deleted 1 fetched log file"));
+    assert!(!aws_state(dir.path()).enabled);
+    run(&["--remove-log-prefix", "s3://acme-logs/metadata/"]).success();
+    assert!(!aws_state(dir.path()).enabled);
+
+    // What can't go together.
+    run(&["--logs", "--no-logs"]).failure();
+    run(&["--logs", "--disable"]).failure();
+    run(&["--logs", "--show"]).failure();
+    run(&["--log-prefix", "s3://a-b/c/", "--show"]).failure();
+}
+
+#[test]
+fn edit_aws_show_reports_log_fetches() {
+    let dir = tempdir().unwrap();
+    scaffold_claude(dir.path());
+    ocgen()
+        .args(["edit", "aws", "--show", "-p"])
+        .arg(dir.path())
+        .assert()
+        .success()
+        .stdout(contains("log fetches"));
 }

@@ -650,3 +650,17 @@ fn the_hook_is_wired_on_writes_turns_and_exit_worktree_when_the_project_keeps_no
     w.intent = false;
     assert!(groups(&p).is_empty());
 }
+
+/// Fetched AWS logs aren't notes: they stay in their worktree and go with it, so
+/// a dump never lands in the main checkout or holds up the worktree's removal.
+#[test]
+fn fetched_aws_logs_are_neither_mirrored_nor_asked_about() {
+    let repo = Repo::new();
+    let wt = repo.wt();
+    write(&wt.join(".claude/aws-logs/1-s3/0001-a.gz"), "log\n");
+    write(&wt.join(".claude/aws-logs/1-s3/manifest.json"), "{}\n");
+    let (code, _, err) = repo.hook(&repo.main(), repo.stop(&wt), &[]);
+    assert_eq!(code, 0, "{err}");
+    assert!(!repo.main().join(".claude/aws-logs").exists());
+    assert!(repo.staged().is_empty());
+}

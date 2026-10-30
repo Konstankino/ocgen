@@ -1363,8 +1363,30 @@ pub fn run_edit_aws(path: String, changes: AwsCli) -> Result<()> {
                 }
                 aws.region = r.to_string();
             }
-            aws.enabled = true;
-            if !aws.active() {
+            for p in &changes.log_prefix {
+                let p = p.trim();
+                validate::aws_log_prefix(p).map_err(|e| anyhow!("--log-prefix: {e}"))?;
+                if !aws.log_prefixes.iter().any(|have| have == p) {
+                    aws.log_prefixes.push(p.to_string());
+                }
+            }
+            aws.log_prefixes
+                .retain(|have| !changes.remove_log_prefix.iter().any(|p| p.trim() == have));
+            if changes.logs {
+                aws.logs = true;
+            } else if changes.no_logs {
+                aws.logs = false;
+            }
+            // Only what the check needs switches it on: --no-logs or a prefix
+            // alone changes that setting and nothing else.
+            if changes.profile.is_some()
+                || changes.account.is_some()
+                || changes.region.is_some()
+                || changes.logs
+            {
+                aws.enabled = true;
+            }
+            if aws.enabled && !aws.active() {
                 bail!("the AWS dev account check needs a profile and an account: --profile <name> --account <12 digits>");
             }
         }
@@ -1372,6 +1394,17 @@ pub fn run_edit_aws(path: String, changes: AwsCli) -> Result<()> {
             project.claude.aws = aws;
             let written = project.scaffold(&root, true)?;
             report_written(&written);
+        }
+        // Nothing prunes fetched logs once fetches are off, so they go now.
+        let off = !project.claude.aws.fetches_logs();
+        if off && (changes.no_logs || changes.disable || was.fetches_logs()) {
+            let gone = ocgen::aws::delete_logs(&root)?;
+            if gone > 0 {
+                println!(
+                    "Deleted {gone} fetched log file(s) from {}.",
+                    ocgen::aws::LOGS_DIR
+                );
+            }
         }
     }
     print_aws(&project.claude.aws);
@@ -1389,8 +1422,8 @@ fn configure_aws(
         theme,
         "Check claims against an AWS dev account, read-only?",
         "Agents check what is deployed through the aws-read hook: your AWS CLI and this profile, \
-         the account checked first, only calls that read metadata, nothing saved. Give the \
-         profile a read-only role.",
+         the account checked first, only calls that read metadata, nothing saved (log fetches, \
+         asked about below, are the one exception). Give the profile a read-only role.",
         seed.enabled,
     )?;
     if !aws.enabled {
@@ -1425,6 +1458,25 @@ fn configure_aws(
             }
         },
     )?;
+    aws.logs = ask_confirm(
+        theme,
+        "Let agents fetch logs from this account for local analysis?",
+        "CloudWatch Logs, CloudTrail, and S3 objects under prefixes you name, saved to \
+         .claude/aws-logs/ (git-ignored, pruned after 7 days). The contents reach the model when \
+         read, so keep this to an account without customer data.",
+        seed.logs,
+    )?;
+    if aws.logs {
+        let prefixes = ask_v(
+            theme,
+            "S3 prefixes log fetches may read (space-separated, empty = none)",
+            "Each like s3://acme-logs/AWSLogs/, ending in '/'. Iceberg: name only the table's \
+             metadata/ folder, never data/.",
+            Some(&seed.log_prefixes.join(" ")),
+            |v| v.split_whitespace().try_for_each(validate::aws_log_prefix),
+        )?;
+        aws.log_prefixes = prefixes.split_whitespace().map(str::to_string).collect();
+    }
     Ok(aws)
 }
 
@@ -1456,6 +1508,15 @@ fn print_aws(aws: &ocgen::claude::AwsSettings) {
             aws.region.clone()
         },
     );
+    ui::kv(
+        "log fetches",
+        if aws.fetches_logs() {
+            "on — agents fetch logs into .claude/aws-logs/"
+        } else {
+            "off"
+        },
+    );
+    ui::kv("log prefixes", &or_none(&aws.log_prefixes.join(" ")));
 }
 
 pub fn run_edit_intent(path: String, changes: IntentCli) -> Result<()> {

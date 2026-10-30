@@ -472,6 +472,16 @@ const CLAUDE_FIELDS: &[Field] = &[
         example: "ocgen edit aws --profile acme-dev --account 123456789012 --region eu-west-1",
     },
     Field {
+        label: "AWS log fetches",
+        detail: "Off by default, and only on top of the AWS dev account check. On, agents can \
+                 fetch logs from that account for local analysis: CloudWatch Logs, CloudTrail, \
+                 and S3 objects under the prefixes you name, saved to .claude/aws-logs/ (git-ignored, \
+                 not copied out of a worktree, pruned after 7 days and over 1 GiB). The hook's note \
+                 names the files, never their contents; the contents reach the model when an \
+                 agent reads them. --no-logs or --disable deletes what was fetched.",
+        example: "ocgen edit aws --logs --log-prefix s3://acme-logs/AWSLogs/",
+    },
+    Field {
         label: "CODEOWNERS",
         detail: "The project's existing CODEOWNERS (.github/CODEOWNERS, CODEOWNERS or \
                  docs/CODEOWNERS — ocgen never creates one); the /intent skill names it. ocgen \

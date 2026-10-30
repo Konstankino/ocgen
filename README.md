@@ -2060,12 +2060,77 @@ ocgen edit aws --disable
   tokens and credentials. `--profile`, `--endpoint-url`, `--cli-input-*` and `file://` arguments
   are refused. At most 10 calls per request, 20 seconds each (`OCGEN_AWS_TIMEOUT`).
 - **Saved nowhere.** The output comes back in the hook's note, at most 8 KiB per call and 24 KiB
-  in all, marked as untrusted data; nothing is written to disk.
+  in all, marked as untrusted data; nothing is written to disk. Log fetches, below, are the one
+  exception, and only where you turn them on.
 - **IAM is the limit.** The allowlist backs it up; it isn't a boundary. Give the profile a role
   with read-only access to metadata only — and not to secret values or object contents.
 - **Needs ocgen and the AWS CLI** where Claude Code runs (the script fallback does nothing), and
   a signed-in profile (`aws sso login --profile <dev>` when it uses SSO). Without them Claude
   marks the claims unconfirmed and says why. Claude Code only: OpenCode has no hooks.
+
+#### Fetching logs for local analysis (`ocgen edit aws --logs`)
+
+Off by default, even with the check on: it copies log contents to your machine, and they reach the
+model when an agent reads them, so keep it to an account without customer data. Turned on, agents
+can fetch logs from the configured account into `.claude/aws-logs/` and analyze them with local
+tools.
+
+```bash
+ocgen edit aws --logs --log-prefix s3://acme-logs/AWSLogs/
+ocgen edit aws --remove-log-prefix s3://acme-logs/AWSLogs/
+ocgen edit aws --no-logs
+```
+
+Claude asks through the same request file. Three calls fetch, and each runs only with the flags
+listed:
+
+| Call | Needs | Also takes | At most |
+|---|---|---|---|
+| `logs filter-log-events` | `--log-group-name`, `--start-time` (milliseconds) | `--end-time`, `--filter-pattern`, `--log-stream-names`, `--log-stream-name-prefix`, `--max-items`, `--next-token`, `--region` | 10,000 events, 256 MiB |
+| `cloudtrail lookup-events` | `--start-time` | `--end-time`, `--lookup-attributes`, `--event-category`, `--max-items`, `--next-token`, `--region` | 2,000 events, 256 MiB |
+| `s3 cp s3://bucket/key`, no destination | a prefix you configured | `--recursive`, `--start-after`, `--region` | 200 objects, 256 MiB |
+
+One request fetches 512 MiB at most, across all its calls.
+
+Most other sources write to one of those places, so they need nothing of their own:
+
+| Source | Find it with (already allowed) | Fetch it from |
+|---|---|---|
+| Lambda, ECS, API Gateway, application logs | `logs describe-log-groups` | CloudWatch |
+| Redshift audit logs | `redshift describe-logging-status` | CloudWatch (`/aws/redshift/cluster/<name>/<type>`), or S3 `.gz` |
+| EventBridge bus logs | `events describe-event-bus` | CloudWatch or S3; Firehose wherever it delivers |
+| ALB, CloudFront, VPC Flow, archived CloudTrail | `s3 ls`, `s3api list-objects-v2` | S3 |
+| Iceberg metadata | `glue get-table` (`metadata_location`) | S3: the exact `*.metadata.json`, under a prefix naming only the table's `metadata/` |
+
+- **Why a prefix list for S3 only.** CloudWatch and CloudTrail hold only logs. A bucket can hold
+  anything, so no object is readable until you name its prefix, which must end in `/` so
+  `s3://b/logs/` can't also match `s3://b/logs-secret/`.
+- **Stays in the dev account.** The account check runs first, as for every call.
+  `--log-group-identifier` is refused because it can name another account's log group, and
+  `--unmask` because masked data stays masked. Redshift SQL isn't available: an allowlist can't show
+  a statement is read-only, so `redshift-data execute-statement` and `get-statement-result` are
+  refused.
+- **A long fetch keeps what it got.** Each API page is its own process, within 240 seconds per
+  request and `OCGEN_AWS_TIMEOUT` per page. If a fetch stops early, its file stays and the note gives
+  the `--next-token` or `--start-after` to continue from. Over an S3 cap, nothing is downloaded.
+- **Where it goes.** `.claude/aws-logs/<n>-<source>/`: `events.jsonl` (one event per line) or flat
+  object files, plus a `manifest.json` that says which call filled the folder and maps each file to
+  its S3 key. The folder ignores itself in git, and isn't copied from a worktree to the main checkout:
+  it goes when the worktree does. Fetches older than 7 days (`OCGEN_AWS_LOG_DAYS`) and anything over
+  1 GiB are pruned before each request's first fetch. `--no-logs` and `--disable` delete the folder
+  in that checkout.
+- **What Claude is told.** The note names each file, with its size, event count and time range, and
+  never quotes its contents. Claude's rules treat those contents as untrusted data, ask for the
+  shortest time range first, and accept a fetched file as evidence. Claude reads a file by its full
+  path, because search tools skip a git-ignored folder, and unpacks `.gz` with `gzip -dc`. Log
+  contents aren't redacted; CloudWatch's own masking stays on. Redshift's user activity log holds
+  full SQL text, literal values included.
+- **What the role needs.** `logs:DescribeLogGroups`, `logs:DescribeLogStreams`,
+  `logs:FilterLogEvents`, `cloudtrail:LookupEvents`, `s3:ListBucket` and `s3:GetObject` scoped to your
+  prefixes, and `kms:Decrypt` only for SSE-KMS buckets. Don't grant `logs:Unmask`. The managed
+  `CloudWatchLogsReadOnlyAccess` also works for CloudWatch, but it allows more than this needs.
+- **Limits.** A worktree-isolated worker gets no answer to its request, so the lead session fetches.
+  Iceberg manifests are Avro and need a local reader, and their column bounds can hold real values.
 
 #### Agent Teams
 
@@ -2124,7 +2189,7 @@ and inside the ocgen binary (`ocgen hook <name>`). The generated hook command us
 binary when a compatible ocgen is installed, and the script otherwise:
 
 ```sh
-if [ "$(ocgen hook --check 2>/dev/null)" = "ocgen-hooks 27" ]; then ocgen hook team-approval-gate; else sh ".../team-approval-gate.sh"; fi
+if [ "$(ocgen hook --check 2>/dev/null)" = "ocgen-hooks 28" ]; then ocgen hook team-approval-gate; else sh ".../team-approval-gate.sh"; fi
 ```
 
 - **The binary gives you** real JSON parsing instead of `grep`, and hooks that work on
@@ -2496,7 +2561,7 @@ for a plugin; `--team` is off by default. (The `--base-url` flag is OpenCode-onl
 | `ocgen add skill [dir]` | Author a new skill → `.claude/skills/<name>/SKILL.md` (name, description, allowed-tools, body). |
 | `ocgen edit intent -p <dir> [--prefix --digits --dir --max-words --branch --trust-domain/--untrust-domain --approver/--remove-approver --codeowners <path\|off> --codeowners-scope all\|intents\|off --enable/--disable --issue-template --intent-template --reset-…-template --show]` | Configure `/intent` (and `/review-intent`, which shares its settings): intent-file prefix, number width and directory, the issue word limit, the branch checked for taken numbers, the approvers who must sign off (GitHub handles), the project's existing CODEOWNERS it keeps their block in, and the project's issue / intent-file templates. No flags = interactive. |
 | `ocgen edit docs -p <dir> [--trust/--untrust <host>]… [--show]` | The documentation sites agents may fetch, one list for every agent, skill and team member (both targets). Claude: the WebFetch guard blocks every other site, and trusted ones never ask. OpenCode: each fetch asks, and the agents are told the list. No flags = show. |
-| `ocgen edit aws -p <dir> [--profile <p>] [--account <id>] [--region <r>] [--disable] [--show]` | The read-only AWS dev account check (Claude only): agents check what is deployed through the `aws-read` hook, the account checked first, metadata reads only, nothing saved. No flags = asks. |
+| `ocgen edit aws -p <dir> [--profile <p>] [--account <id>] [--region <r>] [--logs] [--no-logs] [--log-prefix <s3>] [--remove-log-prefix <s3>] [--disable] [--show]` | The read-only AWS dev account check (Claude only): agents check what is deployed through the `aws-read` hook, the account checked first, metadata reads only, nothing saved. `--logs` also lets them fetch logs into `.claude/aws-logs/` for local analysis; `--no-logs` and `--disable` delete what was fetched. No flags = asks. |
 | `ocgen edit permissions -p <dir> --list` | What `settings.json` actually holds, list by list in the order Claude Code checks them, each rule marked ocgen's or yours; flags yours that have no effect (`no effect: ocgen's ask rule wins`) or replace a generated one. Writes nothing. |
 | `ocgen edit permissions -p <dir> [--allow/--ask/--deny/--remove <RULE>]…` | Add or remove your own permission rules. They are saved in the state file and merged with ocgen's in `settings.json` by strictness, deny > ask > allow, so each rule sits in one list: a rule stricter than a generated one takes its place (`--deny "Bash(git push:*)"` moves it from ask to deny), a looser one has no effect, and both are warned about. Generated rules (including the approval-gate guards) can't be removed; removing your stricter rule restores ocgen's. No flags = interactive. |
 | `ocgen edit skill [name] -p <dir>` | Edit an existing skill; renaming cleans up the old skill directory. Omit `[name]` to pick from a list. |
