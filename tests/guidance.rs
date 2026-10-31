@@ -204,7 +204,7 @@ fn claude(language: &str, aws: bool) -> Project {
     let w = &mut p.claude.workflow;
     (w.intake, w.refine, w.improve_prompt, w.fanout) = (true, true, true, true);
     (w.deliver, w.inquire, w.recap, w.brief) = (true, true, true, true);
-    (w.workstreams, w.intent) = (true, true);
+    (w.workstreams, w.intent, w.chapter) = (true, true, true);
     p.claude.team.enabled = true;
     p.claude.team.plan_gate = true;
     if aws {
@@ -305,7 +305,7 @@ fn each_skill_and_agent_carries_its_groups() {
                 assert_groups(&file, text, role_guidance(role), language, aws);
                 seen += 1;
             }
-            assert_eq!(seen, 14 + 8);
+            assert_eq!(seen, 15 + 8);
             // The coordinator's rules carry none of it: the skills it runs do.
             assert!(!files[".claude/rules/ocgen-team.md"].contains("<guidance>"));
             assert!(!files[".claude/rules/ocgen-workflow.md"].contains("<guidance>"));
@@ -340,6 +340,53 @@ fn without_the_opt_in_no_part_of_the_aws_check_renders() {
     p.claude.aws.account_id = "12345".into();
     assert!(!p.claude.aws.active());
     assert!(!rendered(&p)[".claude/settings.json"].contains("aws-read"));
+}
+
+/// `evidence-required`, from its heading to the next rule's.
+fn evidence_rule(text: &str) -> String {
+    let start = text.find("**evidence-required.**").expect("the rule");
+    let end = start
+        + text[start..]
+            .find("**test-the-evidence.**")
+            .expect("the next");
+    text[start..end].to_string()
+}
+
+/// "At least one of" has to offer a real choice and its closing line has to fit
+/// it, with the AWS check on or off. A command's output counts in every project:
+/// `environment-state` asks for it and `test-the-evidence` says to produce it.
+#[test]
+fn the_evidence_rule_lists_its_choices_with_the_aws_check_on_or_off() {
+    for (aws, logs, choices) in [(false, false, 2), (true, false, 3), (true, true, 4)] {
+        for (language, command, closing) in [
+            (
+                "English",
+                "the output of a command you ran in this session",
+                "A claim with none of these is not a fact.",
+            ),
+            (
+                "Ukrainian",
+                "вивід команди, яку ти виконав у цій сесії",
+                "Твердження без жодного з них — не факт.",
+            ),
+        ] {
+            let mut p = claude(language, aws);
+            if logs {
+                p.claude.aws.logs = true;
+                p.claude.aws.log_prefixes = vec!["s3://acme-logs/logs/".into()];
+            }
+            let rule = evidence_rule(&rendered(&p)[".claude/agents/explorer.md"]);
+            let listed = rule.lines().filter(|l| l.starts_with("- ")).count();
+            assert_eq!(
+                listed, choices,
+                "{language}, aws {aws}, logs {logs}:\n{rule}"
+            );
+            let text = flat(&rule);
+            assert!(text.contains(command), "{language}: {rule}");
+            assert!(text.contains(closing), "{language}: {rule}");
+            assert!(!text.contains("neither"), "{language}: {rule}");
+        }
+    }
 }
 
 /// With the opt-in on, the hook is written and registered after every write.

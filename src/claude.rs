@@ -938,7 +938,7 @@ impl Default for HooksExtra {
 
 /// The workflow skills ocgen generates (formerly `.claude/commands/`). A user
 /// skill with one of these names would collide with the generated one.
-pub const WORKFLOW_SKILLS: [&str; 14] = [
+pub const WORKFLOW_SKILLS: [&str; 15] = [
     "multi",
     "intake",
     "refine",
@@ -951,6 +951,7 @@ pub const WORKFLOW_SKILLS: [&str; 14] = [
     "intent",
     "review-intent",
     "recap",
+    "chapter",
     "team",
     "team-plan",
 ];
@@ -1028,6 +1029,24 @@ pub const WORKSTREAMS_TOOLS: [&str; 14] = [
 /// with the Write tool under the project's own Write rule: no `Write` or `Edit`
 /// here, which `skill_issues` flags on a model-invocable skill.
 pub const BRIEF_TOOLS: [&str; 1] = ["Bash(git rev-parse:*)"];
+
+/// Tools /chapter may use without asking while it runs (skill `allowed-tools`):
+/// git's reads, a word count, and writes to its own book and the GitHub request
+/// folder. Both `Edit` rules are scoped, so `skill_issues` doesn't flag them on
+/// a model-invocable skill, and they work without the project's own Write rule.
+/// `git remote` is pinned to its bare form: `git remote add` writes.
+pub const CHAPTER_TOOLS: [&str; 10] = [
+    "Bash(git rev-parse:*)",
+    "Bash(git log:*)",
+    "Bash(git show:*)",
+    "Bash(git blame:*)",
+    "Bash(git status:*)",
+    "Bash(git diff:*)",
+    "Bash(git remote)",
+    "Bash(wc:*)",
+    "Edit(./.claude/notes/book/**)",
+    "Edit(./.claude/notes/github/**)",
+];
 
 /// One project MCP server (`.mcp.json` entry).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -1274,6 +1293,12 @@ pub struct Workflow {
     /// reviews on the related issues and PRs (fetched by the `recap-github` hook).
     /// User-run only — it moves refs.
     pub recap: bool,
+    /// Emit the `/chapter` book writer: from the docs, code, git history and
+    /// GitHub issues and pull requests, one plain-language chapter about a part of
+    /// the system, as text to be read aloud, in `.claude/notes/book/`, with its
+    /// evidence in a separate sources file and where to dig deeper. Model-invocable
+    /// (with `when_to_use`): it writes only to its own git-ignored folder.
+    pub chapter: bool,
     /// Minimum confidence (0–100) a subagent that wrote files must state before it
     /// may stop, enforced by a `SubagentStop` hook. `0` disables. This pairs with
     /// worktree isolation to give isolated writes + enforced per-worker confidence.
@@ -1303,6 +1328,7 @@ impl Default for Workflow {
             inquire: true,
             intent: true,
             recap: true,
+            chapter: true,
             subagent_confidence: 96,
             loop_guard_max: 3,
             check_cmd: String::new(),

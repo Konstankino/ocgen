@@ -664,6 +664,12 @@ fn build_claude_project(
         "Writes the brief for /deliver, /inquire or /workstreams first: an interview informed by the code, a dry run of the target skill for what it would still ask, a live page in your browser; the brief ends with the command to type.",
         true,
     )?;
+    p.claude.workflow.chapter = ask_confirm(
+        theme,
+        "Include the /chapter book-writer command?",
+        "Writes one plain-language chapter about a part of the system from its docs, code, git history and GitHub issues and pull requests, as a text file made to be read aloud; keeps the growing book, git-ignored, in .claude/notes/book/, with each chapter's evidence in a separate sources file.",
+        true,
+    )?;
     let (intent, intent_settings) =
         configure_intent(theme, true, &ocgen::claude::IntentSettings::default(), None)?;
     p.claude.workflow.intent = intent;

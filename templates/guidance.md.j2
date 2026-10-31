@@ -11,6 +11,8 @@
 
 **evidence-required.** Кожне твердження, яке ти подаєш як факт, МУСИТЬ спиратися хоча б на одне з:
 - `файл:рядок` у цьому репозиторії, який ти прочитав у цій сесії і який показує це твердження;
+- вивід команди, яку ти виконав у цій сесії і яка показує це твердження, з наведеною командою й потрібною
+  частиною виводу;
 {%- if aws %}
 - виклик лише для читання до dev-акаунта AWS (**aws-dev-account-check**), з наведеною командою й потрібною
   частиною виводу;
@@ -135,6 +137,8 @@ no conclusions, such as updating a ledger, writing titles, or summarizing finish
 
 **evidence-required.** Every claim you state as fact MUST rest on at least one of:
 - a `file:line` in this repository that you read in this session and that shows the claim;
+- the output of a command you ran in this session that shows the claim, with the command and the relevant
+  output quoted;
 {%- if aws %}
 - a read-only call against the AWS dev account (**aws-dev-account-check**), with the command and the
   relevant output quoted;
@@ -143,7 +147,7 @@ no conclusions, such as updating a ledger, writing titles, or summarizing finish
 - a log file fetched through **aws-dev-account-check**, with the command that fetched it, the file's path
   and the lines that show the claim;
 {%- endif %}
-A claim with neither is not a fact. Label it **unconfirmed** with the reason, or drop it; where a ledger or
+A claim with none of these is not a fact. Label it **unconfirmed** with the reason, or drop it; where a ledger or
 a finding tags claims Verified or Inferred, it is Inferred, with what would confirm it. Memory, names,
 comments that disagree with the code, and "it is usually like this" don't count.
 

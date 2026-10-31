@@ -1022,6 +1022,7 @@ fn claude_powerups_and_workflow_can_be_disabled() {
         inquire: false,
         intent: false,
         recap: false,
+        chapter: false,
         loop_guard_max: 0,
         check_cmd: String::new(),
         subagent_confidence: 0,
@@ -1434,6 +1435,7 @@ fn claude_team_enabled_without_hook_stubs() {
     p.claude.workflow.recap = false; // nor is /recap's GitHub fetch
     p.claude.workflow.workstreams = false; // nor is its merge gate
     p.claude.workflow.brief = false; // nor is the notes hook that opens a brief's page
+    p.claude.workflow.chapter = false; // nor is the hook that saves a worktree's notes
 
     let dir = tempdir().unwrap();
     p.scaffold(dir.path(), false).unwrap();
@@ -4148,6 +4150,7 @@ fn workflow_commands_are_generated_as_skills() {
         ("refine", false),
         ("improve-prompt", false),
         ("brief", false),
+        ("chapter", false),
     ] {
         let md = read(dir.path(), &format!(".claude/skills/{name}/SKILL.md"));
         assert!(

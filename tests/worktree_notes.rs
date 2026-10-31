@@ -1,5 +1,5 @@
-//! The worktree-notes hook. Notes (/inquire and /recap notes, /brief briefs,
-//! /intent drafts) are git-ignored, so a worktree's own never reach the main
+//! The worktree-notes hook. Notes (/inquire and /recap notes, a /chapter book,
+//! /brief briefs, /intent drafts) are git-ignored, so a worktree's own never reach the main
 //! checkout, and Claude Code counts them as no change: removing the worktree
 //! deletes them silently. Most removals run no hook at all (`:q` in a `claude
 //! --worktree` session, an archived desktop session), so the hook copies each
@@ -648,7 +648,41 @@ fn the_hook_is_wired_on_writes_turns_and_exit_worktree_when_the_project_keeps_no
     w.recap = false;
     w.brief = false;
     w.intent = false;
+    w.chapter = false;
     assert!(groups(&p).is_empty());
+    // A book in .claude/notes is a note too: /chapter alone keeps the hook.
+    p.claude.workflow.chapter = true;
+    assert_eq!(groups(&p).len(), 4);
+}
+
+/// A chapter is plain text in a subfolder of `.claude/notes`, and its sources file
+/// one folder deeper: both reach the main checkout like any other note.
+#[test]
+fn a_book_written_in_a_worktree_reaches_the_main_checkout() {
+    let repo = Repo::new();
+    let wt = repo.wt();
+    write(
+        &wt.join(".claude/notes/book/001-orders.txt"),
+        "Chapter one.\n",
+    );
+    write(
+        &wt.join(".claude/notes/book/sources/001-orders.txt"),
+        "Commit: abc\n",
+    );
+    let (code, _, err) = repo.hook(&repo.main(), repo.stop(&wt), &[]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(
+        fs::read_to_string(repo.main().join(".claude/notes/book/001-orders.txt")).unwrap(),
+        "Chapter one.\n"
+    );
+    assert_eq!(
+        fs::read_to_string(
+            repo.main()
+                .join(".claude/notes/book/sources/001-orders.txt")
+        )
+        .unwrap(),
+        "Commit: abc\n"
+    );
 }
 
 /// Fetched AWS logs aren't notes: they stay in their worktree and go with it, so

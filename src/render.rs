@@ -179,7 +179,7 @@ pub fn role_guidance(role: &str) -> Option<Guidance> {
 /// The guidance each generated command carries, by its name.
 pub fn command_guidance(name: &str) -> Option<Guidance> {
     match name {
-        "inquire" | "brief" | "recap" => Some(Guidance::CLAIMS),
+        "inquire" | "brief" | "recap" | "chapter" => Some(Guidance::CLAIMS),
         "fanout" | "team-plan" => Some(Guidance::CHANGES),
         "deliver" | "intent" | "review-intent" | "workstreams" | "team" | "multi" => {
             Some(Guidance::BOTH)
@@ -1102,10 +1102,10 @@ impl Project {
     }
 
     /// Whether the project writes notes a worktree session could leave behind:
-    /// /inquire and /recap notes, /brief briefs, /intent drafts.
+    /// /inquire and /recap notes, a /chapter book, /brief briefs, /intent drafts.
     pub fn keeps_notes(&self) -> bool {
         let w = &self.claude.workflow;
-        w.inquire || w.recap || w.intent || self.brief_enabled()
+        w.inquire || w.recap || w.intent || self.brief_enabled() || self.chapter_enabled()
     }
 
     /// Whether the /brief skill is rendered: the flag, at least one target
@@ -1118,6 +1118,12 @@ impl Project {
         w.brief
             && (w.deliver || w.inquire || w.workstreams)
             && !self.skills.iter().any(|s| s.name == "brief")
+    }
+
+    /// Whether the /chapter skill is rendered: the flag, and no user skill named
+    /// `chapter` (a project from before the name was reserved keeps its own).
+    pub fn chapter_enabled(&self) -> bool {
+        self.claude.workflow.chapter && !self.skills.iter().any(|s| s.name == "chapter")
     }
 
     /// The targets /brief writes a brief for — the enabled ones, in the order
@@ -1964,6 +1970,25 @@ impl Project {
                 .context("rendering recap command")?,
             ));
         }
+        if self.chapter_enabled() {
+            components.push((
+                "commands/chapter.md".to_string(),
+                env.render_str(
+                    &templates::load("claude/commands/chapter.md.j2")?,
+                    context! {
+                        research_model => research_model,
+                        guidance => &guides["chapter"],
+                        allowed_tools => crate::claude::CHAPTER_TOOLS.join(", "),
+                        explorer => self.fork_agent_default(),
+                        inquire => self.claude.workflow.inquire,
+                        // A book is kept in one language, the answers'.
+                        answer_language => canonical_language(self.response_language()),
+                        english_answers => self.response_language().eq_ignore_ascii_case("English"),
+                    },
+                )
+                .context("rendering chapter command")?,
+            ));
+        }
 
         let skill_tmpl = templates::load("claude/skill/SKILL.md.j2")?;
         for skill in &self.skills {
@@ -2325,6 +2350,7 @@ impl Project {
                 intake => self.claude.workflow.intake,
                 refine => self.claude.workflow.refine,
                 brief => self.brief_enabled(),
+                chapter => self.chapter_enabled(),
             };
             let plugin_json = env
                 .render_str(
@@ -4214,6 +4240,15 @@ impl Project {
             if fs::read_to_string(&p).is_ok_and(|md| !self.legacy_command("brief", &md)) {
                 w.push(
                     "a hand-made /brief command (.claude/commands/brief.md) is shadowed by the generated skill — rename or remove it"
+                        .into(),
+                );
+            }
+        }
+        if self.chapter_enabled() {
+            let p = root.join(".claude/commands/chapter.md");
+            if fs::read_to_string(&p).is_ok_and(|md| !self.legacy_command("chapter", &md)) {
+                w.push(
+                    "a hand-made /chapter command (.claude/commands/chapter.md) is shadowed by the generated skill — rename or remove it"
                         .into(),
                 );
             }
