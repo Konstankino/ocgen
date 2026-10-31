@@ -501,6 +501,9 @@ fn run_claude(root: &Path, project: &Project) -> Result<()> {
     if project.brief_enabled() {
         wf.push("/brief");
     }
+    if project.chapter_enabled() {
+        wf.push("/chapter");
+    }
     ui::kv(
         "workflow",
         &if wf.is_empty() {

@@ -146,10 +146,10 @@ fn english_prompts_with_ukrainian_answers() {
         ] {
             assert!(coord.contains(must), "missing {must:?} in:\n{coord}");
         }
-        // Only the coordinator's text, Claude's settings and the four skills that
+        // Only the coordinator's text, Claude's settings and the five skills that
         // write files people read (/inquire's ledger, /intent's and /review-intent's
-        // reading copies, /recap's report) change: the subagents and the other
-        // commands keep their instructions.
+        // reading copies, /recap's report, /chapter's book) change: the subagents and
+        // the other commands keep their instructions.
         let changed: Vec<&String> = split
             .iter()
             .filter(|(rel, text)| same.get(*rel) != Some(text))
@@ -159,6 +159,7 @@ fn english_prompts_with_ukrainian_answers() {
             Target::ClaudeCode => &[
                 ".claude/rules/ocgen-team.md",
                 ".claude/settings.json",
+                ".claude/skills/chapter/SKILL.md",
                 ".claude/skills/inquire/SKILL.md",
                 ".claude/skills/intent/SKILL.md",
                 ".claude/skills/recap/SKILL.md",

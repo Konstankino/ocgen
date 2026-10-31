@@ -608,6 +608,8 @@ repo used for a plugin's marketplace and release workflow; `--team` enables
 .claude/skills/intent/SKILL.md       # /intent — prompt → investigate → approved plan → numbered intent file (optional) → issue draft (you run it)
 .claude/skills/review-intent/SKILL.md # /review-intent — a change reviewed by your agents in parallel, each finding checked by another, recorded as an issue draft; an ADR on request (you run it)
 .claude/skills/recap/SKILL.md        # /recap — fast-forward your branches, then a per-branch report of what changed since the last recap, plus new GitHub comments and reviews (you run it)
+.claude/skills/chapter/SKILL.md      # /chapter — one plain-language chapter about a part of the system, as a text file made to be read aloud
+.claude/notes/book/                  # /chapter's book: <NNN>-<slug>.txt, 000-contents.txt, glossary.txt, sources/ (its own .gitignore keeps it out of git)
 .claude/intent/issue-template.md     # /intent's GitHub issue structure — yours, written once
 .claude/intent/drafts/<name>.md      # an issue or pull request draft (/intent's, or any Claude writes) — type `draft` to edit, preview and copy it in your browser (git-ignored)
 .claude/intent/viewer/               # the intent files' viewer and session records — type `adr` to read them (git-ignored)
@@ -759,8 +761,8 @@ its workflows as `.claude/skills/<name>/SKILL.md`. You still type `/deliver`, `/
 - **You start the side-effecting ones:** `/multi`, `/fanout`, `/workstreams`, `/deliver`, `/intent`,
   `/review-intent`, `/recap`, `/team` and `/team-plan` carry `disable-model-invocation: true`, so Claude can't start them on
   its own.
-- **Claude may use the rest when relevant:** `/inquire`, `/intake`, `/refine`, `/improve-prompt`
-  and `/brief`. Each has a `when_to_use` line saying when, so Claude picks it for the right
+- **Claude may use the rest when relevant:** `/inquire`, `/intake`, `/refine`, `/improve-prompt`,
+  `/brief` and `/chapter`. Each has a `when_to_use` line saying when, so Claude picks it for the right
   requests; ocgen's own check holds them to it like your skills.
 - **Upgrading:** `ocgen doctor` removes the old generated `.claude/commands/*.md`. Files you
   wrote yourself are kept.
@@ -1905,6 +1907,53 @@ live upstream aren't found.
 To add `/recap` to an existing project, re-render it with `ocgen doctor [dir]`. Projects created
 by older versions get it switched on automatically.
 
+#### Writing the book about a system (`/chapter`)
+
+**`/chapter <part of the system>`** writes one chapter of a book about the system, for a reader who
+can program and knows AWS but knows nothing about the field (wizard: "Include the /chapter
+book-writer command?"; on by default). Each chapter is a text file made to be read aloud, so you can
+turn it into audio with whatever tool you like. ocgen doesn't make the audio. Over time the chapters
+add up to a book. Claude may also start it when you ask for a chapter.
+
+The book lives in `.claude/notes/book/`, which keeps itself out of git, so **it exists only on this
+machine**:
+
+| File | What it is | For audio |
+|---|---|---|
+| `001-<slug>.txt` | The chapter: narration only | Yes |
+| `glossary.txt` | Every term so far, in speakable paragraphs | Yes |
+| `000-contents.txt` | The chapters, and the chapters suggested but not yet written | No |
+| `sources/001-<slug>.txt` | The evidence: commit, files read, `file:line`, issue and PR numbers, Verified or Inferred per claim, exact names, ready-to-type `/chapter` lines | No |
+
+- **Why two files per chapter:** a text-to-speech tool reads everything, so citations can't sit in
+  the chapter. The narration says its uncertainty in words instead ("I could not confirm this").
+- **What it reads:** docs, code, tests, infrastructure definitions, config and schemas, git history,
+  and GitHub issues and pull requests through [the request file](#reading-github-github-read), which
+  has no search: it starts from the pull requests `git log` shows for the part's files. Behaviour must
+  rest on code. An issue, PR or document only shows what people said or intended, and the chapter says
+  so. It may also run the project's own tests or break them on purpose, on a scratch copy outside the
+  project, to see what they really catch; those commands aren't pre-approved.
+- **What a chapter holds, in order:** why this part exists, the words you need, the big picture, one
+  example start to finish, how it works in detail, why it was built this way, when things go wrong,
+  what is still unclear, where to dig deeper, what to remember. It runs 3,000 to 6,000 words, about 20
+  to 40 minutes of listening; a bigger part gets split.
+- **Language:** everyday words first, with the technical term in parentheses. The field's terms and the
+  project's own names are explained the first time in each chapter, since a listener can't flip back.
+  No Markdown, lists, paths or symbols; numbers and units are written as spoken. The book is written in
+  the project's answer language, in that one language only.
+- **Before it finishes:** it greps the chapter and glossary for characters that can't be read aloud,
+  and a fresh subagent reads as a newcomer and re-opens the citations, for at most two rounds. Anything
+  still open is in its report.
+- **`/chapter` alone** lists the chapters, which have changed since they were written, and the
+  suggested chapters. Naming a part that already has a chapter asks whether to rewrite it under the same
+  number or write a new, deeper one; it never overwrites without your yes.
+- **In a linked worktree it stops** and tells you to use the main checkout: a worktree can't see the
+  book, so chapter numbers would collide.
+
+The reader is fixed in the skill's text. To change it, copy the template out with `ocgen templates
+init`. To add `/chapter` to an existing project, re-render it with `ocgen doctor [dir]`. Projects
+created by older versions get it switched on automatically.
+
 #### Trusted documentation sites (`ocgen edit docs`)
 
 Every way an agent reaches the web follows one list of trusted documentation sites: the main
@@ -2009,7 +2058,7 @@ the agents cite it by:
   testing evidence, searching for precedent, checking the environment, drafting the design) runs
   on the research model, and a subagent given research gets that model explicitly, never the
   agent type's default. Only bookkeeping that draws no conclusions may run cheaper.
-- **Claims** (`/inquire`, `/brief`, `/recap`; the explorer, verifier, reviewer, scope guard,
+- **Claims** (`/inquire`, `/brief`, `/recap`, `/chapter`; the explorer, verifier, reviewer, scope guard,
   adversary and privacy guard): `evidence-required` (a `file:line` read in this session, or with
   the AWS check a read-only call, quoted — anything else is **unconfirmed**, or `Inferred` where a
   ledger tags claims), `test-the-evidence`, `environment-state`, `no-environment-data-copy`, and
@@ -2536,7 +2585,7 @@ defaults to `.`.
 
 | Command | What it does |
 |---|---|
-| `ocgen new [dir] --target claude` | Scaffold a new Claude project (agents, `/multi` `/intake` `/refine` `/brief` `/fanout` `/workstreams` `/deliver` `/inquire` `/intent` `/review-intent` `/recap`, `CLAUDE.md`, `settings.json`). |
+| `ocgen new [dir] --target claude` | Scaffold a new Claude project (agents, `/multi` `/intake` `/refine` `/brief` `/fanout` `/workstreams` `/deliver` `/inquire` `/intent` `/review-intent` `/recap` `/chapter`, `CLAUDE.md`, `settings.json`). |
 | `ocgen new [dir] --target claude --output plugin` | Emit a distributable plugin instead of the project tree. |
 | `ocgen new [dir] --target claude --output both --repo <owner/repo>` | Emit both the project **and** a plugin (marketplace + release workflow). |
 | `ocgen new [dir] --target claude --team` | Also enable Agent Teams (env flag + `/team` + hooks + guidance). With the approval gate on, the sandbox question defaults to yes (macOS, Linux/WSL2). |
@@ -2664,7 +2713,7 @@ opencode/commands/multi.md.j2     # a command that fans out to the subagents
 seeds.toml               # blank-agent seed text (body + external prompt)
 claude/agent.md.j2              # one generic Claude subagent
 claude/CLAUDE.md.j2             # project instructions + roster
-claude/commands/*.md.j2         # multi / intake / refine / brief / fanout / workstreams / deliver / inquire / intent / review-intent / recap… (rendered as skills)
+claude/commands/*.md.j2         # multi / intake / refine / brief / fanout / workstreams / deliver / inquire / intent / review-intent / recap / chapter… (rendered as skills)
 claude/intent/*.md              # default /intent issue and intent-file templates (copied into new projects)
 claude/intent/*.md.j2           # /intent's shared text (writing standard, tone check, numbering, reading copy,
                                 # browser review), included by /intent and /review-intent

@@ -204,7 +204,7 @@ fn claude(language: &str, aws: bool) -> Project {
     let w = &mut p.claude.workflow;
     (w.intake, w.refine, w.improve_prompt, w.fanout) = (true, true, true, true);
     (w.deliver, w.inquire, w.recap, w.brief) = (true, true, true, true);
-    (w.workstreams, w.intent) = (true, true);
+    (w.workstreams, w.intent, w.chapter) = (true, true, true);
     p.claude.team.enabled = true;
     p.claude.team.plan_gate = true;
     if aws {
@@ -305,7 +305,7 @@ fn each_skill_and_agent_carries_its_groups() {
                 assert_groups(&file, text, role_guidance(role), language, aws);
                 seen += 1;
             }
-            assert_eq!(seen, 14 + 8);
+            assert_eq!(seen, 15 + 8);
             // The coordinator's rules carry none of it: the skills it runs do.
             assert!(!files[".claude/rules/ocgen-team.md"].contains("<guidance>"));
             assert!(!files[".claude/rules/ocgen-workflow.md"].contains("<guidance>"));

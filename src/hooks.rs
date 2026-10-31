@@ -3281,7 +3281,8 @@ struct Guard {
 }
 
 /// The note folders a worktree session writes and the main checkout never sees:
-/// /inquire and /recap notes, /brief briefs and /intent drafts.
+/// /inquire and /recap notes (and any /chapter book), /brief briefs and /intent
+/// drafts.
 const WORKTREE_NOTE_DIRS: [&str; 3] = [".claude/notes", ".claude/briefs", ".claude/intent/drafts"];
 
 /// `git -C dir <args>`'s first line of output, or `None` when it fails.

@@ -109,6 +109,7 @@ fn a_claude_project_with_nothing_else_turned_on_still_gets_it() {
         inquire: false,
         intent: false,
         recap: false,
+        chapter: false,
         subagent_confidence: 0,
         loop_guard_max: 0,
         check_cmd: String::new(),
