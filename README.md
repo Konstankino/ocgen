@@ -2059,10 +2059,11 @@ the agents cite it by:
   on the research model, and a subagent given research gets that model explicitly, never the
   agent type's default. Only bookkeeping that draws no conclusions may run cheaper.
 - **Claims** (`/inquire`, `/brief`, `/recap`, `/chapter`; the explorer, verifier, reviewer, scope guard,
-  adversary and privacy guard): `evidence-required` (a `file:line` read in this session, or with
-  the AWS check a read-only call, quoted — anything else is **unconfirmed**, or `Inferred` where a
-  ledger tags claims), `test-the-evidence`, `environment-state`, `no-environment-data-copy`, and
-  `aws-dev-account-check` when the project opted in to it.
+  adversary and privacy guard): `evidence-required` (a `file:line` read in this session, the quoted
+  output of a command run in it, or with the AWS check a read-only call, quoted — anything else is
+  **unconfirmed**, or `Inferred` where a ledger tags claims), `test-the-evidence`,
+  `environment-state`, `no-environment-data-copy`, and `aws-dev-account-check` when the project opted
+  in to it.
 - **Changes** (`/fanout`, `/team-plan`; the implementer): `start-from-base-branch`,
   `intent-review-before-code`, `precedent-search` (with the workflow rule's **Precedents** list),
   `precedent-boundary-check`, `follow-conventions` and `numbers-from-test-output`.
