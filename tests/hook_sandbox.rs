@@ -218,6 +218,102 @@ fn a_worktree_inside_dot_claude_stays_writable() {
     assert!(!wt.join(".claude/hooks/b.sh").exists());
 }
 
+/// The check-broker hook runs the full check in this sandbox, in a real linked
+/// worktree inside `.claude/`. The check's own work goes ahead in a folder the
+/// commit has (under Landlock nothing new can be created right at the worktree's
+/// top), a protected path stays shut, and exit 125 is the helper's own "couldn't
+/// apply": not run, never failed.
+#[cfg(unix)]
+#[test]
+fn the_check_broker_runs_its_check_in_the_sandbox() {
+    use std::io::Write as _;
+    use std::process::Stdio;
+
+    let f = fixture(false);
+    expect_backend(&f);
+    write(&f.p.join("src/keep.txt"), "kept\n");
+    let git = |args: &[&str]| {
+        let o = Command::new("git")
+            .args(args)
+            .current_dir(&f.p)
+            .output()
+            .unwrap();
+        assert!(o.status.success(), "git {args:?}: {o:?}");
+    };
+    git(&["config", "user.name", "t"]);
+    git(&["config", "user.email", "t@example.com"]);
+    git(&["config", "core.autocrlf", "false"]);
+    git(&["add", "src"]);
+    git(&["commit", "-qm", "init"]);
+
+    let project = ocgen::paths::for_shell(&f.p);
+    let records = f.p.join(".claude/deliver/s1");
+    let request = records.join("check-request.json");
+    let env = hook_env(false);
+    // One request under a new id: the record the hook leaves.
+    let broker = |id: &str, check: &str| -> String {
+        let body = serde_json::json!({ "id": id, "commit": "HEAD" }).to_string();
+        write(&request, &body);
+        let event = serde_json::json!({
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Write",
+            "tool_input": { "file_path": ocgen::paths::for_shell(&request) },
+        });
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_ocgen"));
+        cmd.args(["hook", "check-broker"])
+            .current_dir(&f.p)
+            .env("CLAUDE_PROJECT_DIR", &project)
+            .env("HOME", &f.home)
+            .env("USERPROFILE", &f.home)
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .env_remove("OCGEN_HOOK_PROBE")
+            .env("OCGEN_FULL_CHECK_CMD", check)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        for (k, v) in env.as_object().unwrap() {
+            cmd.env(k, v.as_str().unwrap());
+        }
+        let mut child = cmd.spawn().unwrap();
+        let _ = child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(event.to_string().as_bytes());
+        let out = child.wait_with_output().unwrap();
+        assert_eq!(out.status.code(), Some(0), "{out:?}");
+        fs::read_to_string(records.join(format!("check-{id}.md"))).unwrap()
+    };
+
+    let rec = broker("built", "echo built > src/out.txt && test -f src/out.txt");
+    assert!(rec.contains("Status: passed\n"), "{rec}");
+    assert!(!f.p.join("src/out.txt").exists(), "not in the checkout");
+    assert!(!f.p.join(".claude/worktrees/broker-s1-built").exists());
+
+    let settings = f.p.join(".claude/settings.json");
+    let settings_was = fs::read_to_string(&settings).unwrap();
+    let append = format!("echo x >> '{project}/.claude/settings.json'");
+    let rec = broker("settings", &append);
+    assert!(rec.contains("Status: failed\n"), "{rec}");
+    assert_eq!(fs::read_to_string(&settings).unwrap(), settings_was);
+
+    let store = "echo 9999999999 > \"$HOME/.claude/ocgen/approvals/old\"";
+    let rec = broker("approval", store);
+    assert!(rec.contains("Status: failed\n"), "{rec}");
+    let old = f.home.join(".claude/ocgen/approvals/old");
+    assert_eq!(fs::read_to_string(old).unwrap(), "1\n");
+
+    // `$CLAUDE_PROJECT_DIR` is the worktree for the check, while the policy, as
+    // above, still protects the real project.
+    let through_env = "echo built > \"$CLAUDE_PROJECT_DIR/src/env.txt\"";
+    let rec = broker("fromenv", through_env);
+    assert!(rec.contains("Status: passed\n"), "{rec}");
+    assert!(!f.p.join("src/env.txt").exists(), "not in the checkout");
+
+    let rec = broker("notapplied", "exit 125");
+    assert!(rec.contains("Status: not-run\n"), "{rec}");
+}
+
 /// Network off by default, on with `hook_network` (where the internet is
 /// reachable at all: OCGEN_TEST_NETWORK=1).
 #[cfg(unix)]

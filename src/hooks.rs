@@ -35,8 +35,9 @@ pub const CHECK_GATE_TIMEOUT: u64 = 3600;
 /// The most `OCGEN_CHECK_TIMEOUT` can give the check, in seconds.
 pub const CHECK_TIMEOUT_MAX: u64 = CHECK_GATE_TIMEOUT - 60;
 
-/// Every hook `ocgen hook <name>` accepts (matching the script names minus `.sh`).
-pub const NAMES: [&str; 21] = [
+/// Every hook `ocgen hook <name>` accepts (matching the script names minus `.sh`;
+/// `check-broker`, an unregistered prototype, has no script: see `src/broker.rs`).
+pub const NAMES: [&str; 22] = [
     "subagent-confidence-gate",
     "team-task-completed",
     "team-task-created",
@@ -58,6 +59,7 @@ pub const NAMES: [&str; 21] = [
     "shell-sandbox",
     "worktree-notes",
     "worker-commit",
+    "check-broker",
 ];
 
 /// Recorded approvals one write of an intent file or draft has checked against
@@ -428,6 +430,7 @@ pub fn run(name: &str, payload: &str, env: &HashMap<String, String>) -> Outcome 
         "shell-sandbox" => h.shell_sandbox(),
         "worktree-notes" => h.worktree_notes(),
         "worker-commit" => h.worker_commit(),
+        "check-broker" => h.check_broker(),
         other => Outcome {
             code: 1,
             stdout: String::new(),
@@ -2977,6 +2980,50 @@ impl<'a> Hook<'a> {
         post_tool_note(crate::aws::answer(&root, &settings, &cli, self.probe()))
     }
 
+    /// PostToolUse (Write|Edit|MultiEdit): when a check request is written in the
+    /// coordinator's checkout (the project, not the event's `cwd`, which follows a
+    /// subagent), run the project's full check and write the evidence
+    /// ([`crate::broker`]). A request's path holds a slug, which `wrote` and its one
+    /// exact path can't match, so `broker::request_slug` judges the path here. Any
+    /// other write passes untouched. Never fails a write.
+    fn check_broker(&self) -> Outcome {
+        if self.probe() {
+            return Outcome::allow();
+        }
+        let path = self
+            .json
+            .pointer("/tool_input/file_path")
+            .and_then(Value::as_str)
+            .filter(|p| !p.is_empty());
+        let Some(path) = path else {
+            return Outcome::allow();
+        };
+        let root = self.project();
+        let file = match Path::new(path) {
+            p if p.is_absolute() => p.to_path_buf(),
+            p => root.join(p),
+        };
+        let Some(rel) = relative_to(&file, &root) else {
+            return Outcome::allow();
+        };
+        let Some(slug) = crate::broker::request_slug(&rel) else {
+            return Outcome::allow();
+        };
+        let budget = self
+            .env_num("OCGEN_FULL_CHECK_TIMEOUT", CHECK_TIMEOUT_MAX)
+            .min(CHECK_TIMEOUT_MAX);
+        let command = |cmd: &str, dir: &Path| self.project_command(cmd, dir);
+        let job = crate::broker::Job {
+            root,
+            slug,
+            cmd: self.env("OCGEN_FULL_CHECK_CMD"),
+            budget: Duration::from_secs(budget),
+            sandboxed: self.env("OCGEN_SANDBOX") == "1",
+            command: &command,
+        };
+        post_tool_note(crate::broker::answer(&job))
+    }
+
     /// The project, when this event is a file tool's write of its file `rel`.
     fn wrote(&self, rel: &str) -> Option<PathBuf> {
         let path = self
@@ -3286,7 +3333,7 @@ struct Guard {
 const WORKTREE_NOTE_DIRS: [&str; 3] = [".claude/notes", ".claude/briefs", ".claude/intent/drafts"];
 
 /// `git -C dir <args>`'s first line of output, or `None` when it fails.
-fn git_line(dir: &Path, args: &[&str]) -> Option<String> {
+pub(crate) fn git_line(dir: &Path, args: &[&str]) -> Option<String> {
     let out = Command::new("git")
         .arg("-C")
         .arg(crate::paths::plain(dir))
@@ -3305,7 +3352,7 @@ fn git_line(dir: &Path, args: &[&str]) -> Option<String> {
 }
 
 /// Whether `git -C dir <args>` succeeds (its output discarded).
-fn git_ok(dir: &Path, args: &[&str]) -> bool {
+pub(crate) fn git_ok(dir: &Path, args: &[&str]) -> bool {
     Command::new("git")
         .arg("-C")
         .arg(crate::paths::plain(dir))
@@ -3873,7 +3920,7 @@ fn task_check(base: &str, desc: &str) -> String {
 
 /// Kill a timed-out check and everything it started: its process group on Unix
 /// (it was spawned as the group's leader), its process tree on Windows.
-fn kill_tree(child: &mut std::process::Child) {
+pub(crate) fn kill_tree(child: &mut std::process::Child) {
     #[cfg(unix)]
     {
         extern "C" {
@@ -4061,7 +4108,7 @@ fn worker_changed(cwd: &Path, baseline: Option<&Path>) -> bool {
 
 /// POSIX `cksum`: the CRC-32 (polynomial 0x04C11DB7, length appended) and the
 /// byte count, as `cksum` prints them.
-fn cksum(data: &[u8]) -> String {
+pub(crate) fn cksum(data: &[u8]) -> String {
     fn step(crc: u32, b: u8) -> u32 {
         let mut c = crc ^ (u32::from(b) << 24);
         for _ in 0..8 {
