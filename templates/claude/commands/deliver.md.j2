@@ -131,8 +131,10 @@ the adversary loop in `.claude/rules/ocgen-team.md`:
 {% endif %}
 ## 6. Synthesize
 Summarize what was done, the decisions and their confidence, open risks, and next steps. Report
-anything left unresolved — including every entry in `.claude/loop-guard/escalations.md` — as
-unresolved, not done. If a coordinator session is named, report status to it with `SendMessage`.
+anything left unresolved — including each agent the loop guard released in this session, which a
+hook names to you, with its branch — as unresolved, not done. Lines of other sessions in
+`.claude/loop-guard/escalations.md` are not this run's work. If a coordinator session is named,
+report status to it with `SendMessage`.
 From the conformance check, report each precedent followed, each one broken with its reason or as still broken,
 and each duplicate found.
 {% if scope_guard %}From the scope check, report the plan coverage (anything still missing, as not done), the blast radius,

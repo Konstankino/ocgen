@@ -823,6 +823,81 @@ fn worker_gate_scores_only_the_final_message_in_any_locale() {
     }
 }
 
+/// A worktree on the branch Claude Code gives an isolated worker, with an
+/// uncommitted change in it.
+fn worker_branch(dir: &Path) {
+    let wt = dir.join("wt");
+    if !wt.exists() {
+        fs::create_dir_all(&wt).unwrap();
+        git(&wt, &["init", "-q"]);
+        git(
+            &wt,
+            &["symbolic-ref", "HEAD", "refs/heads/worktree-agent-w1"],
+        );
+        fs::write(wt.join("new.rs"), "// change\n").unwrap();
+    }
+}
+
+/// An escalation names the session it happened in, the role and the worker's
+/// branch, so a coordinator can find its own and the branch that holds the
+/// unverified work. Fields it doesn't know are left out.
+#[test]
+fn an_escalation_names_its_session_role_and_branch() {
+    let worker = [
+        ("SUBAGENT_CONFIDENCE_THRESHOLD", "96"),
+        ("LOOP_GUARD_MAX_BLOCKS", "1"),
+    ];
+    let idle = [("TEAM_RISK_ROUNDS", "1"), ("LOOP_GUARD_MAX_BLOCKS", "1")];
+    let risk = |d: &Path| {
+        write(
+            d,
+            ".claude/team/plan.md",
+            "- Risk: drift — Owner: impl-1 — Mitigation: pending\n- Risk: loss — Owner: impl-2 — Mitigation: pending\n",
+        )
+    };
+    for (variant, extra) in [("jq", JQ), ("no jq", NO_JQ)] {
+        let steps = [
+            step(
+                "subagent-confidence-gate",
+                &worker,
+                stop_event("w1", "implementer", "Confidence: 40%"),
+                0,
+            )
+            .setup(worker_branch)
+            .out(&["systemMessage"]),
+            step(
+                "team-teammate-idle",
+                &idle,
+                r#"{"session_id":"s","teammate_name":"impl-1"}"#.into(),
+                0,
+            )
+            .setup(risk)
+            .out(&["systemMessage"]),
+            step(
+                "team-teammate-idle",
+                &idle,
+                r#"{"teammate_name":"impl-2"}"#.into(),
+                0,
+            )
+            .out(&["systemMessage"]),
+        ];
+        let (a, _) = parity(&format!("escalation context ({variant})"), &steps, extra);
+        let log = fs::read_to_string(a.path().join(".claude/loop-guard/escalations.md")).unwrap();
+        let lines: Vec<&str> = log.lines().collect();
+        assert_eq!(lines.len(), 3, "{log}");
+        assert!(
+            lines[0].contains("[subagent-confidence] w1: ")
+                && lines[0].ends_with(" | session=s role=implementer branch=worktree-agent-w1"),
+            "{log}"
+        );
+        assert!(
+            lines[1].contains("[risk-idle] impl-1: ") && lines[1].ends_with(" | session=s"),
+            "{log}"
+        );
+        assert!(lines[2].ends_with(" | session=nosession"), "{log}");
+    }
+}
+
 // ------------------------------------------------------- the worker's tree --
 
 /// A repository with one commit and the lead's uncommitted edit in it.
@@ -2086,7 +2161,7 @@ fn settings_wire_the_worker_baseline_and_read_only_roles() {
             "{ev} runs the worker gate: {cmd}"
         );
     }
-    assert_eq!(ocgen::hooks::PROTOCOL, "ocgen-hooks 28");
+    assert_eq!(ocgen::hooks::PROTOCOL, "ocgen-hooks 29");
 }
 
 #[test]
@@ -2121,6 +2196,23 @@ fn rules_say_where_confidence_and_owners_are_read() {
         team.contains("one teammate at a time") && team.contains("`Check: cargo test <arguments>`"),
         "{team}"
     );
+}
+
+/// The rules and /deliver ask for this session's releases — the ones the hook
+/// names — not every line of a log that holds other sessions' too.
+#[test]
+fn reports_name_the_releases_of_their_own_session() {
+    let dir = project_with(|p| p.claude.workflow.deliver = true);
+    let read = |rel: &str| fs::read_to_string(dir.path().join(rel)).unwrap();
+    let workflow = read(".claude/rules/ocgen-workflow.md");
+    let team = read(".claude/rules/ocgen-team.md");
+    let deliver = read(".claude/skills/deliver/SKILL.md");
+    for text in [&workflow, &team, &deliver] {
+        assert!(text.contains("in this session"), "{text}");
+        assert!(text.contains("other sessions"), "{text}");
+        assert!(!text.contains("every entry in"), "{text}");
+        assert!(!text.contains("report each entry"), "{text}");
+    }
 }
 
 // ---------------------------------------------------------------- sandbox --
@@ -2385,4 +2477,187 @@ fn the_team_check_and_the_formatter_run_sandboxed_too() {
     assert!(dir.path().join("src/fmt.txt").exists(), "the formatter ran");
     let old = home.path().join(".claude/ocgen/approvals/old");
     assert_eq!(fs::read_to_string(old).unwrap(), "1\n");
+}
+
+// --------------------------------------------------- releases reach the lead --
+
+/// A log with a release of this session (`s`) from each releasing gate, one of
+/// another session, a halt of this session and a line written before
+/// escalations named their session.
+const RELEASES: &str = "\
+- 2026-11-02T10:00:00Z [subagent-confidence] w1: blocked 3x; confidence 40% < 96% | session=s role=implementer branch=worktree-agent-w1
+- 2026-11-02T10:00:01Z [subagent-confidence] w2: blocked 3x; confidence 50% < 96% | session=other role=implementer
+- 2026-11-02T10:00:02Z [approval-gate] main: halted after 3 gated attempts | session=s
+- 2026-11-02T10:00:03Z [subagent-confidence] w3: blocked 3x
+- 2026-11-02T10:00:04Z [risk-idle] impl-1: held 3x; still pending: \"data\" loss | session=s
+";
+
+/// One more release of session `s`, after the others were told.
+const LATER: &str = "- 2026-11-02T10:05:00Z [task-confidence] t7: blocked 3x | session=s\n";
+
+fn releases(d: &Path) {
+    write(d, ".claude/loop-guard/escalations.md", RELEASES);
+}
+
+fn later(d: &Path) {
+    let p = d.join(".claude/loop-guard/escalations.md");
+    let log = fs::read_to_string(&p).unwrap();
+    if !log.contains(LATER) {
+        fs::write(p, format!("{log}{LATER}")).unwrap();
+    }
+}
+
+fn agent_done(sid: &str) -> String {
+    json!({
+        "session_id": sid, "transcript_path": "{dir}/tr/lead.jsonl", "cwd": "{dir}",
+        "permission_mode": "default", "hook_event_name": "PostToolUse", "tool_name": "Agent",
+        "tool_input": {"description": "fix", "prompt": "fix it", "subagent_type": "implementer"},
+        "tool_response": {"status": "completed", "agentId": "w1",
+            "content": [{"type": "text", "text": "Done.\nConfidence: 40%"}]},
+    })
+    .to_string()
+}
+
+fn lead_stop(sid: &str) -> String {
+    json!({
+        "session_id": sid, "transcript_path": "{dir}/tr/lead.jsonl", "cwd": "{dir}",
+        "permission_mode": "default", "hook_event_name": "Stop", "stop_hook_active": false,
+        "last_assistant_message": "All done.",
+    })
+    .to_string()
+}
+
+/// The lead is told about each worker the loop guard released in its session:
+/// after an Agent call, as context, and once more at the end of its turn, by
+/// holding the stop once. Never twice through one channel, never another
+/// session's, a halt or a line that names no session.
+#[test]
+fn the_lead_hears_of_each_release_in_its_session_once() {
+    for (variant, extra) in [("jq", JQ), ("no jq", NO_JQ)] {
+        let steps = [
+            step("escalations-report", &[], agent_done("s"), 0)
+                .setup(releases)
+                .out(&["hookSpecificOutput"]),
+            step("escalations-report", &[], agent_done("s"), 0),
+            step("escalations-report", &[], lead_stop("s"), 0).out(&["decision", "reason"]),
+            step("escalations-report", &[], lead_stop("s"), 0),
+            step("escalations-report", &[], lead_stop("other"), 0).out(&["decision", "reason"]),
+            step("escalations-report", &[], lead_stop(""), 0),
+            step("escalations-report", &[], agent_done("s"), 0)
+                .setup(later)
+                .out(&["hookSpecificOutput"]),
+            step("escalations-report", &[], lead_stop("s"), 0).out(&["decision", "reason"]),
+        ];
+        let (a, b) = parity(&format!("releases ({variant})"), &steps, extra);
+        for d in [a.path(), b.path()] {
+            let told =
+                |f: &str| fs::read_to_string(d.join(".claude/loop-guard/s").join(f)).unwrap();
+            for f in ["escalations-noted", "escalations-reported"] {
+                let t = told(f);
+                assert_eq!(t.lines().count(), 3, "{f}: {t}");
+                assert!(
+                    t.contains("] w1: ") && t.contains("] impl-1: ") && t.contains("] t7: "),
+                    "{f}: {t}"
+                );
+            }
+        }
+    }
+}
+
+/// What the lead reads names each of its releases, its branch, and what to do;
+/// nothing of another session's, a halt or an old line.
+#[test]
+fn the_lead_reads_its_releases_and_what_to_do_about_them() {
+    for rust in [true, false] {
+        let dir = project();
+        releases(dir.path());
+        let d = ocgen::paths::for_shell(dir.path());
+        let env: HashMap<String, String> = [("CLAUDE_PROJECT_DIR", d.as_str())]
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        let run = |payload: String| {
+            let payload = payload.replace("{dir}", &d);
+            if rust {
+                run_rs("escalations-report", &env, &payload)
+            } else {
+                run_sh(dir.path(), "escalations-report", &env, &payload)
+            }
+        };
+        let note: serde_json::Value = serde_json::from_str(run(agent_done("s")).1.trim()).unwrap();
+        let note = note["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let stop: serde_json::Value = serde_json::from_str(run(lead_stop("s")).1.trim()).unwrap();
+        assert_eq!(stop["decision"], "block", "{stop}");
+        let reason = stop["reason"].as_str().unwrap().to_string();
+        for text in [&note, &reason] {
+            for want in [
+                "UNRESOLVED",
+                "[subagent-confidence] w1: blocked 3x; confidence 40% < 96%",
+                "branch=worktree-agent-w1",
+                "[risk-idle] impl-1: held 3x; still pending: \"data\" loss",
+                "don't present",
+            ] {
+                assert!(
+                    text.contains(want),
+                    "rust={rust}: {want:?} missing in {text}"
+                );
+            }
+            for not in ["w2", "w3", "approval-gate"] {
+                assert!(!text.contains(not), "rust={rust}: {not:?} in {text}");
+            }
+        }
+        assert!(reason.contains("say so in one line and stop"), "{reason}");
+    }
+}
+
+/// Without a loop guard log, or with nothing of its session in it, the hook
+/// says nothing and keeps no record.
+#[test]
+fn the_release_report_is_silent_without_releases() {
+    for rust in [true, false] {
+        let dir = project();
+        let d = ocgen::paths::for_shell(dir.path());
+        let env: HashMap<String, String> = [("CLAUDE_PROJECT_DIR", d.as_str())]
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        for payload in [agent_done("s"), lead_stop("s")] {
+            let payload = payload.replace("{dir}", &d);
+            let o = if rust {
+                run_rs("escalations-report", &env, &payload)
+            } else {
+                run_sh(dir.path(), "escalations-report", &env, &payload)
+            };
+            assert_eq!((o.0, o.1.trim()), (0, ""), "rust={rust}: {o:?}");
+        }
+        assert!(!dir.path().join(".claude/loop-guard/s").exists());
+    }
+}
+
+/// Wherever a gate can release an agent, the lead's Agent calls and its turn
+/// ends go through the release report.
+#[test]
+fn settings_wire_the_release_report() {
+    let dir = project();
+    let s: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(dir.path().join(".claude/settings.json")).unwrap(),
+    )
+    .unwrap();
+    let wired = |ev: &str, matcher: Option<&str>| {
+        s["hooks"][ev].as_array().unwrap().iter().any(|g| {
+            g["matcher"].as_str() == matcher
+                && g["hooks"][0]["command"]
+                    .as_str()
+                    .is_some_and(|c| c.contains("escalations-report"))
+        })
+    };
+    assert!(wired("PostToolUse", Some("Agent|Task")), "{}", s["hooks"]);
+    assert!(wired("Stop", None), "{}", s["hooks"]);
+    assert!(dir
+        .path()
+        .join(".claude/hooks/escalations-report.sh")
+        .exists());
 }

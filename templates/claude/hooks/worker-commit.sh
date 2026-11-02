@@ -66,10 +66,19 @@ common=$(git -C "$cwd" rev-parse --path-format=absolute --git-common-dir 2>/dev/
 branch=$(git -C "$cwd" symbolic-ref --quiet --short HEAD 2>/dev/null)
 [ "$git_dir" != "$common" ] || exit 0
 case "$branch" in worktree-agent-*) ;; *) exit 0 ;; esac
-[ -n "$(git -C "$cwd" status --porcelain --untracked-files=all 2>/dev/null)" ] || exit 0
-
 who=$(safe "$(json_str agent_type)")
 [ -n "$who" ] || who=subagent
+
+# `worker-commit.sh mark`, run by the worker gate on a worker the loop guard
+# released: an empty commit on top that says so, its body the release message
+# (OCGEN_RELEASED), so the branch shows the work was never verified.
+if [ "${1:-}" = mark ]; then
+    git -C "$cwd" commit -q --allow-empty -m "chore($who): UNRESOLVED, released by the loop guard" \
+        -m "${OCGEN_RELEASED:-}" </dev/null >/dev/null 2>&1
+    exit 0
+fi
+[ -n "$(git -C "$cwd" status --porcelain --untracked-files=all 2>/dev/null)" ] || exit 0
+
 subject="chore($who): the subagent's changes"
 body="Committed by ocgen's worker-commit hook when the subagent stopped, so its branch merges."
 # Another git command holding the index (the worker gate runs beside this hook)

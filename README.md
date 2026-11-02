@@ -1778,7 +1778,8 @@ The page opens with the broad picture:
   check, a confidence below the bar, a branch that moved since the report, uncommitted work, a
   worktree that is gone, a `Differs` entry, a workstream marked reported or beyond with no
   report on file, and any loop-guard escalation that names the worker, its branch or its
-  workstream (escalations tied to none are listed below the cards). A report a worker posted
+  workstream (in its text, or as its `branch=` field; a session id or a role never ties one), and
+  escalations tied to none are listed below the cards. A report a worker posted
   in its worktree but the manager has not collected yet shows on the card at once, marked as
   such, with its facts and issues, and asks to be collected. A card folds; one with issues
   starts open, and its reports and brief fold out in full.
@@ -2239,7 +2240,7 @@ and inside the ocgen binary (`ocgen hook <name>`). The generated hook command us
 binary when a compatible ocgen is installed, and the script otherwise:
 
 ```sh
-if [ "$(ocgen hook --check 2>/dev/null)" = "ocgen-hooks 28" ]; then ocgen hook team-approval-gate; else sh ".../team-approval-gate.sh"; fi
+if [ "$(ocgen hook --check 2>/dev/null)" = "ocgen-hooks 29" ]; then ocgen hook team-approval-gate; else sh ".../team-approval-gate.sh"; fi
 ```
 
 - **The binary gives you** real JSON parsing instead of `grep`, and hooks that work on
@@ -2481,7 +2482,16 @@ with a shared `.claude/hooks/loop-guard.sh`:
   agent how much budget is left, and the gate resets once it passes.
 - **Quality gates release.** The subagent-confidence, teammate-confidence and risk-round gates let
   the agent stop, complete or idle once the budget is spent, **marked UNRESOLVED**: you get a
-  warning, and an entry is written to `.claude/loop-guard/escalations.md`.
+  warning, and an entry is written to `.claude/loop-guard/escalations.md`. Each entry ends with the
+  session it happened in, the agent's role and, for a worker, its branch:
+  `… | session=<id> role=<role> branch=<branch>`.
+- **The coordinator hears of it.** The release warning reaches only you, and a released worker's
+  last message still states its confidence. So the `escalations-report` hook tells the coordinator
+  about each release in its session: right after an Agent call returns, as context, and at the end
+  of its turn by holding the stop once (a background worker returns before it stops). Each release
+  is told once through each, never another session's. A released worker's branch also gets an
+  empty commit, `chore(<role>): UNRESOLVED, released by the loop guard`, so the branch shows it
+  wherever it is merged.
 - **Approval gates never release.** The plan gate keeps blocking but tells the agent to stop
   retrying and go idle. The execution-approval gate denies the command **and halts the agent**
   (`continue: false`). The loop guard never lets an unapproved plan or a gated `git push` through.
@@ -2489,7 +2499,8 @@ with a shared `.claude/hooks/loop-guard.sh`:
   30, verifier 40, adversary 40, scope-guard 30, privacy-guard 40). At the limit its output comes back marked partial and can be resumed once.
 - **Loop discipline.** The workflow rule tells agents to change approach after two failures,
   report the blocker after the third, re-plan at most twice, and never inflate confidence to get
-  past a gate. The coordinator must report every escalation as unresolved.
+  past a gate. The coordinator must report each release in its session as unresolved; entries of
+  other sessions in the log aren't its work.
 
 Tune the budget with the wizard's "Max times a gate may block the same agent" question, or set
 `claude.workflow.loop_guard_max` in `.claude/.ocgen-state.json` and run `ocgen doctor` (`0` =
@@ -2545,7 +2556,9 @@ Committing `.claude/` is optional. Both ways work:
   `worktree-agent-*` branch, and the coordinator merges that branch. Git-ignored files stay out,
   and your repository's git hooks run. Nothing else is committed: not the main checkout, nor a
   `claude --worktree` session's worktree. If the commit fails (no git identity, a pre-commit hook
-  refusing), the change stays uncommitted and the hook says so.
+  refusing), the change stays uncommitted and the hook says so. With the worker confidence gate
+  on, the gate commits instead, after its verdict (`OCGEN_WORKER_COMMIT=1`): two hooks on one
+  event run at once, and the mark it puts on a released worker would race a separate commit.
 - **Notes when a worktree goes:** notes (`.claude/notes/`, `.claude/briefs/` and
   `.claude/intent/drafts/`) are git-ignored, so the main checkout never sees a worktree's own.
   Claude Code also counts them as no change, so removing the worktree would delete them without

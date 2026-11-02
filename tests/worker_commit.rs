@@ -95,17 +95,27 @@ impl Repo {
     /// (exit code, stdout, stderr) of the hook on `payload`, from a session
     /// whose project is the main checkout.
     fn run(&self, via: Via, payload: &Value, extra: &[(&str, &str)]) -> (i32, String, String) {
+        self.run_hook("worker-commit", via, payload, extra)
+    }
+
+    fn run_hook(
+        &self,
+        hook: &str,
+        via: Via,
+        payload: &Value,
+        extra: &[(&str, &str)],
+    ) -> (i32, String, String) {
         let mut cmd = match via {
             Via::Binary => {
                 let mut c = Command::new(env!("CARGO_BIN_EXE_ocgen"));
-                c.args(["hook", "worker-commit"]);
+                c.args(["hook", hook]);
                 c
             }
             Via::Script => {
                 let mut c = Command::new("sh");
                 c.arg(
                     Path::new(env!("CARGO_MANIFEST_DIR"))
-                        .join("templates/claude/hooks/worker-commit.sh"),
+                        .join(format!("templates/claude/hooks/{hook}.sh")),
                 );
                 c
             }
@@ -116,6 +126,12 @@ impl Repo {
         )
         .env_remove("OCGEN_HOOK_PROBE")
         .env_remove("OCGEN_NO_JQ")
+        .env_remove("OCGEN_WORKER_COMMIT")
+        .env_remove("OCGEN_CHECK_CMD")
+        .env_remove("SUBAGENT_CONFIDENCE_THRESHOLD")
+        .env_remove("SUBAGENT_READONLY_ROLES")
+        .env_remove("LOOP_GUARD_MAX_BLOCKS")
+        .env_remove("TEAM_TASK_GATE")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -273,6 +289,128 @@ fn a_commit_that_fails_says_so_and_never_blocks() {
     }
 }
 
+/// The worker gate's settings, with the gate committing for the worker.
+const GATED: [(&str, &str); 3] = [
+    ("SUBAGENT_CONFIDENCE_THRESHOLD", "96"),
+    ("LOOP_GUARD_MAX_BLOCKS", "1"),
+    ("OCGEN_WORKER_COMMIT", "1"),
+];
+
+fn said(via: Via, out: &str) -> String {
+    let msg: Value = serde_json::from_str(out).unwrap_or_else(|e| panic!("{via:?} {e}: {out}"));
+    msg["systemMessage"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// With the worker gate on, the gate commits the worker's changes itself, after
+/// its verdict, in one process: a separate hook beside it would race it. A
+/// worker the loop guard releases gets a second, empty commit that says so, so
+/// its branch shows the work was never verified.
+#[test]
+fn the_gate_commits_a_worker_and_marks_one_it_releases() {
+    for via in BOTH {
+        let r = Repo::new();
+        let wt = r.wt();
+        write(&wt.join("app.py"), "x = 2\n");
+        let mut stop = r.stop(&wt);
+        stop["last_assistant_message"] = json!("Done.\nConfidence: 40%");
+        let (code, out, err) = r.run_hook("subagent-confidence-gate", via, &stop, &GATED);
+        assert_eq!(code, 0, "{via:?}: released: {err}");
+        let say = said(via, &out);
+        assert!(
+            say.contains("UNRESOLVED") && say.contains("worktree-agent-abc"),
+            "{via:?}: {say}"
+        );
+        assert_eq!(r.commits("worktree-agent-abc"), 3, "{via:?}");
+        assert_eq!(git(&wt, &["status", "--porcelain"]), "", "{via:?}");
+        let log = git(&wt, &["log", "-2", "--format=%s"]);
+        assert_eq!(
+            log,
+            "chore(implementer): UNRESOLVED, released by the loop guard\n\
+             chore(implementer): the subagent's changes",
+            "{via:?}"
+        );
+        let body = git(&wt, &["log", "-1", "--format=%b"]);
+        assert!(
+            body.contains("worker abc") && body.contains("confidence 40% < 96%"),
+            "{via:?}: {body}"
+        );
+        assert_eq!(git(&wt, &["show", "--name-only", "--format=", "HEAD"]), "");
+        assert_eq!(
+            git(&wt, &["show", "--name-only", "--format=", "HEAD~1"]),
+            "app.py"
+        );
+    }
+}
+
+/// A worker that passes is committed as before; one sent back is committed too
+/// (as the separate hook did at every stop), with no mark; without the setting
+/// the gate commits nothing; `ocgen verify`'s probe changes nothing.
+#[test]
+fn the_gate_commits_like_the_hook_it_replaces() {
+    for via in BOTH {
+        let r = Repo::new();
+        let wt = r.wt();
+        let mut stop = r.stop(&wt);
+        write(&wt.join("app.py"), "x = 2\n");
+        let (code, out, err) = r.run_hook("subagent-confidence-gate", via, &stop, &GATED);
+        assert_eq!(code, 0, "{via:?}: {err}");
+        assert!(said(via, &out).contains("committed implementer's changes on worktree-agent-abc"));
+        assert_eq!(r.commits("worktree-agent-abc"), 2, "{via:?}");
+        // Sent back: committed, not marked.
+        write(&wt.join("app.py"), "x = 3\n");
+        stop["agent_id"] = json!("abd");
+        stop["last_assistant_message"] = json!("Done.\nConfidence: 40%");
+        let back = [GATED[0], ("LOOP_GUARD_MAX_BLOCKS", "3"), GATED[2]];
+        let (code, _, err) = r.run_hook("subagent-confidence-gate", via, &stop, &back);
+        assert_eq!(code, 2, "{via:?}: {err}");
+        assert!(err.contains("below the required 96%"), "{via:?}: {err}");
+        assert_eq!(r.commits("worktree-agent-abc"), 3, "{via:?}");
+        assert_eq!(
+            git(&wt, &["log", "-1", "--format=%s"]),
+            "chore(implementer): the subagent's changes"
+        );
+        // The setting off: the gate leaves committing to the separate hook.
+        write(&wt.join("app.py"), "x = 4\n");
+        stop["last_assistant_message"] = json!("Done.\nConfidence: 97%");
+        let (code, out, _) = r.run_hook("subagent-confidence-gate", via, &stop, &GATED[..2]);
+        assert_eq!((code, out.as_str()), (0, ""), "{via:?}");
+        assert_eq!(r.commits("worktree-agent-abc"), 3, "{via:?}");
+        // The probe.
+        let probe = [GATED[0], GATED[1], GATED[2], ("OCGEN_HOOK_PROBE", "1")];
+        r.run_hook("subagent-confidence-gate", via, &stop, &probe);
+        assert_eq!(r.commits("worktree-agent-abc"), 3, "{via:?}");
+    }
+}
+
+/// Where the worker gate is on, it commits for isolated workers: the
+/// worker-commit hook isn't wired beside it (its script stays, the gate runs
+/// it), and the gate is told so.
+#[test]
+fn the_gate_takes_over_the_commit_when_both_are_on() {
+    let m = ocgen::manifest::Manifest::load().unwrap();
+    let mut p = ocgen::render::Project::from_manifest(&m, "English");
+    p.target = ocgen::target::Target::ClaudeCode;
+    p.project_name = "wc".into();
+    p.providers.clear();
+    p.agents = ocgen::agent::claude_default_pipeline("English").unwrap();
+    p.claude.workflow.fanout = true;
+    p.claude.workflow.subagent_confidence = 90;
+    let dir = tempdir().unwrap();
+    p.scaffold(dir.path(), false).unwrap();
+    let s: Value = serde_json::from_str(
+        &fs::read_to_string(dir.path().join(".claude/settings.json")).unwrap(),
+    )
+    .unwrap();
+    let stop = s["hooks"]["SubagentStop"].to_string();
+    assert!(stop.contains("subagent-confidence-gate"), "{stop}");
+    assert!(!stop.contains("worker-commit"), "{stop}");
+    assert_eq!(s["env"]["OCGEN_WORKER_COMMIT"], "1", "{}", s["env"]);
+    assert!(dir.path().join(".claude/hooks/worker-commit.sh").is_file());
+}
+
 #[test]
 fn the_hook_is_wired_on_subagent_stop_when_workers_are_isolated() {
     assert!(ocgen::hooks::NAMES.contains(&"worker-commit"));
@@ -283,6 +421,9 @@ fn the_hook_is_wired_on_subagent_stop_when_workers_are_isolated() {
     p.project_name = "wc".into();
     p.providers.clear();
     p.agents = ocgen::agent::claude_default_pipeline("English").unwrap();
+    // Without the worker gate, which otherwise commits for them.
+    p.claude.workflow.subagent_confidence = 0;
+    p.claude.workflow.check_cmd.clear();
     let wired = |p: &ocgen::render::Project| -> bool {
         let dir = tempdir().unwrap();
         p.scaffold(dir.path(), false).unwrap();

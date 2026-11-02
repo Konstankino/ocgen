@@ -912,11 +912,28 @@ fn issues(
         .filter(|k| k.len() >= 3 && !unknown(k))
         .collect();
     for line in escalations {
-        if keys.iter().any(|k| line.contains(k)) {
+        let (head, on) = escalation_parts(line);
+        if keys.iter().any(|k| head.contains(k)) || on.is_some_and(|b| keys.contains(&b)) {
             out.push(format!("loop guard: {line}"));
         }
     }
     out
+}
+
+/// An escalation line's text before the fields the loop guard ends it with
+/// (` | session=… role=… branch=…`), and the branch they name. Only the text
+/// and the branch tie a line to a workstream: a session id or a role could
+/// contain any worker's name. A line without the fields is all text.
+fn escalation_parts(line: &str) -> (&str, Option<&str>) {
+    match line.rsplit_once(" | ") {
+        Some((head, fields)) if fields.starts_with("session=") => (
+            head,
+            fields
+                .split_whitespace()
+                .find_map(|f| f.strip_prefix("branch=")),
+        ),
+        _ => (line, None),
+    }
 }
 
 /// The agents of board `b` in `dir`, in board order, and the loop guard's
