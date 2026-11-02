@@ -74,8 +74,10 @@ pre-author them.
   task, role or action (or when its stated confidence stops rising), confidence and risk gates
   release it with the result marked **UNRESOLVED**, while the plan and approval gates stay closed
   and tell it to stop retrying. Each trip is logged to `.claude/loop-guard/escalations.md`; a hook
-  names each release in this session to the lead, who reports those as unresolved. Lines of
-  other sessions there are not this team run's.
+  names each release in this session to the lead, who reports those as unresolved. A teammate
+  in its own pane (tmux, iTerm2) runs in a session of its own that the hook doesn't name: the
+  lead reads the file too and reports each line that names one of its tasks or teammates. Lines
+  of other sessions that name neither are not this team run's.
 {%- endif %}
 {% if approval_gate %}
 - **Execution-approval gate.** No agent may perform a high-impact external action — `ssh`,
