@@ -2613,6 +2613,37 @@ fn the_lead_reads_its_releases_and_what_to_do_about_them() {
     }
 }
 
+/// The script reads back what it told wherever the project is: a folder name
+/// with backslashes, as a Windows path can reach it, isn't taken for escapes,
+/// so the second stop passes instead of being held at every turn end.
+#[cfg(unix)]
+#[test]
+fn the_release_report_reads_its_record_back_under_any_path() {
+    let base = tempfile::tempdir().unwrap();
+    let dir = base.path().join(r"C:\Users\dev");
+    releases(&dir);
+    let script =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("templates/claude/hooks/escalations-report.sh");
+    let stop = || {
+        let mut child = Command::new("sh")
+            .arg(&script)
+            .env("CLAUDE_PROJECT_DIR", &dir)
+            .env_remove("OCGEN_HOOK_PROBE")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let _ = child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(lead_stop("s").as_bytes());
+        String::from_utf8_lossy(&child.wait_with_output().unwrap().stdout).into_owned()
+    };
+    assert!(stop().contains("\"decision\":\"block\""));
+    assert_eq!(stop().trim(), "", "the second stop passes");
+}
+
 /// Without a loop guard log, or with nothing of its session in it, the hook
 /// says nothing and keeps no record.
 #[test]

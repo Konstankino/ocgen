@@ -35,9 +35,11 @@ fi
 
 # The releases of this session not yet told through this channel: a releasing
 # gate, and " | session=<sid>" first in the fields after the line's last " | ".
-# A line written before escalations named their session is nobody's.
-new=$(awk -v sid="$sid" -v rec="$record" '
-    BEGIN { while ((getline t < rec) > 0) told[t] = 1 }
+# A line written before escalations named their session is nobody's. The record's
+# path goes through the environment: `awk -v` would take a Windows path's
+# backslashes for escapes, read nothing back, and hold every stop.
+new=$(rec="$record" awk -v sid="$sid" '
+    BEGIN { rec = ENVIRON["rec"]; while ((getline t < rec) > 0) told[t] = 1 }
     { sub(/\r$/, "") }
     !/^- [^ ]+ \[(subagent-confidence|task-confidence|risk-idle)\] / { next }
     {
@@ -54,7 +56,7 @@ new=$(awk -v sid="$sid" -v rec="$record" '
 { mkdir -p "$dir/$sid" && printf '%s\n' "$new" >>"$record"; } 2>/dev/null || exit 0
 
 n=$(printf '%s\n' "$new" | grep -c '')
-text="ocgen: the loop guard released $n agent(s) of this session UNRESOLVED: their gate never passed, whatever their last message says.
+text="ocgen: the loop guard made $n release(s) in this session, UNRESOLVED: the agent's gate never passed, whatever its last message says.
 $new
 
 Treat that work as unverified: don't present it as done, name each one as unresolved in your report, and review a branch named here before you merge it."

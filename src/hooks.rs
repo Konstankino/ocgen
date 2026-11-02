@@ -1668,8 +1668,8 @@ impl<'a> Hook<'a> {
             return Outcome::allow();
         }
         let text = format!(
-            "ocgen: the loop guard released {} agent(s) of this session UNRESOLVED: their gate \
-             never passed, whatever their last message says.\n{}\n\nTreat that work as \
+            "ocgen: the loop guard made {} release(s) in this session, UNRESOLVED: the agent's \
+             gate never passed, whatever its last message says.\n{}\n\nTreat that work as \
              unverified: don't present it as done, name each one as unresolved in your report, \
              and review a branch named here before you merge it.",
             new.len(),
