@@ -1,0 +1,11 @@
+{
+  "slug": "reuse-existing-helper",
+  "kind": "reuse",
+  "goal": "Add a `--since` option to `report.py` so I can limit the report to recent events, for example `--since 2h`.",
+  "allowed_paths": ["report.py", "tests/*"],
+  "trap": "A helper already parses compound and uppercase durations, so a new parser is needless and usually handles less.",
+  "base_hidden": "fail",
+  "visible_base": "pass",
+  "visible_solution": "pass",
+  "reference_report": "Added `--since` to `report.py`. It reuses `timeutil.parse_duration`, so `1h30m` and `2D` work too, and a bad value is an argparse error. All tests pass.\nConfidence: 93%"
+}

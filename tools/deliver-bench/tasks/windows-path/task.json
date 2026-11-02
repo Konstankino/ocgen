@@ -1,0 +1,11 @@
+{
+  "slug": "windows-path",
+  "kind": "platform",
+  "goal": "`relativize(path, root)` in `projectpaths.py` works for project paths on macOS and Linux, but not for Windows ones. Make it work for Windows project paths too: `C:\\Users\\Me\\My Project\\src\\Main.py` under the root `c:\\users\\me\\my project` should give `src/Main.py`. Results stay in forward slashes.",
+  "allowed_paths": ["projectpaths.py", "tests/*"],
+  "trap": "The standard path module follows the host's rules, so a fix can look right on a Mac and still get Windows paths wrong.",
+  "base_hidden": "fail",
+  "visible_base": "pass",
+  "visible_solution": "pass",
+  "reference_report": "`relativize` now follows Windows path rules through `ntpath`, whatever machine it runs on: backslashes, spaces, case-insensitive names, `..` segments, and a path on another drive or outside the root comes back unchanged. Results stay in forward slashes and POSIX paths still work. All tests pass.\nConfidence: 90%"
+}

@@ -1,0 +1,11 @@
+{
+  "slug": "far-caller-contract",
+  "kind": "contract",
+  "goal": "`load_config` in `config.py` gives callers nothing when a key is missing from the file, and that leads to confusing failures later on. Make it raise a clear error that names the missing key.",
+  "allowed_paths": ["config.py", "server.py", "jobs/nightly/scheduler.py", "tests/*"],
+  "trap": "A caller far from the change counts on getting nothing back for a key that may be absent, and no visible test covers it.",
+  "base_hidden": "fail",
+  "visible_base": "pass",
+  "visible_solution": "pass",
+  "reference_report": "`load_config` now raises a KeyError that names the missing key. `jobs/nightly/scheduler.py` counts on an absent `run_hour`, so it now passes `default=None` and keeps its default hour. All tests pass.\nConfidence: 92%"
+}
