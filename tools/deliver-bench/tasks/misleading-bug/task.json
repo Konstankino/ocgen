@@ -1,0 +1,11 @@
+{
+  "slug": "misleading-bug",
+  "kind": "root-cause",
+  "goal": "Customers say their invoice total comes out a cent too low when they use a discount code. For example, a 9.95 item with the code SAVE15 should total 8.46, but the invoice shows 8.45. Please fix it.",
+  "allowed_paths": ["money.py", "invoices.py", "refunds.py", "tests/*"],
+  "trap": "The report blames discount codes; the real cause is a helper shared with refunds, so a patch at the invoice leaves refunds wrong.",
+  "base_hidden": "fail",
+  "visible_base": "pass",
+  "visible_solution": "pass",
+  "reference_report": "Root cause: `round_cents` in `money.py` truncated instead of rounding, so every caller lost a cent, refunds as well as invoices. I changed the helper to round to the nearest cent and left the callers alone. All tests pass.\nConfidence: 90%"
+}

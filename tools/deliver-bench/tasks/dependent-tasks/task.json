@@ -1,0 +1,11 @@
+{
+  "slug": "dependent-tasks",
+  "kind": "sequencing",
+  "goal": "Stored tasks need a `priority`, an integer where 1 is the most urgent. `add_task` in `taskstore.py` takes it as an optional `priority`, 3 by default. Then sort `queue` in `workqueue.py` by priority, oldest first within a priority.",
+  "allowed_paths": ["taskstore.py", "workqueue.py", "migrat*.py", "tests/*"],
+  "trap": "The sort needs the new field, so sorting before old files have it breaks them, and doing only one part leaves the other useless.",
+  "base_hidden": "fail",
+  "visible_base": "pass",
+  "visible_solution": "pass",
+  "reference_report": "Added `priority` to stored tasks: `add_task` takes it, 3 by default, and `load_tasks` gives older tasks priority 3, so old files keep working and gain the field on their next save. `queue` now sorts by priority, then oldest first. All tests pass.\nConfidence: 91%"
+}
