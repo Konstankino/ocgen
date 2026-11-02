@@ -403,8 +403,9 @@ fn undo(from: &str) -> String {
 /// settings, minus the keys that name a command to run.
 fn probe_env_key(key: &str) -> bool {
     const PREFIXES: [&str; 4] = ["OCGEN_", "TEAM_", "LOOP_GUARD_", "SUBAGENT_"];
-    const COMMANDS: [&str; 6] = [
+    const COMMANDS: [&str; 7] = [
         "OCGEN_CHECK_CMD",
+        "OCGEN_FULL_CHECK_CMD",
         "OCGEN_FORMAT_CMD",
         "OCGEN_NOTES_BROWSER",
         "OCGEN_RECAP_GH",
@@ -3552,6 +3553,7 @@ mod tests {
             "OCGEN_NOTES_BROWSER",
             "OCGEN_FORMAT_CMD",
             "OCGEN_CHECK_CMD",
+            "OCGEN_FULL_CHECK_CMD",
             "OCGEN_RECAP_GH",
             "OCGEN_GITHUB_GH",
             "OCGEN_AWS_CLI",

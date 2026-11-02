@@ -17,6 +17,7 @@ pub mod agent;
 pub mod approval;
 pub mod archetype;
 pub mod aws;
+mod broker;
 pub mod claude;
 mod clock;
 pub mod diff;
