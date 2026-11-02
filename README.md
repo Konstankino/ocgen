@@ -2558,7 +2558,9 @@ Committing `.claude/` is optional. Both ways work:
   `claude --worktree` session's worktree. If the commit fails (no git identity, a pre-commit hook
   refusing), the change stays uncommitted and the hook says so. With the worker confidence gate
   on, the gate commits instead, after its verdict (`OCGEN_WORKER_COMMIT=1`): two hooks on one
-  event run at once, and the mark it puts on a released worker would race a separate commit.
+  event run at once, and the mark it puts on a released worker would race a separate commit. It
+  commits only a worker it lets go: one it sends back keeps its change uncommitted, so its next
+  stop is judged on that change even where no SubagentStart recorded where the worker began.
 - **Notes when a worktree goes:** notes (`.claude/notes/`, `.claude/briefs/` and
   `.claude/intent/drafts/`) are git-ignored, so the main checkout never sees a worktree's own.
   Claude Code also counts them as no change, so removing the worktree would delete them without

@@ -345,9 +345,9 @@ fn the_gate_commits_a_worker_and_marks_one_it_releases() {
     }
 }
 
-/// A worker that passes is committed as before; one sent back is committed too
-/// (as the separate hook did at every stop), with no mark; without the setting
-/// the gate commits nothing; `ocgen verify`'s probe changes nothing.
+/// A worker that passes is committed as before; one sent back is not, so its
+/// next stop finds the change still there; without the setting the gate commits
+/// nothing; `ocgen verify`'s probe changes nothing.
 #[test]
 fn the_gate_commits_like_the_hook_it_replaces() {
     for via in BOTH {
@@ -359,7 +359,7 @@ fn the_gate_commits_like_the_hook_it_replaces() {
         assert_eq!(code, 0, "{via:?}: {err}");
         assert!(said(via, &out).contains("committed implementer's changes on worktree-agent-abc"));
         assert_eq!(r.commits("worktree-agent-abc"), 2, "{via:?}");
-        // Sent back: committed, not marked.
+        // Sent back: nothing committed, the change still in the worktree.
         write(&wt.join("app.py"), "x = 3\n");
         stop["agent_id"] = json!("abd");
         stop["last_assistant_message"] = json!("Done.\nConfidence: 40%");
@@ -367,21 +367,41 @@ fn the_gate_commits_like_the_hook_it_replaces() {
         let (code, _, err) = r.run_hook("subagent-confidence-gate", via, &stop, &back);
         assert_eq!(code, 2, "{via:?}: {err}");
         assert!(err.contains("below the required 96%"), "{via:?}: {err}");
-        assert_eq!(r.commits("worktree-agent-abc"), 3, "{via:?}");
-        assert_eq!(
-            git(&wt, &["log", "-1", "--format=%s"]),
-            "chore(implementer): the subagent's changes"
-        );
+        assert_eq!(r.commits("worktree-agent-abc"), 2, "{via:?}");
+        assert_eq!(git(&wt, &["status", "--porcelain"]), "M app.py", "{via:?}");
         // The setting off: the gate leaves committing to the separate hook.
         write(&wt.join("app.py"), "x = 4\n");
         stop["last_assistant_message"] = json!("Done.\nConfidence: 97%");
         let (code, out, _) = r.run_hook("subagent-confidence-gate", via, &stop, &GATED[..2]);
         assert_eq!((code, out.as_str()), (0, ""), "{via:?}");
-        assert_eq!(r.commits("worktree-agent-abc"), 3, "{via:?}");
+        assert_eq!(r.commits("worktree-agent-abc"), 2, "{via:?}");
         // The probe.
         let probe = [GATED[0], GATED[1], GATED[2], ("OCGEN_HOOK_PROBE", "1")];
         r.run_hook("subagent-confidence-gate", via, &stop, &probe);
-        assert_eq!(r.commits("worktree-agent-abc"), 3, "{via:?}");
+        assert_eq!(r.commits("worktree-agent-abc"), 2, "{via:?}");
+    }
+}
+
+/// A worker sent back is judged again at its next stop even when no
+/// SubagentStart recorded where it began (a record that failed, an event with
+/// no agent id): then the gate sees only uncommitted changes, so a commit made
+/// at the block would let the next stop through unchecked.
+#[test]
+fn a_worker_sent_back_without_a_baseline_is_judged_again() {
+    for via in BOTH {
+        let r = Repo::new();
+        let wt = r.wt();
+        write(&wt.join("app.py"), "x = 2\n");
+        let mut stop = r.stop(&wt);
+        let gated = [GATED[0], ("LOOP_GUARD_MAX_BLOCKS", "3"), GATED[2]];
+        stop["last_assistant_message"] = json!("Done.\nConfidence: 40%");
+        let (code, _, err) = r.run_hook("subagent-confidence-gate", via, &stop, &gated);
+        assert_eq!(code, 2, "{via:?}: {err}");
+        stop["last_assistant_message"] = json!("Done.\nConfidence: 50%");
+        let (code, out, err) = r.run_hook("subagent-confidence-gate", via, &stop, &gated);
+        assert_eq!(code, 2, "{via:?}: still below the bar: {out} {err}");
+        assert!(err.contains("Confidence 50% is below"), "{via:?}: {err}");
+        assert_eq!(r.commits("worktree-agent-abc"), 1, "{via:?}");
     }
 }
 

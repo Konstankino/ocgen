@@ -1588,9 +1588,14 @@ impl<'a> Hook<'a> {
     /// since two hooks on one event run at once and the mark would race its
     /// commit. A worker the loop guard `released` gets an empty commit on top
     /// that says so, so its branch shows the work was never verified wherever
-    /// it goes. A worker sent back is committed too, as the separate hook did at
-    /// every stop. The user hears of the commit as before, beside a release.
+    /// it goes. A worker sent back isn't committed: without a SubagentStart
+    /// record the gate sees only uncommitted changes, so a commit made now would
+    /// let its next stop through unchecked. The user hears of the commit as
+    /// before, beside a release.
     fn commit_for_worker(&self, verdict: Outcome, released: Option<String>) -> Outcome {
+        if verdict.code != 0 {
+            return verdict;
+        }
         let commit = self.worker_commit();
         if let Some(why) = released.filter(|_| !self.probe()) {
             let cwd = self.cwd();
@@ -1604,9 +1609,6 @@ impl<'a> Hook<'a> {
                     &["commit", "-q", "--allow-empty", "-m", &subject, "-m", &why],
                 );
             }
-        }
-        if verdict.code != 0 {
-            return verdict;
         }
         match (system_message(&verdict), system_message(&commit)) {
             (Some(v), Some(c)) => {

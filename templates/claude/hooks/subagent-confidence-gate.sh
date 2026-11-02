@@ -24,9 +24,10 @@
 # verdict (worker-commit.sh): the worker-commit hook isn't wired beside it, since
 # two hooks on one event run at once and the mark would race its commit. The
 # verdict comes from this script, run again in the same environment. A worker the
-# loop guard released gets an empty commit on top that says so; one sent back is
-# committed too, as the separate hook did at every stop. The user hears of the
-# commit as before, beside a release.
+# loop guard released gets an empty commit on top that says so. One sent back
+# isn't committed: without a SubagentStart record the gate sees only uncommitted
+# changes, so a commit made now would let its next stop through unchecked. The
+# user hears of the commit as before, beside a release.
 if [ "${OCGEN_WORKER_COMMIT:-}" = 1 ] && [ -z "${OCGEN_GATE_VERDICT:-}" ]; then
     payload=$(cat)
     here=$(dirname "$0")
@@ -37,6 +38,7 @@ if [ "${OCGEN_WORKER_COMMIT:-}" = 1 ] && [ -z "${OCGEN_GATE_VERDICT:-}" ]; then
         [ -z "$verdict" ] || printf '%s\n' "$verdict"
         exit "$rc"
     fi
+    [ "$rc" = 0 ] || exit "$rc"
     commit=$(printf '%s' "$payload" | sh "$here/worker-commit.sh")
     said() { printf '%s' "$1" | LC_ALL=C sed -n 's/^{"systemMessage": *"\(.*\)"}$/\1/p'; }
     v=$(said "$verdict")
@@ -47,7 +49,6 @@ if [ "${OCGEN_WORKER_COMMIT:-}" = 1 ] && [ -z "${OCGEN_GATE_VERDICT:-}" ]; then
             printf '%s' "$payload" | OCGEN_RELEASED="$v" sh "$here/worker-commit.sh" mark
         ;;
     esac
-    [ "$rc" = 0 ] || exit "$rc"
     if [ -n "$v" ] && [ -n "$c" ]; then
         printf '{"systemMessage":"%s %s"}\n' "$v" "$c"
     elif [ -n "$v" ]; then
