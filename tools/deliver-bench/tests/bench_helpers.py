@@ -230,6 +230,17 @@ def record_run(run_dir, final_report="Done. All tests pass.\nConfidence: 90%", t
     (run_dir / "transcript.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def record_escalations(repo, *subjects, other=""):
+    """Write the loop guard's log into a fixture repo: `other`, which holds no escalation, then a line per
+    worker it released unresolved, as `Guard::escalate` in src/hooks.rs writes it. No subject, no line."""
+    folder = Path(repo) / ".claude" / "loop-guard"
+    folder.mkdir(parents=True, exist_ok=True)
+    lines = "".join(
+        f"- 2026-11-02T12:00:00Z [subagent-confidence] {subject}: blocked 3x; tests fail\n" for subject in subjects
+    )
+    (folder / "escalations.md").write_text(other + lines, encoding="utf-8")
+
+
 class Sandbox:
     """One test's work area. Commands run from it, so nothing depends on the caller's cwd."""
 

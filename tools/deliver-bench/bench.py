@@ -1163,6 +1163,17 @@ def changed_files(repo, base):
     return [p for p in tracked.split("\0") if p], [p for p in untracked.split("\0") if p]
 
 
+def escalation_count(repo):
+    """The `- ` lines of the loop guard's `.claude/loop-guard/escalations.md`, one per gate it gave up on.
+    Read from the fixture, since the scoring copy leaves `.claude` out. A fixture is fresh per run, so
+    the whole log is this run's (a reused one makes the run invalid). No log is none."""
+    path = repo / ".claude" / "loop-guard" / "escalations.md"
+    if not path.is_file():
+        return 0
+    text = path.read_text(encoding="utf-8", errors="replace")
+    return sum(1 for line in text.splitlines() if line.startswith("- "))
+
+
 def branch_fraction(repo, branch, hidden, scratch):
     """A branch's own hidden fraction, from an export of its tree: the fixture stays untouched."""
     archive = subprocess.run(
@@ -1211,7 +1222,10 @@ def score_fixture(fixture, task, tasks_dir):
         for branch in branches
         if git(repo, "merge-base", "--is-ancestor", branch, "HEAD", check=False) is None
     ]
-    score = scoring.score_run(run, transcript, tests, traps, trap_error, files, hunks, fractions, unmerged, fixture.manifest)
+    escalations = escalation_count(repo)
+    score = scoring.score_run(
+        run, transcript, tests, traps, trap_error, files, hunks, fractions, unmerged, escalations, fixture.manifest
+    )
     if task_hash(task_root) != fixture.manifest.get("task_hash"):
         score["invalid"] = True
         score["invalid_reasons"].append("the task folder changed after prepare")
