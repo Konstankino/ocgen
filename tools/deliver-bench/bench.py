@@ -1163,15 +1163,21 @@ def changed_files(repo, base):
     return [p for p in tracked.split("\0") if p], [p for p in untracked.split("\0") if p]
 
 
+# The loop guard's lines for a gate that lets the agent's unverified work through
+# (`RELEASING_GATES` in src/hooks.rs); the approval and plan gates halt the agent instead.
+_RELEASE = re.compile(r"^- \S+ \[(?:subagent-confidence|task-confidence|risk-idle)\] ")
+
+
 def escalation_count(repo):
-    """The `- ` lines of the loop guard's `.claude/loop-guard/escalations.md`, one per gate it gave up on.
-    Read from the fixture, since the scoring copy leaves `.claude` out. A fixture is fresh per run, so
-    the whole log is this run's (a reused one makes the run invalid). No log is none."""
+    """The releases in the loop guard's `.claude/loop-guard/escalations.md`: one line per agent it let
+    through unverified. Read from the fixture, since the scoring copy leaves `.claude` out. A fixture is
+    fresh per run, so the whole log is this run's (`run` refuses a fixture that already ran). No log is
+    none."""
     path = repo / ".claude" / "loop-guard" / "escalations.md"
     if not path.is_file():
         return 0
     text = path.read_text(encoding="utf-8", errors="replace")
-    return sum(1 for line in text.splitlines() if line.startswith("- "))
+    return sum(1 for line in text.splitlines() if _RELEASE.match(line))
 
 
 def branch_fraction(repo, branch, hidden, scratch):

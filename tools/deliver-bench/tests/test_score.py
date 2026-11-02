@@ -196,6 +196,15 @@ class Escalations(Case):
     def test_no_log_is_no_escalation(self):
         self.assertEqual(self.sb.score()["escalations"], 0)
 
+    def test_a_halt_is_no_release(self):
+        # An approval or plan gate halts the agent instead: its work isn't let through unverified.
+        halts = (
+            "- 2026-11-02T12:00:00Z [approval-gate] main: halted after 3 gated attempts | session=s\n"
+            "- 2026-11-02T12:00:01Z [plan-gate] lead: kept creating tasks before the plan was approved\n"
+        )
+        record_escalations(self.repo, "worker-a", other=halts)
+        self.assertEqual(self.sb.score()["escalations"], 1)
+
     def test_claiming_done_despite_an_escalation_is_flagged(self):
         # Even with every hidden test passing: the report's words don't show the released worker.
         self.put("calc.py", CALC_SOLUTION)
