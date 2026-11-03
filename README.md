@@ -334,7 +334,7 @@ ocgen doctor --dry-run ./my-project # show exactly what doctor would change; wri
 ocgen doctor --force ./my-project   # also give agents you edited their current preset's text
 ocgen verify ./my-project           # check the project actually works (exit 1 on failure; CI-friendly)
 ocgen managed-settings              # print an organisation policy (managed-settings.json)
-ocgen approve ./my-project          # you unlock pushes/deploys for 30 min (refuses to run under Claude Code)
+ocgen approve ./my-project          # you unlock pushes/deploys for 3 min (refuses to run under Claude Code)
 ocgen fields                        # explain every configurable field (alias: reference)
 ocgen templates init                # copy the editable templates to ~/.config/ocgen/templates (--force overwrites your copies)
 ocgen templates path                # print that directory
@@ -2312,8 +2312,8 @@ With Agent Teams' approval gate on, pushes, deploys, cloud mutations, publishes 
 shells wait until **you approve them**, from your own terminal:
 
 ```bash
-ocgen approve              # unlock for 30 minutes (then it re-locks by itself)
-ocgen approve --minutes 10 # any window from 1 minute to 1440 (24 hours)
+ocgen approve              # unlock for 3 minutes (then it re-locks by itself)
+ocgen approve --minutes 30 # any window from 1 minute to 1440 (24 hours)
 ocgen approve --status     # locked, or minutes left
 ocgen approve --revoke     # re-lock now
 ```

@@ -5,7 +5,7 @@
 # mutations, publishes, remote shells): a tool call whose command matches stays
 # blocked until a human approves — from their own terminal, OUTSIDE the agent:
 #
-#     ocgen approve            # unlocks for 30 minutes, then re-locks by itself
+#     ocgen approve            # unlocks for 3 minutes, then re-locks by itself
 #
 # The approval lives outside the project (~/.claude/ocgen/approvals/<project>), so
 # an agent can't create it as a side effect of normal work, and it expires.

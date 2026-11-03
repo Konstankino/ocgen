@@ -12,6 +12,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 
+/// How long an approval lasts unless `--minutes` says otherwise. Short: a gated
+/// step needs only the moment it runs in, and a window left open lets every later
+/// high-impact action through too.
+pub const DEFAULT_MINUTES: u64 = 3;
+
 /// The longest approval `ocgen approve --minutes` grants: 24 hours.
 pub const MAX_MINUTES: u64 = 24 * 60;
 

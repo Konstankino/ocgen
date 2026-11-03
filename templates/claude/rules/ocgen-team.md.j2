@@ -83,7 +83,7 @@ pre-author them.
 - **Execution-approval gate.** No agent may perform a high-impact external action — `ssh`,
   cloud mutations (`aws`/`gcloud`/`az`), `git push`/`merge`, `gh pr merge`/`release`,
   `terraform apply`, `kubectl`/`helm`, deploys, or publishes — until a **human** reviews and
-  approves. Approving is for a human, from their own terminal: `ocgen approve` (it lasts 30
+  approves. Approving is for a human, from their own terminal: `ocgen approve` (it lasts 3
   minutes by default and re-locks by itself). Never try to approve, never touch
   `~/.claude/ocgen/`, and never phrase a command to get past the gate. A `PreToolUse` hook
   matches the command text and refuses these; with the sandbox on, sandboxed commands can't write
