@@ -119,7 +119,7 @@ pub enum Command {
         /// Directory of the existing project (default: current dir).
         path: Option<String>,
         /// How long the approval lasts, in minutes (1 to 1440, i.e. 24 hours).
-        #[arg(long, default_value_t = 30)]
+        #[arg(long, default_value_t = ocgen::approval::DEFAULT_MINUTES)]
         minutes: u64,
         /// Re-lock now.
         #[arg(long)]

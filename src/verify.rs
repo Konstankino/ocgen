@@ -1302,9 +1302,13 @@ fn weakens(key: &str, want: Option<&str>, got: Option<&str>, ocgen: &Value) -> b
             .any(|x| !ours.iter().any(|o| o.eq_ignore_ascii_case(x)))
     };
     match key {
-        "TEAM_APPROVAL_GATE" | "TEAM_PLAN_GATE" | "TEAM_RISK_ROUNDS" | "OCGEN_SANDBOX" => {
-            want == Some("1") && got != Some("1")
-        }
+        // OCGEN_WORKER_COMMIT: the worker gate commits for isolated workers in
+        // place of the worker-commit hook, and marks the ones it releases.
+        "TEAM_APPROVAL_GATE"
+        | "TEAM_PLAN_GATE"
+        | "TEAM_RISK_ROUNDS"
+        | "OCGEN_SANDBOX"
+        | "OCGEN_WORKER_COMMIT" => want == Some("1") && got != Some("1"),
         "OCGEN_SANDBOX_DENY_WRITE" | "OCGEN_SANDBOX_DENY_READ" | "OCGEN_SANDBOX_DENY_ENV" => {
             let have: Vec<&str> = got.unwrap_or_default().split_whitespace().collect();
             want.is_some_and(|w| w.split_whitespace().any(|x| !have.contains(&x)))
@@ -3652,6 +3656,11 @@ mod tests {
         // The team task gate leaves in-process teammates to the worker gate.
         assert!(w("TEAM_TASK_GATE", None, Some("1")));
         assert!(!w("TEAM_TASK_GATE", None, Some("0")));
+        // Where the worker gate commits for isolated workers, nothing else does:
+        // turned off, their work stays uncommitted and a release goes unmarked.
+        assert!(w("OCGEN_WORKER_COMMIT", Some("1"), Some("0")));
+        assert!(!w("OCGEN_WORKER_COMMIT", Some("1"), Some("1")));
+        assert!(!w("OCGEN_WORKER_COMMIT", None, Some("0")));
         // A site the guard doesn't trust, in any letter case.
         assert!(w(
             "OCGEN_WEBFETCH_DOMAINS",

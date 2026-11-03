@@ -25,10 +25,15 @@ lg_field() {
 # as the Rust hook makes it)
 lg_safe() { printf '%s' "$1" | LC_ALL=C tr -c 'A-Za-z0-9._-' '_' | LC_ALL=C cut -c1-80; }
 
-# lg_key <payload> <gate> <subject> -> sets LG_GATE, LG_SUBJECT, LG_KEY
+# lg_key <payload> <gate> <subject> -> sets LG_GATE, LG_SUBJECT, LG_KEY, and
+# LG_SID and LG_ROLE for the escalation line. A worker's gate sets LG_TREE to
+# its working tree, so the line names the branch checked out there.
 lg_key() {
     sid=$(lg_safe "$(lg_field "$1" session_id)")
     [ -n "$sid" ] || sid=nosession
+    LG_SID="$sid"
+    LG_ROLE=$(lg_safe "$(lg_field "$1" agent_type)")
+    LG_TREE=
     LG_GATE="$2"
     LG_SUBJECT=$(lg_safe "$3")
     [ -n "$LG_SUBJECT" ] || LG_SUBJECT=unknown
@@ -64,13 +69,21 @@ lg_stalled() {
 # lg_reset -> the gate passed; the next attempt gets a fresh budget
 lg_reset() { rm -f "$LG_KEY.count" "$LG_KEY.score" "$LG_KEY.escalated" 2>/dev/null; }
 
-# lg_escalate <detail> -> log once per episode to escalations.md
+# lg_escalate <detail> -> log once per episode to escalations.md:
+#   - <stamp> [<gate>] <subject>: <detail> | session=<sid>[ role=<role>][ branch=<branch>]
+# The fields come last, after " | ", so the "[gate] subject:" prefix stays whole.
 lg_escalate() {
     lg_prepare || return 0
     [ -f "$LG_KEY.escalated" ] && return 0
     : >"$LG_KEY.escalated"
-    printf -- '- %s [%s] %s: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$LG_GATE" "$LG_SUBJECT" \
-        "$(printf '%s' "$1" | tr '\n' ' ')" >>"$LG_DIR/escalations.md"
+    lg_ctx="session=${LG_SID:-nosession}"
+    [ -z "${LG_ROLE:-}" ] || lg_ctx="$lg_ctx role=$LG_ROLE"
+    if [ -n "${LG_TREE:-}" ]; then
+        lg_br=$(lg_safe "$(git -C "$LG_TREE" symbolic-ref --quiet --short HEAD 2>/dev/null)")
+        [ -z "$lg_br" ] || lg_ctx="$lg_ctx branch=$lg_br"
+    fi
+    printf -- '- %s [%s] %s: %s | %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$LG_GATE" "$LG_SUBJECT" \
+        "$(printf '%s' "$1" | tr '\n' ' ')" "$lg_ctx" >>"$LG_DIR/escalations.md"
 }
 
 # lg_release <message> -> quality gate gives way: warn the user and allow (exit 0)

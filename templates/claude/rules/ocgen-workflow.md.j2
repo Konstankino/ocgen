@@ -40,8 +40,10 @@ Never grind on the same problem indefinitely:
 - **The loop guard.** A gate may block the same agent on the same thing at most
   {{ loop_guard_max }} times (fewer if its stated confidence stops rising). Then quality gates
   release it with the result marked **UNRESOLVED**, and approval gates stay closed and halt it.
-  Every trip is logged to `.claude/loop-guard/escalations.md`. Before summarizing any work, read
-  that file and report each entry as unresolved — never present released work as done.
+  Every trip is logged to `.claude/loop-guard/escalations.md`, with the session it happened in.
+  A hook names each agent released in this session to you, after its Agent call or at the end of
+  your turn: report each one as unresolved — never present released work as done, and review its
+  branch before you merge it. Lines of other sessions in that file are not your work.
 {%- endif %}
 
 ## Naming what you refer back to

@@ -23,7 +23,7 @@ use serde_json::Value;
 /// embedded in the ocgen that generated the project (hook scripts can't be
 /// overridden from the template dir), so they implement the same protocol —
 /// unless someone edits the project's copies by hand.
-pub const PROTOCOL: &str = "ocgen-hooks 28";
+pub const PROTOCOL: &str = "ocgen-hooks 29";
 
 /// How long Claude Code lets a gate that runs the project check (SubagentStop,
 /// TaskCompleted) take, in seconds: its hook `timeout`. Claude Code treats a
@@ -37,7 +37,7 @@ pub const CHECK_TIMEOUT_MAX: u64 = CHECK_GATE_TIMEOUT - 60;
 
 /// Every hook `ocgen hook <name>` accepts (matching the script names minus `.sh`;
 /// `check-broker`, an unregistered prototype, has no script: see `src/broker.rs`).
-pub const NAMES: [&str; 22] = [
+pub const NAMES: [&str; 23] = [
     "subagent-confidence-gate",
     "team-task-completed",
     "team-task-created",
@@ -59,6 +59,7 @@ pub const NAMES: [&str; 22] = [
     "shell-sandbox",
     "worktree-notes",
     "worker-commit",
+    "escalations-report",
     "check-broker",
 ];
 
@@ -430,6 +431,7 @@ pub fn run(name: &str, payload: &str, env: &HashMap<String, String>) -> Outcome 
         "shell-sandbox" => h.shell_sandbox(),
         "worktree-notes" => h.worktree_notes(),
         "worker-commit" => h.worker_commit(),
+        "escalations-report" => h.escalations_report(),
         "check-broker" => h.check_broker(),
         other => Outcome {
             code: 1,
@@ -517,8 +519,22 @@ impl<'a> Hook<'a> {
     /// worker whose tree changed since (or, with no record, any dirty tree).
     /// Read-only roles (`SUBAGENT_READONLY_ROLES`) are never gated — an
     /// in-process teammate stops as a subagent named after itself, so its role
-    /// is read from its transcript's `.meta.json` (`customAgentType`).
+    /// is read from its transcript's `.meta.json` (`customAgentType`). With
+    /// `OCGEN_WORKER_COMMIT` the gate then commits for the worker
+    /// ([`Self::commit_for_worker`]).
     fn subagent_confidence(&self) -> Outcome {
+        let released = std::cell::Cell::new(None);
+        let verdict = self.worker_verdict(&released);
+        if self.env("OCGEN_WORKER_COMMIT") != "1"
+            || self.field("hook_event_name") == "SubagentStart"
+        {
+            return verdict;
+        }
+        self.commit_for_worker(verdict, released.take())
+    }
+
+    /// The worker gate's verdict; `released` gets the message of a release.
+    fn worker_verdict(&self, released: &std::cell::Cell<Option<String>>) -> Outcome {
         let thr: u32 = self.env_num("SUBAGENT_CONFIDENCE_THRESHOLD", 0);
         let check = self.env("OCGEN_CHECK_CMD");
         if thr == 0 && check.is_empty() {
@@ -558,7 +574,7 @@ impl<'a> Hook<'a> {
             }
             return Outcome::allow();
         }
-        let out = self.worker_gate(thr, check, &cwd, baseline.as_deref());
+        let out = self.worker_gate(thr, check, &cwd, baseline.as_deref(), released);
         // A worker that may finish is done: forget where it started.
         if out.code == 0 {
             forget();
@@ -581,7 +597,14 @@ impl<'a> Hook<'a> {
             .unwrap_or_default()
     }
 
-    fn worker_gate(&self, thr: u32, check: &str, cwd: &Path, baseline: Option<&Path>) -> Outcome {
+    fn worker_gate(
+        &self,
+        thr: u32,
+        check: &str,
+        cwd: &Path,
+        baseline: Option<&Path>,
+        released: &std::cell::Cell<Option<String>>,
+    ) -> Outcome {
         if !worker_changed(cwd, baseline) {
             return Outcome::allow();
         }
@@ -592,11 +615,16 @@ impl<'a> Hook<'a> {
             .into_iter()
             .find(|w| !w.is_empty())
             .unwrap_or_else(|| "subagent".into());
-        let guard = self.guard("subagent-confidence", &worker);
+        let guard = self
+            .guard("subagent-confidence", &worker)
+            .map(|g| g.in_tree(cwd));
+        // Called only when the loop guard releases the worker.
         let unresolved = |subject: &str, why: &str| {
-            format!(
+            let msg = format!(
                 "UNRESOLVED: worker {subject} stopped by the loop guard ({why}). Review its changes; see .claude/loop-guard/escalations.md"
-            )
+            );
+            released.set(Some(msg.clone()));
+            msg
         };
         // 1. The objective check, in the worker's own directory.
         let limit = self.check_timeout();
@@ -1503,23 +1531,14 @@ impl<'a> Hook<'a> {
             return Outcome::allow();
         }
         let cwd = self.cwd();
-        let abs = |what: &str| git_line(&cwd, &["rev-parse", "--path-format=absolute", what]);
-        let (Some(git_dir), Some(common)) = (abs("--git-dir"), abs("--git-common-dir")) else {
+        let Some((git_dir, branch)) = agent_worktree(&cwd) else {
             return Outcome::allow();
         };
-        let branch =
-            git_line(&cwd, &["symbolic-ref", "--quiet", "--short", "HEAD"]).unwrap_or_default();
-        if git_dir == common || !branch.starts_with("worktree-agent-") {
-            return Outcome::allow();
-        }
         let dirty = git_line(&cwd, &["status", "--porcelain", "--untracked-files=all"]);
         if dirty.is_none() {
             return Outcome::allow();
         }
-        let who = match safe(&self.field("agent_type")) {
-            w if w.is_empty() => "subagent".to_string(),
-            w => w,
-        };
+        let who = self.worker_role();
         let subject = format!("chore({who}): the subagent's changes");
         let body = "Committed by ocgen's worker-commit hook when the subagent stopped, so its branch merges.";
         // Another git command holding the index (the worker gate runs beside
@@ -1552,6 +1571,123 @@ impl<'a> Hook<'a> {
         Outcome {
             code: 0,
             stdout: format!("{}\n", serde_json::json!({ "systemMessage": say })),
+            stderr: String::new(),
+        }
+    }
+
+    /// The stopping worker's role as a commit names it.
+    fn worker_role(&self) -> String {
+        match safe(&self.field("agent_type")) {
+            w if w.is_empty() => "subagent".to_string(),
+            w => w,
+        }
+    }
+
+    /// With `OCGEN_WORKER_COMMIT` the worker gate commits the worker's changes
+    /// itself, after its verdict: the worker-commit hook isn't wired beside it,
+    /// since two hooks on one event run at once and the mark would race its
+    /// commit. A worker the loop guard `released` gets an empty commit on top
+    /// that says so, so its branch shows the work was never verified wherever
+    /// it goes. A worker sent back isn't committed: without a SubagentStart
+    /// record the gate sees only uncommitted changes, so a commit made now would
+    /// let its next stop through unchecked. The user hears of the commit as
+    /// before, beside a release.
+    fn commit_for_worker(&self, verdict: Outcome, released: Option<String>) -> Outcome {
+        if verdict.code != 0 {
+            return verdict;
+        }
+        let commit = self.worker_commit();
+        if let Some(why) = released.filter(|_| !self.probe()) {
+            let cwd = self.cwd();
+            if agent_worktree(&cwd).is_some() {
+                let subject = format!(
+                    "chore({}): UNRESOLVED, released by the loop guard",
+                    self.worker_role()
+                );
+                git_ok(
+                    &cwd,
+                    &["commit", "-q", "--allow-empty", "-m", &subject, "-m", &why],
+                );
+            }
+        }
+        match (system_message(&verdict), system_message(&commit)) {
+            (Some(v), Some(c)) => {
+                let mut out = release(&format!("{v} {c}"));
+                out.stderr = verdict.stderr;
+                out
+            }
+            (Some(_), None) => verdict,
+            (None, _) => commit,
+        }
+    }
+
+    /// PostToolUse (Agent) and Stop: tell the lead about the agents the loop
+    /// guard released unresolved in its session. The release itself only warns
+    /// the user (`systemMessage`), and a worker's last message still states its
+    /// confidence, so the lead would take the work as done. After an Agent call
+    /// every release not yet noted goes in as context; a background worker
+    /// returns before it stops, so its release waits for the end of the turn,
+    /// where every release not yet named there holds the stop once. Each is
+    /// recorded before it is told, in the session's loop-guard folder (gone when
+    /// the session ends), so none is told twice through one channel and no stop
+    /// is held twice for it.
+    fn escalations_report(&self) -> Outcome {
+        if self.probe() {
+            return Outcome::allow();
+        }
+        let sid = safe(&self.field("session_id"));
+        if sid.is_empty() {
+            return Outcome::allow();
+        }
+        let stop = self.field("hook_event_name") == "Stop";
+        let dir = self.project().join(".claude/loop-guard");
+        let log = fs::read_to_string(dir.join("escalations.md")).unwrap_or_default();
+        let record = dir.join(&sid).join(if stop {
+            "escalations-reported"
+        } else {
+            "escalations-noted"
+        });
+        let told = fs::read_to_string(&record).unwrap_or_default();
+        let new: Vec<&str> = log
+            .lines()
+            .map(|l| l.trim_end_matches('\r'))
+            .filter(|l| released_in(l, &sid) && !told.lines().any(|t| t == *l))
+            .collect();
+        if new.is_empty() {
+            return Outcome::allow();
+        }
+        // Recorded first: a stop that comes back passes. Unrecorded, the stop
+        // could be held for good, so nothing is told.
+        use std::io::Write as _;
+        let recorded = fs::create_dir_all(dir.join(&sid)).is_ok()
+            && fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&record)
+                .and_then(|mut f| f.write_all(format!("{}\n", new.join("\n")).as_bytes()))
+                .is_ok();
+        if !recorded {
+            return Outcome::allow();
+        }
+        let text = format!(
+            "ocgen: the loop guard made {} release(s) in this session, UNRESOLVED: the agent's \
+             gate never passed, whatever its last message says.\n{}\n\nTreat that work as \
+             unverified: don't present it as done, name each one as unresolved in your report, \
+             and review a branch named here before you merge it.",
+            new.len(),
+            new.join("\n")
+        );
+        if !stop {
+            return post_tool_note(text);
+        }
+        let reason = format!(
+            "{text} If you already said so, or you are waiting for the user, say so in one line \
+             and stop."
+        );
+        let out = serde_json::json!({ "decision": "block", "reason": reason });
+        Outcome {
+            code: 0,
+            stdout: format!("{out}\n"),
             stderr: String::new(),
         }
     }
@@ -3325,6 +3461,11 @@ struct Guard {
     key: PathBuf,
     gate: String,
     subject: String,
+    /// What an escalation line names besides the subject: the session, the
+    /// event's agent type and, for a worker, the tree whose branch it names.
+    sid: String,
+    role: String,
+    tree: Option<PathBuf>,
 }
 
 /// The note folders a worktree session writes and the main checkout never sees:
@@ -3611,7 +3752,16 @@ impl Guard {
             key,
             gate: gate.into(),
             subject,
+            sid,
+            role: safe(&h.field("agent_type")),
+            tree: None,
         })
+    }
+
+    /// A worker's guard: its escalation names the branch checked out in `tree`.
+    fn in_tree(mut self, tree: &Path) -> Self {
+        self.tree = Some(tree.to_path_buf());
+        self
     }
 
     fn file(&self, ext: &str) -> PathBuf {
@@ -3661,14 +3811,29 @@ impl Guard {
         }
     }
 
-    /// Log once per episode to `escalations.md`.
+    /// Log once per episode to `escalations.md`: `- <stamp> [<gate>] <subject>:
+    /// <detail> | session=<sid>[ role=<role>][ branch=<branch>]`. The fields
+    /// come last, after ` | `, so the `[gate] subject:` prefix stays whole.
     fn escalate(&self, detail: &str) {
         if !self.prepare() || self.file(".escalated").exists() {
             return;
         }
         let _ = fs::write(self.file(".escalated"), "");
+        let mut context = format!("session={}", self.sid);
+        if !self.role.is_empty() {
+            context.push_str(&format!(" role={}", self.role));
+        }
+        let branch = self
+            .tree
+            .as_deref()
+            .and_then(|t| git_line(t, &["symbolic-ref", "--quiet", "--short", "HEAD"]))
+            .map(|b| safe(&b))
+            .unwrap_or_default();
+        if !branch.is_empty() {
+            context.push_str(&format!(" branch={branch}"));
+        }
         let line = format!(
-            "- {} [{}] {}: {}\n",
+            "- {} [{}] {}: {} | {context}\n",
             crate::clock::iso_stamp(),
             self.gate,
             self.subject,
@@ -3683,6 +3848,48 @@ impl Guard {
             let _ = f.write_all(line.as_bytes());
         }
     }
+}
+
+/// The gates whose loop guard releases the agent with its work unverified; the
+/// others halt it, and it is told so.
+const RELEASING_GATES: [&str; 3] = ["subagent-confidence", "task-confidence", "risk-idle"];
+
+/// The git directory and branch of `cwd` when it is one of Claude Code's agent
+/// worktrees (a linked worktree on a `worktree-agent-*` branch): never the main
+/// checkout, nor a session's worktree.
+fn agent_worktree(cwd: &Path) -> Option<(String, String)> {
+    let abs = |what: &str| git_line(cwd, &["rev-parse", "--path-format=absolute", what]);
+    let (git_dir, common) = (abs("--git-dir")?, abs("--git-common-dir")?);
+    let branch = git_line(cwd, &["symbolic-ref", "--quiet", "--short", "HEAD"])?;
+    (git_dir != common && branch.starts_with("worktree-agent-")).then_some((git_dir, branch))
+}
+
+/// The `systemMessage` an outcome shows the user, if any.
+fn system_message(o: &Outcome) -> Option<String> {
+    serde_json::from_str::<Value>(o.stdout.trim())
+        .ok()?
+        .get("systemMessage")?
+        .as_str()
+        .map(String::from)
+}
+
+/// Whether `line` of `escalations.md` is a release in session `sid`:
+/// `- <stamp> [<gate>] … | session=<sid>…`, with a releasing gate. A line
+/// written before escalations named their session is nobody's.
+fn released_in(line: &str, sid: &str) -> bool {
+    let gate = line
+        .strip_prefix("- ")
+        .and_then(|l| l.split_once(' '))
+        .map(|(_, rest)| rest);
+    let releasing = gate.is_some_and(|g| {
+        RELEASING_GATES
+            .iter()
+            .any(|r| g.starts_with(&format!("[{r}] ")))
+    });
+    releasing
+        && line.rsplit_once(" | ").is_some_and(|(_, fields)| {
+            fields.split_whitespace().next() == Some(format!("session={sid}").as_str())
+        })
 }
 
 fn read_num(p: &Path) -> Option<u32> {

@@ -277,6 +277,30 @@ fn worktrees_under_the_project_are_shown_relative_to_it() {
     );
 }
 
+/// The fields an escalation line ends with (` | session=… role=… branch=…`)
+/// tie it to a workstream only through its branch: a session id that happens to
+/// contain a worker's name doesn't.
+#[test]
+fn an_escalations_session_and_role_never_tie_it_to_a_workstream() {
+    let (dir, md) = board_dir();
+    let guard = dir.path().join(".claude/loop-guard");
+    fs::create_dir_all(&guard).unwrap();
+    fs::write(
+        guard.join("escalations.md"),
+        "- 2026-11-02T10:00:00Z [subagent-confidence] c3d4: confidence 40% < 95% | session=9f3a1b2c role=implementer\n\
+         - 2026-11-02T10:01:00Z [subagent-confidence] e5f6: blocked 3x | session=s role=implementer branch=worktree-login-timeout\n",
+    )
+    .unwrap();
+    let page = read(&render_file(&md).unwrap());
+    assert_has(
+        &page,
+        &[
+            "<li>loop guard: 2026-11-02T10:01:00Z [subagent-confidence] e5f6: blocked 3x | session=s role=implementer branch=worktree-login-timeout</li>",
+            r#"<ul class="escalations"><li>2026-11-02T10:00:00Z [subagent-confidence] c3d4: confidence 40% &lt; 95% | session=9f3a1b2c role=implementer</li></ul>"#,
+        ],
+    );
+}
+
 /// The agents panel: each worker, what it works on, where it is, and the
 /// issues its report, the board and the loop guard raise.
 #[test]

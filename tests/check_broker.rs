@@ -167,6 +167,10 @@ impl Repo {
         // Windows runners check files out with CRLF (core.autocrlf=true); the
         // checks here compare what they read.
         git(&top, &["config", "core.autocrlf", "false"]);
+        // No housekeeping in the background: the snapshots include `.git`, and a
+        // commit may start `git maintenance` or an automatic gc that writes there.
+        git(&top, &["config", "maintenance.auto", "false"]);
+        git(&top, &["config", "gc.auto", "0"]);
         write(&project.join("app.txt"), "committed\n");
         git(&top, &["add", "."]);
         git(&top, &["commit", "-qm", "init"]);
@@ -392,6 +396,16 @@ impl Repo {
 }
 
 // ---------------------------------------------------------------- trigger --
+
+/// The snapshots compared here include `.git`, so git's own housekeeping, which
+/// a commit may start in the background, must not run in the fixture: a macOS
+/// runner once saw `.git/objects/maintenance.lock` appear between two of them.
+#[test]
+fn the_fixture_runs_no_git_housekeeping_behind_the_snapshots() {
+    let r = Repo::new();
+    assert_eq!(git(&r.top, &["config", "maintenance.auto"]), "false");
+    assert_eq!(git(&r.top, &["config", "gc.auto"]), "0");
+}
 
 #[test]
 fn any_other_write_passes_silently_and_writes_nothing() {

@@ -88,6 +88,20 @@ fn approval_is_per_project_outside_it_and_expires() {
     assert!(!approval::revoke(home.path(), proj.path()).unwrap());
 }
 
+/// An approval lasts 3 minutes unless `--minutes` says more: a gated step needs
+/// only the moment it runs in, and a window left open lets every later push
+/// through too.
+#[test]
+fn an_approval_lasts_three_minutes_by_default() {
+    assert_eq!(approval::DEFAULT_MINUTES, 3);
+    let help = std::process::Command::new(env!("CARGO_BIN_EXE_ocgen"))
+        .args(["approve", "--help"])
+        .output()
+        .unwrap();
+    let help = String::from_utf8_lossy(&help.stdout);
+    assert!(help.contains("[default: 3]"), "{help}");
+}
+
 #[test]
 fn a_worktree_shares_its_repositorys_approval() {
     let home = tempfile::tempdir().unwrap();

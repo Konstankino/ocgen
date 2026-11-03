@@ -19,6 +19,46 @@
 # exit 2 -> keep the subagent working (stderr shown to it).
 # Character classes behave as in the Rust hook (`ocgen hook`) in any locale; the
 # check itself runs in the caller's locale, as the Rust hook runs it.
+
+# With OCGEN_WORKER_COMMIT the gate commits the worker's changes itself, after its
+# verdict (worker-commit.sh): the worker-commit hook isn't wired beside it, since
+# two hooks on one event run at once and the mark would race its commit. The
+# verdict comes from this script, run again in the same environment. A worker the
+# loop guard released gets an empty commit on top that says so. One sent back
+# isn't committed: without a SubagentStart record the gate sees only uncommitted
+# changes, so a commit made now would let its next stop through unchecked. The
+# user hears of the commit as before, beside a release.
+if [ "${OCGEN_WORKER_COMMIT:-}" = 1 ] && [ -z "${OCGEN_GATE_VERDICT:-}" ]; then
+    payload=$(cat)
+    here=$(dirname "$0")
+    verdict=$(printf '%s' "$payload" | OCGEN_GATE_VERDICT=1 sh "$0")
+    rc=$?
+    if printf '%s' "$payload" |
+        LC_ALL=C grep -qE '"hook_event_name"[[:space:]]*:[[:space:]]*"SubagentStart"'; then
+        [ -z "$verdict" ] || printf '%s\n' "$verdict"
+        exit "$rc"
+    fi
+    [ "$rc" = 0 ] || exit "$rc"
+    commit=$(printf '%s' "$payload" | sh "$here/worker-commit.sh")
+    said() { printf '%s' "$1" | LC_ALL=C sed -n 's/^{"systemMessage": *"\(.*\)"}$/\1/p'; }
+    v=$(said "$verdict")
+    c=$(said "$commit")
+    case "$v" in
+    UNRESOLVED:*)
+        [ "${OCGEN_HOOK_PROBE:-}" = 1 ] ||
+            printf '%s' "$payload" | OCGEN_RELEASED="$v" sh "$here/worker-commit.sh" mark
+        ;;
+    esac
+    if [ -n "$v" ] && [ -n "$c" ]; then
+        printf '{"systemMessage":"%s %s"}\n' "$v" "$c"
+    elif [ -n "$v" ]; then
+        printf '%s\n' "$verdict"
+    elif [ -n "$commit" ]; then
+        printf '%s\n' "$commit"
+    fi
+    exit 0
+fi
+
 lc_was=${LC_ALL-ocgen-unset}
 LC_ALL=C
 export LC_ALL
@@ -291,6 +331,7 @@ if lg_on; then
     worker=$(lg_field "$payload" agent_id)
     [ -n "$worker" ] || worker=$(lg_field "$payload" agent_type)
     lg_key "$payload" subagent-confidence "${worker:-subagent}"
+    LG_TREE="$cwd"
 fi
 
 # block <reason> [<score>] -> send the worker back, unless the loop guard says it

@@ -2148,6 +2148,9 @@ impl Project {
             // …whose state for a session goes when the session ends.
             let body = templates::load_embedded("claude/hooks/session-end.sh")?;
             components.push(("hooks/session-end.sh".to_string(), body));
+            // …and whose releases reach the lead, not only the user.
+            let body = templates::load_embedded("claude/hooks/escalations-report.sh")?;
+            components.push(("hooks/escalations-report.sh".to_string(), body));
         }
 
         // Workflow commands ship as skills (`.claude/commands` is legacy): same
@@ -2604,6 +2607,11 @@ impl Project {
                 }
             }
             env.insert("SUBAGENT_READONLY_ROLES".into(), json!(readonly.join(" ")));
+            // The gate commits for isolated workers, after its verdict, in place
+            // of the worker-commit hook beside it (see `hooks`).
+            if self.isolates_workers() {
+                env.insert("OCGEN_WORKER_COMMIT".into(), json!("1"));
+            }
         }
         let check = self.claude.workflow.check_cmd.trim();
         if !check.is_empty() {
@@ -3155,11 +3163,14 @@ impl Project {
                 json!({ "matcher": "Write|Edit|MultiEdit", "hooks": [ aws ] }),
             );
         }
-        if self.isolates_workers() {
+        if self.isolates_workers() && !self.worker_gate() {
             // An isolated worker has no shell to commit with, and Claude Code
             // refuses the coordinator's git commands in another worktree: commit
             // what it leaves on its own branch when it stops. Not a gate: if it
-            // fails, the change stays uncommitted and it says so.
+            // fails, the change stays uncommitted and it says so. With the
+            // worker gate on, the gate commits instead (`OCGEN_WORKER_COMMIT`):
+            // two hooks on one event run at once, and the gate's mark on a
+            // released worker would race this commit.
             push(
                 "SubagentStop",
                 json!({ "hooks": [ command_hook(hook_cmd(prefix, dir, "worker-commit.sh")) ] }),
@@ -3236,6 +3247,20 @@ impl Project {
             ));
             end["timeout"] = json!(10);
             push("SessionEnd", json!({ "hooks": [ end ] }));
+            // A release only warns the user: the lead hears of each one of its
+            // session after an Agent call and, for a background worker, at the
+            // end of its turn. With no escalation logged, nothing starts.
+            let report = || {
+                command_hook(format!(
+                    "[ -f \"${{CLAUDE_PROJECT_DIR:-.}}/.claude/loop-guard/escalations.md\" ] || exit 0; {}",
+                    hook_cmd(prefix, dir, "escalations-report.sh")
+                ))
+            };
+            push(
+                "PostToolUse",
+                json!({ "matcher": "Agent|Task", "hooks": [ report() ] }),
+            );
+            push("Stop", json!({ "hooks": [ report() ] }));
         }
         hooks
     }
