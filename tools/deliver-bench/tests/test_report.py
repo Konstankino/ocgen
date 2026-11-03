@@ -187,6 +187,16 @@ class Compare(unittest.TestCase):
         self.assertRegex(out, r"(?m)^task-x.*-1\.00\s+\+2\.00\s+\+0\.00\s+\+1\.00.*$")
         self.assertRegex(out, r"(?i)sign test covers the hidden fraction only")
 
+    def test_escalations_get_a_delta_and_a_score_from_before_them_still_loads(self):
+        # write_scores leaves out `escalations` and `claimed_despite_escalation`, as older score.json does.
+        out = self.compare(
+            {"task-x": [0.5]},
+            {"task-x": [0.5]},
+            after_with={("task-x", 1): {"escalations": 2, "claimed_despite_escalation": True}},
+        )
+        self.assertRegex(out, r"(?m)^task\s.*\bunmerged\s+escalations$")
+        self.assertRegex(out, r"(?m)^task-x.*\+0\.00\s+\+2\.00$")
+
     def test_a_branch_that_beats_the_working_tree_is_named(self):
         out = self.compare(
             {"task-x": [0.25]},
@@ -273,6 +283,19 @@ class Report(unittest.TestCase):
     def test_a_task_shows_what_it_says(self):
         out = self.report({"task-a": [0.5]}, runs_with={("task-a", 1): {"stance": "both"}})
         self.assertRegex(out, r"(?m)^task-a.*\bboth\b.*$")
+
+    def test_claims_made_despite_an_escalation_are_counted_beside_false_done(self):
+        out = self.report(
+            {"task-a": [1.0, 1.0]},
+            runs_with={("task-a", 1): {"escalations": 2, "claimed_despite_escalation": True}},
+        )
+        self.assertRegex(out, r"(?m)^task\s.*\bfalse-done\s+escalated-done\s+traps\b.*$")
+        self.assertRegex(out, r"(?m)^task-a\s.*\bclaim claim\s+0\s+1\s+2/2\b.*$")
+
+    def test_a_score_from_before_escalations_were_counted_still_loads(self):
+        # write_scores leaves out `escalations` and `claimed_despite_escalation`, as older score.json does.
+        out = self.report({"task-a": [1.0]})
+        self.assertRegex(out, r"(?m)^task-a\s.*\bclaim\s+0\s+0\s+1/1\b.*$")
 
     def test_hidden_tests_that_did_not_run_are_marked(self):
         out = self.report({"task-a": [0.0]}, runs_with={("task-a", 1): {"hidden_status": "collection_failed"}})

@@ -1163,6 +1163,23 @@ def changed_files(repo, base):
     return [p for p in tracked.split("\0") if p], [p for p in untracked.split("\0") if p]
 
 
+# The loop guard's lines for a gate that lets the agent's unverified work through
+# (`RELEASING_GATES` in src/hooks.rs); the approval and plan gates halt the agent instead.
+_RELEASE = re.compile(r"^- \S+ \[(?:subagent-confidence|task-confidence|risk-idle)\] ")
+
+
+def escalation_count(repo):
+    """The releases in the loop guard's `.claude/loop-guard/escalations.md`: one line per agent it let
+    through unverified. Read from the fixture, since the scoring copy leaves `.claude` out. A fixture is
+    fresh per run, so the whole log is this run's (`run` refuses a fixture that already ran). No log is
+    none."""
+    path = repo / ".claude" / "loop-guard" / "escalations.md"
+    if not path.is_file():
+        return 0
+    text = path.read_text(encoding="utf-8", errors="replace")
+    return sum(1 for line in text.splitlines() if _RELEASE.match(line))
+
+
 def branch_fraction(repo, branch, hidden, scratch):
     """A branch's own hidden fraction, from an export of its tree: the fixture stays untouched."""
     archive = subprocess.run(
@@ -1211,7 +1228,10 @@ def score_fixture(fixture, task, tasks_dir):
         for branch in branches
         if git(repo, "merge-base", "--is-ancestor", branch, "HEAD", check=False) is None
     ]
-    score = scoring.score_run(run, transcript, tests, traps, trap_error, files, hunks, fractions, unmerged, fixture.manifest)
+    escalations = escalation_count(repo)
+    score = scoring.score_run(
+        run, transcript, tests, traps, trap_error, files, hunks, fractions, unmerged, escalations, fixture.manifest
+    )
     if task_hash(task_root) != fixture.manifest.get("task_hash"):
         score["invalid"] = True
         score["invalid_reasons"].append("the task folder changed after prepare")
