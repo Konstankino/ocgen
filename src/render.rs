@@ -138,6 +138,17 @@ pub const PRIVACY_GUARD_ROLE: &str = "privacy-guard";
 /// Rework rounds the privacy loop allows before the rest is reported UNRESOLVED.
 pub const PRIVACY_GUARD_ROUNDS: u32 = 2;
 
+/// The role (archetype) whose subagent turns on the coordinator's review loop:
+/// after the scope check and before the privacy check and the adversary, three
+/// independent runs review the whole change at once — `conformance`,
+/// `correctness`, `tests` — a fresh run confirms each finding, and the confirmed
+/// ones go back in one list before a new wave.
+pub const REVIEWER_ROLE: &str = "reviewer";
+
+/// Rework rounds the review loop allows before the rest is reported UNRESOLVED:
+/// up to that many fixes and one more wave than that.
+pub const REVIEW_ROUNDS: u32 = 2;
+
 /// Which groups of the shared guidance (`templates/guidance.md.j2`) a skill or
 /// an agent carries: the rules for making or checking claims, the rules for
 /// changing code or writing pull requests and issues, or both. Every one also
@@ -824,12 +835,14 @@ struct SubCtx {
     description: String,
 }
 
-/// The agents the check steps in /deliver and /intent name, by their own names
-/// (empty when the team has none), and the rounds each check allows.
+/// The agents the check steps in /deliver, /intent and /workstreams name, by
+/// their own names (empty when the team has none), and the rounds each check
+/// allows.
 struct Checkers {
     adversary: String,
     scope_guard: String,
     privacy_guard: String,
+    reviewer: String,
     /// Who rework goes to (empty without one, or without any check).
     implementer: String,
     /// Whether that implementer works in its own git worktree.
@@ -837,6 +850,7 @@ struct Checkers {
     rounds: u32,
     scope_rounds: u32,
     privacy_rounds: u32,
+    review_rounds: u32,
 }
 
 /// Probe order for locating a project's state file (target-agnostic discovery).
@@ -1200,11 +1214,11 @@ impl Project {
             .or_else(|| subs().find(|a| a.name == role))
     }
 
-    /// Who the check steps in /deliver and /intent name. Without an adversary,
-    /// a scope guard and a privacy guard, every name is empty and the commands
-    /// read as before. The implementer is named only with the first two, as
-    /// /brief and /workstreams name it too: /deliver's privacy step names its
-    /// own.
+    /// Who the check steps in /deliver, /intent and /workstreams name. Without
+    /// an adversary, a scope guard, a privacy guard and a reviewer, every name is
+    /// empty and the commands read as before. The implementer is named only with
+    /// the first two, as /brief and /workstreams name it too: /deliver's privacy
+    /// and review steps name their own.
     fn checkers(&self) -> Checkers {
         let adversary = self.subagent_for(ADVERSARY_ROLE);
         let scope_guard = self.subagent_for(SCOPE_GUARD_ROLE);
@@ -1218,11 +1232,16 @@ impl Project {
                 .subagent_for(PRIVACY_GUARD_ROLE)
                 .map(|a| a.name.clone())
                 .unwrap_or_default(),
+            reviewer: self
+                .subagent_for(REVIEWER_ROLE)
+                .map(|a| a.name.clone())
+                .unwrap_or_default(),
             implementer: implementer.map(|a| a.name.clone()).unwrap_or_default(),
             implementer_isolated: implementer.is_some_and(|a| a.isolation.trim() == "worktree"),
             rounds: ADVERSARY_ROUNDS,
             scope_rounds: SCOPE_GUARD_ROUNDS,
             privacy_rounds: PRIVACY_GUARD_ROUNDS,
+            review_rounds: REVIEW_ROUNDS,
         }
     }
 
@@ -1263,6 +1282,43 @@ impl Project {
                 },
             )
             .context("rendering the scope loop")?;
+        Ok(Some(text))
+    }
+
+    /// The coordinator's review loop, when the team has a reviewer. Only then is
+    /// its template loaded, so other projects render exactly as before. Claude
+    /// launches the three runs at once; OpenCode's agents share one local server,
+    /// so there they run one after another, as its coordinator prompt says.
+    fn review_loop(&self, env: &Environment) -> Result<Option<String>> {
+        let Some(reviewer) = self.subagent_for(REVIEWER_ROLE) else {
+            return Ok(None);
+        };
+        let implementer = self.subagent_for("implementer");
+        let name = |role: &str| {
+            self.subagent_for(role)
+                .map(|a| a.name.as_str())
+                .unwrap_or_default()
+        };
+        // A stale override missing a variable fails instead of printing nothing.
+        let mut env = env.clone();
+        env.set_undefined_behavior(minijinja::UndefinedBehavior::Strict);
+        let text = env
+            .render_str(
+                &templates::load("coordination/reviewer.md.j2")?,
+                context! {
+                    reviewer => reviewer.name,
+                    implementer => implementer.map(|a| a.name.as_str()).unwrap_or_default(),
+                    implementer_isolated => implementer
+                        .is_some_and(|a| a.isolation.trim() == "worktree"),
+                    scope_guard => name(SCOPE_GUARD_ROLE),
+                    privacy_guard => name(PRIVACY_GUARD_ROLE),
+                    adversary => name(ADVERSARY_ROLE),
+                    parallel => self.target == Target::ClaudeCode,
+                    rounds => REVIEW_ROUNDS,
+                    language => self.language,
+                },
+            )
+            .context("rendering the review loop")?;
         Ok(Some(text))
     }
 
@@ -1346,9 +1402,9 @@ impl Project {
     }
 
     /// A coordinator's text as written: its own, its answer line replaced when
-    /// the answers are in another language, then the scope loop, the privacy
-    /// loop and the adversary loop (the order they run in). Unchanged for a
-    /// project that has none of them.
+    /// the answers are in another language, then the scope loop, the review
+    /// loop, the privacy loop and the adversary loop (the order they run in).
+    /// Unchanged for a project that has none of them.
     fn coordinator_text(&self, text: &str, env: &Environment) -> Result<String> {
         let mut out = text.to_string();
         if let Some(answer) = self.response_section(env)? {
@@ -1356,6 +1412,9 @@ impl Project {
             out = join_section(&own, &answer);
         }
         if let Some(l) = self.scope_guard_loop(env)? {
+            out = join_section(&out, &l);
+        }
+        if let Some(l) = self.review_loop(env)? {
             out = join_section(&out, &l);
         }
         if let Some(l) = self.privacy_guard_loop(env)? {
@@ -1760,9 +1819,11 @@ impl Project {
                         implementer => checks.implementer.clone(),
                         implementer_isolated => checks.implementer_isolated,
                         scope_guard => checks.scope_guard.clone(),
+                        reviewer => checks.reviewer.clone(),
                         adversary => checks.adversary.clone(),
                         rounds => checks.rounds,
                         scope_rounds => checks.scope_rounds,
+                        review_rounds => checks.review_rounds,
                         // The gate holds every `git merge`: integration waits
                         // for `ocgen approve`.
                         approval_gate => self.claude.team.enabled && self.claude.team.approval_gate,
@@ -1784,9 +1845,9 @@ impl Project {
                 .filter(|a| a.isolation.trim() == "worktree")
                 .map(|a| a.name.clone())
                 .unwrap_or_default();
-            // The precedent sweep and the conformance check name their agents by
-            // role, so a renamed one still counts; with none, the text says who
-            // does it instead.
+            // The precedent sweep and the review (or, without a reviewer, the
+            // conformance) check name their agents by role, so a renamed one still
+            // counts; with none, the text says who does it instead.
             let named = |role: &str| {
                 self.subagent_for(role)
                     .map(|a| a.name.clone())
@@ -1810,11 +1871,12 @@ impl Project {
                         implementer_isolated => checks.implementer_isolated,
                         worktree_implementer => worktree_implementer,
                         explorer => named("explorer"),
-                        reviewer => named("reviewer"),
+                        reviewer => checks.reviewer,
                         implementer_agent => named("implementer"),
                         rounds => checks.rounds,
                         scope_rounds => checks.scope_rounds,
                         privacy_rounds => checks.privacy_rounds,
+                        review_rounds => checks.review_rounds,
                         workstreams => self.claude.workflow.workstreams,
                         brief => self.brief_enabled(),
                     },
@@ -2197,9 +2259,9 @@ impl Project {
             ),
             None => String::new(),
         };
-        // The main session coordinates: the answer line and the adversary loop
-        // are its to follow. Without a coordinator agent it still runs them, so
-        // it is given the mindset with them.
+        // The main session coordinates: the answer line and the scope, review,
+        // privacy and adversary loops are its to follow. Without a coordinator
+        // agent it still runs them, so it is given the mindset with them.
         let mut coordinator = self.coordinator_text(&coordinator, &env)?;
         if self.primary().is_none() && !coordinator.is_empty() {
             coordinator = join_section(&mindset, &coordinator);
@@ -2222,6 +2284,9 @@ impl Project {
             gh_withheld => self.withholds_gh(),
             deliver => self.claude.workflow.deliver,
             workstreams => self.claude.workflow.workstreams,
+            // The pipeline summary names the review check, or the session's own
+            // conformance check without a reviewer.
+            reviewer => self.subagent_for(REVIEWER_ROLE).is_some(),
             inquire => self.claude.workflow.inquire,
             brief => self.brief_enabled(),
             // The targets a brief is written for, as the rule's prose lists them.

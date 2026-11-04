@@ -126,7 +126,21 @@ fn deliver_without_an_adversary_never_mentions_one() {
     let f = files(&project(true, false));
     assert!(f[DELIVER].contains("**Scope check.**"));
     assert!(!f[DELIVER].contains("adversary") && !f[DELIVER].contains("Adversary"));
-    assert!(!f[DELIVER].contains("UNRESOLVED"));
+    // No adversary loop either: UNRESOLVED comes only from the review check
+    // and the synthesis line that reports it.
+    let mut rest = f[DELIVER].clone();
+    for (from, to) in [
+        ("**Review check.**", "\n\n"),
+        ("From the review check", ".\n"),
+    ] {
+        let start = rest.find(from).unwrap_or_else(|| panic!("no {from:?}"));
+        let end = start
+            + rest[start..]
+                .find(to)
+                .unwrap_or_else(|| panic!("no end of {from:?}"));
+        rest.replace_range(start..end, "");
+    }
+    assert!(!rest.contains("UNRESOLVED"), "{rest}");
 }
 
 // -------------------------------------------------------------- /intent --

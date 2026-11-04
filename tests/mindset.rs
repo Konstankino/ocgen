@@ -128,9 +128,19 @@ fn the_main_session_is_told_whenever_it_coordinates() {
     assert!(rules.contains("## Coordination"), "{rules}");
     assert_eq!(told(&rules, EN), 1, "{rules}");
 
+    // The review loop alone is the main session's to run, too.
+    let mut lone = p.clone();
+    lone.agents
+        .retain(|a| !["scope-guard", "adversary"].contains(&a.role.as_str()));
+    assert!(lone.agents.iter().any(|a| a.role == "reviewer"));
+    let rules = read(scaffolded(&lone).path(), ".claude/rules/ocgen-team.md");
+    assert!(rules.contains("## Coordination"), "{rules}");
+    assert!(rules.contains("Review check ("), "{rules}");
+    assert_eq!(told(&rules, EN), 1, "{rules}");
+
     // With nothing to coordinate, no section appears just to carry it.
     p.agents
-        .retain(|a| a.role != "scope-guard" && a.role != "adversary");
+        .retain(|a| !["scope-guard", "reviewer", "adversary"].contains(&a.role.as_str()));
     let rules = read(scaffolded(&p).path(), ".claude/rules/ocgen-team.md");
     assert!(!rules.contains("## Coordination"), "{rules}");
     assert_eq!(told(&rules, EN), 0, "{rules}");

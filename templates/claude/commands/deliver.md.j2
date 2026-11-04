@@ -99,17 +99,29 @@ after merging `{{ worktree_implementer }}`'s worktree branch into the working br
 criterion that isn't met or a test that fails, go back to the task that should meet it, fix it, and check again —
 at most 2 rounds. A criterion still unmet after that is **not done** in phase 6, never done.
 {% endif %}
-**Conformance check.** After the {% if scope_guard %}scope{% else %}final{% endif %} check{% if adversary %}, and before the adversary check{% endif %}, {% if reviewer %}have `{{ reviewer }}`
-check{% else %}check{% endif %} the whole change against the precedent list from phase 4{% if not reviewer %} yourself: the project has no reviewer{% endif %}.
+{% if reviewer %}**Review check.** After the {% if scope_guard %}scope{% else %}final{% endif %} check{% if adversary %}, and before the adversary check{% endif %}, have three independent `{{ reviewer }}` runs
+check the whole change at once, one per angle — `conformance`, `correctness`, `tests` —
+and fresh `{{ reviewer }}` runs confirm the findings: the review loop in `.claude/rules/ocgen-team.md`.
+{% if worktree_implementer %}- Merge `{{ worktree_implementer }}`'s worktree branch into the working branch before each wave, or it checks code without the change.
+{% endif %}- Write the pack the loop describes to `.claude/scratch/review-pack.md` and give every run its absolute path: the goal; the
+  approved plan (after a re-plan, the newest one; if phases 1–3 collapsed, the brief; if an approved intent replaced
+  them, its plan and acceptance criteria); the precedent list from phase 4; the base; the changed files and the diff.
+  The `conformance` run marks each precedent Followed, Broken or Not applicable, with its `file:line`, and flags new
+  code that duplicates an existing function, type or helper missing from the list.
+- A Broken precedent with a reason I approved is not a finding. Send {% if implementer_agent %}`{{ implementer_agent }}`{% else %}the subagent that made the change{% endif %} the confirmed findings that are Critical or High, Broken precedents or duplicates,
+  in one list, verbatim, then run a new wave; when nothing is left to send, the check is done. At most {{ review_rounds }} rework rounds.
+- A finding that should go back but is still open after that is **UNRESOLVED** in phase 6, never done; a precedent still
+  broken is reported as broken, never as followed.
+{% else %}**Conformance check.** After the {% if scope_guard %}scope{% else %}final{% endif %} check{% if adversary %}, and before the adversary check{% endif %}, check the whole change against the precedent list from phase 4 yourself: the project has no reviewer.
 {% if worktree_implementer %}- Merge `{{ worktree_implementer }}`'s worktree branch into the working branch before each check, or it checks code without the change.
-{% endif %}- {% if reviewer %}Give it{% else %}Work from{% endif %} the goal, the approved plan, the precedent list verbatim, the base and the changed files. Each
+{% endif %}- Work from the goal, the approved plan, the precedent list verbatim, the base and the changed files. Each
   precedent is Followed, Broken or Not applicable, with its `file:line`. New code that duplicates an existing
   function, type or helper missing from the list is a finding too.
 - A Broken precedent with a reason I approved is not a finding. Send {% if implementer_agent %}`{{ implementer_agent }}`{% else %}the subagent that made the change{% endif %} the other
   Broken items and the duplicates, verbatim, then check once more. At most one round.
 - A precedent still broken after that is reported in phase 6 as broken, never as followed.
-{% if privacy_guard %}
-**Privacy check.** After the conformance check{% if adversary %}, and before the adversary check{% endif %},
+{% endif %}{% if privacy_guard %}
+**Privacy check.** After the {% if reviewer %}review{% else %}conformance{% endif %} check{% if adversary %}, and before the adversary check{% endif %},
 have `{{ privacy_guard }}` check the whole change for personal or health data that could leak — every change, even one
 that doesn't look like it touches personal data — the privacy loop in `.claude/rules/ocgen-team.md`:
 {% if worktree_implementer %}- First merge `{{ worktree_implementer }}`'s worktree branch into the working branch, or it checks code without the change.
@@ -135,9 +147,12 @@ anything left unresolved — including each agent the loop guard released in thi
 hook names to you, with its branch — as unresolved, not done. Lines of other sessions in
 `.claude/loop-guard/escalations.md` are not this run's work. If a coordinator session is named,
 report status to it with `SendMessage`.
-From the conformance check, report each precedent followed, each one broken with its reason or as still broken,
+{% if reviewer %}From the review check, report each angle's verdict and the waves used; each precedent followed, each one broken
+with its reason or as still broken; each duplicate; every UNRESOLVED finding;
+every rejected or unsettled one with its reason; and the confirmed Medium and Low findings under open risks.
+{% else %}From the conformance check, report each precedent followed, each one broken with its reason or as still broken,
 and each duplicate found.
-{% if scope_guard %}From the scope check, report the plan coverage (anything still missing, as not done), the blast radius,
+{% endif %}{% if scope_guard %}From the scope check, report the plan coverage (anything still missing, as not done), the blast radius,
 every cut (reverted, or kept with its reason), every Differs for me to accept or reject, and the Defer list as
 follow-ups.
 {% endif %}{% if privacy_guard %}From the privacy check, report its verdict, the rounds used and every finding still open as unresolved;

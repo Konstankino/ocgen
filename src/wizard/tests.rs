@@ -1034,3 +1034,16 @@ fn basics_without_an_answer_question_answer_in_the_prompt_language() {
     assert_eq!(b.language, "Ukrainian");
     assert_eq!(b.response_language, "Ukrainian");
 }
+
+/// The wizard's role help names every role value that turns on a coordinator
+/// loop, as `ocgen reference` does, so none reads as an inert example.
+#[test]
+fn the_role_help_names_every_role_that_turns_on_a_loop() {
+    for role in ["scope-guard", "reviewer", "privacy-guard", "adversary"] {
+        assert!(
+            super::HELP_ROLE.contains(&format!("'{role}' makes")),
+            "{role}: {}",
+            super::HELP_ROLE
+        );
+    }
+}

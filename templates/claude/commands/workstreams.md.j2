@@ -257,7 +257,7 @@ its next merge. A workstream whose `After:` was handed back waits with it.
 
 ## 6. Check the whole
 
-With every workstream integrated, run the project's checks on the integrated change{% if scope_guard or adversary %} exactly as
+With every workstream integrated, run the project's checks on the integrated change{% if scope_guard or reviewer or adversary %} exactly as
 `.claude/rules/ocgen-team.md` describes the loops{% endif %}, with the board and the briefs as the plan and the
 board's `Base:` as the base:
 {%- if scope_guard %}
@@ -267,6 +267,14 @@ board's `Base:` as the base:
 {%- else %}
 - **Final check** first: every acceptance criterion of every brief, against the code, with the
   project check; a criterion that isn't met goes back to the owning workstream's worker.
+{%- endif %}
+{%- if reviewer %}
+- **Review check** next: three `{{ reviewer }}` runs, one per angle, at once, on the integrated change, with
+  the diff from the board's `Base:` in the pack; the `conformance` run lists the precedents itself. Each
+  finding the loop sends back goes to the worker whose workstream owns it — the brief whose files hold its
+  `file:line` or its fix, failing that the one branch that changed that file — one list per workstream;
+  a finding that fits no single workstream goes to me in step 7 as **UNRESOLVED**;
+  at most {{ review_rounds }} rework rounds, then the rest is **UNRESOLVED**.
 {%- endif %}
 {%- if adversary %}
 - **Adversary check** last: `{{ adversary }}` checks the integrated change with every worker's
