@@ -36,6 +36,7 @@ const HELP_NAME: &str = "Identifier → file name and @mention. Lowercase, no sp
 const HELP_PRESET: &str = "A starting point that fills the fields below; 'blank' starts empty.";
 const HELP_ROLE: &str = "Free-text job label (e.g. reviewer); not written to the file. \
      'scope-guard' makes the coordinator check the change against the plan before review; \
+     'reviewer' makes it review the change in three independent runs at once; \
      'privacy-guard' makes it check every change for personal or health data that could leak; \
      'adversary' makes it run this agent's check last.";
 const HELP_MODE: &str =

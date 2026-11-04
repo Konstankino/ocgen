@@ -418,7 +418,9 @@ fn a_team_without_the_guard_renders_as_before() {
     let rule = team_rule(&claude("English", false, true));
     assert!(!rule.contains(LOOP_MARK) && !rule.contains("Scope check"));
     let prompt = coordinator_prompt(&opencode("English", false, false));
-    assert!(prompt.ends_with("Respond in English.\n"), "{prompt}");
+    // The review loop follows the answer line now (tests/review_check.rs pins
+    // how it ends); neither other loop does.
+    assert!(!prompt.contains("Adversary check"), "{prompt}");
     assert!(
         !prompt.contains(LOOP_MARK) && !prompt.contains("Scope check"),
         "{prompt}"

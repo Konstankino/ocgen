@@ -87,6 +87,10 @@ fn the_rules_say_how_to_write_a_precedent_list() {
     // The pipeline summary names both ends: the list and the check.
     let pipeline = section(&f[RULES], "## Delivery pipeline\n", "\n## ");
     assert!(pipeline.contains("precedent list"), "{pipeline}");
+    assert!(pipeline.contains("**Review check**"), "{pipeline}");
+    // Without a reviewer the session checks conformance itself.
+    let f = files(&project(&without("reviewer")));
+    let pipeline = section(&f[RULES], "## Delivery pipeline\n", "\n## ");
     assert!(pipeline.contains("**Conformance check**"), "{pipeline}");
 }
 
@@ -111,12 +115,13 @@ fn deliver_research_writes_the_precedent_list() {
 }
 
 #[test]
-fn deliver_has_the_reviewer_check_conformance_between_scope_and_adversary() {
+fn deliver_reviews_the_change_between_scope_and_adversary() {
     let f = files(&project(&FULL));
     let md = &f[DELIVER];
-    assert!(at(md, "**Scope check.**") < at(md, "**Conformance check.**"));
-    assert!(at(md, "**Conformance check.**") < at(md, "**Adversary check.**"));
-    let check = section(md, "**Conformance check.**", "**Adversary check.**");
+    assert!(!md.contains("**Conformance check.**"), "{md}");
+    assert!(at(md, "**Scope check.**") < at(md, "**Review check.**"));
+    assert!(at(md, "**Review check.**") < at(md, "**Adversary check.**"));
+    let check = section(md, "**Review check.**", "**Adversary check.**");
     for must in [
         "`reviewer`",
         "Followed",
@@ -124,7 +129,7 @@ fn deliver_has_the_reviewer_check_conformance_between_scope_and_adversary() {
         "Not applicable",
         "duplicates",
         "`implementer`",
-        "At most one round",
+        "At most 2 rework rounds",
         // The implementer works in its own worktree: its fixes are merged first.
         "Merge `implementer`'s worktree branch",
     ] {
@@ -136,8 +141,8 @@ fn deliver_has_the_reviewer_check_conformance_between_scope_and_adversary() {
     // Without a scope guard it follows the final check.
     let f = files(&project(&without("scope-guard")));
     let md = &f[DELIVER];
-    assert!(at(md, "**Final check.**") < at(md, "**Conformance check.**"));
-    assert!(at(md, "**Conformance check.**") < at(md, "**Adversary check.**"));
+    assert!(at(md, "**Final check.**") < at(md, "**Review check.**"));
+    assert!(at(md, "**Review check.**") < at(md, "**Adversary check.**"));
 }
 
 #[test]
@@ -150,15 +155,36 @@ fn deliver_without_a_reviewer_checks_conformance_itself() {
     assert!(!check.contains("`reviewer`"), "{check}");
 }
 
+/// Without a reviewer, the session checks conformance itself, word for word as
+/// before the review check existed.
 #[test]
-fn deliver_finds_a_renamed_reviewer_by_role() {
-    let mut team = without("reviewer");
-    team.push(("critic", "reviewer"));
-    let f = files(&project(&team));
+fn deliver_without_a_reviewer_reads_as_before() {
+    let f = files(&project(&without("reviewer")));
     let check = section(
         &f[DELIVER],
         "**Conformance check.**",
         "**Adversary check.**",
     );
+    assert_eq!(check, NO_REVIEWER_CHECK);
+}
+
+const NO_REVIEWER_CHECK: &str = "\
+**Conformance check.** After the scope check, and before the adversary check, check the whole change against the precedent list from phase 4 yourself: the project has no reviewer.
+- Merge `implementer`'s worktree branch into the working branch before each check, or it checks code without the change.
+- Work from the goal, the approved plan, the precedent list verbatim, the base and the changed files. Each
+  precedent is Followed, Broken or Not applicable, with its `file:line`. New code that duplicates an existing
+  function, type or helper missing from the list is a finding too.
+- A Broken precedent with a reason I approved is not a finding. Send `implementer` the other
+  Broken items and the duplicates, verbatim, then check once more. At most one round.
+- A precedent still broken after that is reported in phase 6 as broken, never as followed.
+
+";
+
+#[test]
+fn deliver_finds_a_renamed_reviewer_by_role() {
+    let mut team = without("reviewer");
+    team.push(("critic", "reviewer"));
+    let f = files(&project(&team));
+    let check = section(&f[DELIVER], "**Review check.**", "**Adversary check.**");
     assert!(check.contains("`critic`"), "{check}");
 }

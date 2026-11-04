@@ -16,8 +16,12 @@ use tempfile::tempdir;
 /// The team every project had before the adversary existed.
 const LEGACY: [&str; 4] = ["coordinator", "explorer", "implementer", "reviewer"];
 
-/// A line only the coordinator's adversary loop writes.
-const LOOP_MARK: &str = "`Verdict: REWORK`";
+/// A line only the coordinator's adversary loop writes (the review loop has a
+/// `Verdict: REWORK` of its own).
+const LOOP_MARK: &str = "Adversary check (";
+
+/// The verdict the adversary loop acts on.
+const VERDICT: &str = "`Verdict: REWORK`";
 
 fn read(dir: &Path, rel: &str) -> String {
     fs::read_to_string(dir.join(rel)).unwrap_or_else(|_| panic!("missing {rel}"))
@@ -179,7 +183,7 @@ fn claude_coordinator_runs_the_adversary_loop() {
     for must in [
         "Adversary check (adversary)",
         "call adversary last",
-        LOOP_MARK,
+        VERDICT,
         "send implementer only the Critical and High findings",
         "call adversary again",
         "At most 2 rework rounds",
@@ -207,7 +211,7 @@ fn claude_loop_speaks_ukrainian() {
     let rule = team_rule(&claude("Ukrainian", true));
     for must in [
         "Перевірка adversary (adversary)",
-        LOOP_MARK,
+        VERDICT,
         "Не більше 2 кіл доопрацювання",
         "UNRESOLVED",
         "злий його гілку",
@@ -333,11 +337,7 @@ fn opencode_coordinator_prompt_ends_with_the_loop() {
     assert!(head.contains("Respond in English.\n\n"), "{prompt}");
     // One server, one agent at a time — the loop doesn't change that.
     assert!(head.contains("do not run in parallel"));
-    for must in [
-        LOOP_MARK,
-        "send implementer only",
-        "At most 2 rework rounds",
-    ] {
+    for must in [VERDICT, "send implementer only", "At most 2 rework rounds"] {
         assert!(tail.contains(must), "missing {must:?} in:\n{tail}");
     }
     // OpenCode has no worktree isolation: nothing to merge.
@@ -380,7 +380,9 @@ fn a_team_without_the_adversary_renders_as_before() {
     let rule = team_rule(&claude("English", false));
     assert!(!rule.contains(LOOP_MARK) && !rule.contains("Adversary check"));
     let prompt = coordinator_prompt(&opencode("English", false));
-    assert!(prompt.ends_with("Respond in English.\n"), "{prompt}");
+    // The review loop follows the answer line now (tests/review_check.rs pins
+    // how it ends); the adversary loop doesn't.
+    assert!(!prompt.contains(LOOP_MARK), "{prompt}");
     assert!(!prompt.contains("adversary"));
 }
 

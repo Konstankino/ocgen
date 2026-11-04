@@ -234,7 +234,7 @@ credentials are guard-rails against accidents, not a wall against insiders.
 ocgen gives every agent this mindset, in the instruction language: each subagent's file ends with
 it (OpenCode agents and prompt files too), and so does the coordinator's text, before its answer
 line. A Claude project without a coordinator agent gives it to the main session whenever that
-session runs the scope or adversary loop. In short:
+session runs the scope, review, privacy or adversary loop. In short:
 - **Agents never get around a safeguard.** One that is blocked stops and says what it needs.
 - **One test for every safety question:** could someone acting in good faith cause this through
   ordinary use? Then it is an accident and in scope.
@@ -691,6 +691,48 @@ its own **final check** in its place: when the plan's tasks are done, it checks 
 every success criterion and runs the tests (after merging a worktree implementer's branch), goes back
 to the task for each miss, at most 2 rounds, and reports what is still unmet as not done.
 
+**The review loop.** The default team's `reviewer` reviews the finished change three times at once,
+each run on its own angle and blind to the others: `conformance` (each precedent from research
+Followed, Broken or Not applicable, and new code that duplicates an existing helper), `correctness`
+(logic, missed and edge cases, error handling, broken callers or contracts, regressions) and `tests`
+(a test for each criterion and edge case that fails without the change, missing negative tests,
+tests that pass whatever the code does). Three narrow runs that can't see each other cover more
+than one broad run, and none anchors on another's verdict.
+
+Whenever the team has an enabled subagent whose role (or name) is `reviewer`, ocgen adds its loop to
+the coordinator's instructions, after the scope loop and before the privacy and adversary loops:
+- Before each wave the pack is written to `.claude/scratch/review-pack.md` (git-ignored), and every
+  run gets its absolute path: the goal, the approved plan with its criteria, the precedent list,
+  the base, the changed files and the diff itself, new untracked files included. The Claude
+  reviewer has no shell, and a diff pasted into every prompt would cost a copy per run and could
+  be cut short. Each run is told its angle and the report format, and never sees another run's
+  report, nor anyone's claims or confidence. A diff over about 3,000 lines gets one file per group
+  of related files; all the groups' runs make up one wave, at most 8 at a time.
+- In Claude Code the three run as subagents in one message. OpenCode's agents share one local
+  server, so there they run one after another, each fresh.
+- The work tree stays as it is until the last report is in. Findings with the same cause in the
+  same place are merged, and each gets a slug; a run that gives no `Verdict:` is run once more,
+  and its findings are confirmed either way.
+- A fresh run confirms each finding on its own: one per finding of Medium or higher (a broken
+  precedent or a duplicate counts as Medium), one for all the Low ones, at most 8 at a time. It
+  gets the claim, its `file:line` and the fix, never the finder's reasoning, and tries to disprove
+  it. Only confirmed findings count; rejected ones are reported with their reason, and an
+  unsettled Critical or High one is **UNRESOLVED**.
+- The implementer gets one list: the confirmed Critical and High findings, broken precedents
+  without a reason you approved, and duplicates. An empty list ends the check. Otherwise a new
+  wave of all three angles gets the findings sent back (slug, claim, `file:line`, fix), checks the
+  fixes and looks for flaws they added, and its findings go through the same steps; one already
+  confirmed isn't confirmed again. After 2 rework rounds (at most 3 waves), what should have gone
+  back and is still open is **UNRESOLVED**.
+
+It costs more than a single review: each wave is three runs plus one per finding to confirm, and
+the Claude reviewer runs on the research model at the highest effort. **`/deliver`** runs it in
+place of its old conformance check, after the scope check and before the privacy and adversary
+checks; **`/workstreams`** runs it on the integrated change, sending each finding the loop sends
+back to the worker whose workstream owns it (one that fits no single workstream is reported to you
+as unresolved). Without a reviewer, `/deliver` checks conformance itself, exactly as before, and the
+coordinator gets no review loop.
+
 **The adversary loop.** The default team ends with `adversary`, a skeptic that hunts accidents:
 the ways ordinary, good-faith use of the change does harm. It checks what the explorer found, the implementer built and the reviewer approved,
 and accepts no claim ("tests pass", "Confidence: 97%") without evidence. It has
@@ -742,7 +784,8 @@ with the file tools denied (on OpenCode, only `git diff`, `log`, `status` and `g
 run the project's own PII or secret scanner when there is one.
 
 Whenever the team has an enabled subagent whose role (or name) is `privacy-guard`, ocgen adds its
-loop to the coordinator's instructions, after the scope loop and before the adversary loop:
+loop to the coordinator's instructions, after the scope and review loops and before the adversary
+loop:
 - When every change is done, call the privacy guard on the whole change — every change, even one
   that doesn't look like it touches personal data. A worktree implementer's branch is merged first.
 - Never paste personal or health data into a prompt, a report or a commit message: name the field
@@ -750,7 +793,8 @@ loop to the coordinator's instructions, after the scope loop and before the adve
 - On LEAK, send the implementer exactly the Critical and High findings, then call the guard again.
   After 2 rework rounds, report what is left as **UNRESOLVED**.
 
-**`/deliver`** runs the same check after the conformance check and before the adversary check,
+**`/deliver`** runs the same check after the review check (the conformance check, without a
+reviewer) and before the adversary check,
 and its synthesis reports the verdict and anything unresolved. An agent can only catch so much:
 pair it with a deterministic scanner in the check command, and keep real records out of the
 working tree, since every agent that reads them sends them to the model. Teams without a privacy
@@ -1057,14 +1101,17 @@ summarizes — for a goal that came from an `/intent`, with a pull request draft
 approvers to review the change ([details](#from-findings-to-a-github-issue-intent)). Small, clear
 goals collapse the interview and plan into a one-paragraph brief.
 
-**Precedents and the conformance check.** The research always includes a precedent sweep: the
+**Precedents and the review check.** The research always includes a precedent sweep: the
 `explorer` lists what the change must follow, by the **Precedents** rule in
 `.claude/rules/ocgen-workflow.md`. An entry is code to **reuse**, a **pattern** nearby code already
 follows, or a **contract** callers rely on, each with a slug, a `file:line` and what the change
 must do. The implementer gets the entries that bear on each task. When the work is done, the
-**conformance check** has the `reviewer` mark each entry Followed, Broken or Not applicable and
-flag new code that duplicates an existing helper. Broken entries go back to the implementer
-once; one still broken is reported as broken. Without a reviewer the session checks it itself.
+**review check** runs three independent `reviewer` runs at once (the review loop above): the
+`conformance` run marks each entry Followed, Broken or Not applicable and flags new code that
+duplicates an existing helper, while the other two check correctness and tests. A fresh run
+confirms each finding, the confirmed ones go back to the implementer in one list for up to 2
+rounds, and an entry still broken is reported as broken. Without a reviewer the session checks
+conformance itself, once.
 The how-to lives in a rule rather than the explorer's prompt, because `ocgen doctor` refreshes
 rules and skills but keeps each agent's saved prompt. Given a brief written by `/brief`
 (`/deliver .claude/briefs/<slug>.md`), it reads that first, skips the phases it settles and asks only
@@ -1740,7 +1787,7 @@ For one piece it offers `/deliver` instead.
    app's sync tool, or `git merge <base>` in its worktree); a failed check is undone with
    `git reset --keep` and handed back. The manager never resolves a conflict itself. With the
    approval gate on, you run `ocgen approve` before this step: it holds every `git merge`.
-6. **Check the whole**: the scope-guard and adversary loops on the integrated change, with
+6. **Check the whole**: the scope-guard, review and adversary loops on the integrated change, with
    reworks going back to the owning worker.
 7. **Close.** A coordinator-style report, subagent worktrees removed (`git worktree remove`,
    then `git branch -d`, never forced), session worktrees left to their sessions, and the board
@@ -2720,6 +2767,7 @@ mindset.md.j2            # the mindset every agent and the coordinator end with 
 guidance.md.j2           # the shared rules for claims, research and changes, per skill and agent
 authorship.md.j2         # short commit messages, no AI credit: the Claude workflow rule's section, every OpenCode agent's text
 coordination/scope-guard.md.j2   # the coordinator's scope loop (when the team has a scope guard)
+coordination/reviewer.md.j2      # the coordinator's review loop: three independent runs (when the team has a reviewer)
 coordination/privacy-guard.md.j2 # the coordinator's privacy loop (when the team has a privacy guard)
 coordination/adversary.md.j2     # the coordinator's adversary loop (when the team has one)
 coordination/response.md.j2      # the coordinator's answer line (when answers differ from instructions)

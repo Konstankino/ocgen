@@ -51,16 +51,21 @@ const AGENT_FIELDS: &[Field] = &[
     Field {
         label: "role",
         detail: "A free-text label describing the agent's job. It is shown in `ocgen landscape` \
-                 but is not written into the generated agent file. Three values matter. An enabled \
+                 but is not written into the generated agent file. Four values matter. An enabled \
                  subagent with role (or name) `scope-guard` makes the coordinator check the \
                  finished change against the plan before any review: it reverts the cuts \
                  itself, sends what is Partial or Missing back to the implementer for one \
                  round, and reports the blast radius; /deliver runs it at the end of execution \
-                 and /intent has it check the plan. One with role (or name) `privacy-guard` makes \
+                 and /intent has it check the plan. One with role (or name) `reviewer` makes the \
+                 coordinator review the change after the scope check with three independent runs \
+                 at once — conformance to the precedents, correctness, tests — have a fresh run \
+                 confirm each finding, and send the confirmed ones back to the implementer in one \
+                 list for up to 2 rework rounds; /deliver and /workstreams run the same check. \
+                 One with role (or name) `privacy-guard` makes \
                  the coordinator check every change for personal or health data (PII/PHI) that \
-                 could leak, after the scope check and before the adversary, and send \
-                 Critical/High findings back to the implementer for up to 2 rework rounds; \
-                 /deliver runs it after the conformance check. `ocgen new` adds it when you say \
+                 could leak, after the scope and review checks and before the adversary, and \
+                 send Critical/High findings back to the implementer for up to 2 rework rounds; \
+                 /deliver runs it after the review (or conformance) check. `ocgen new` adds it when you say \
                  the project handles such data. One with role (or name) `adversary` makes \
                  the coordinator run its check last, send \
                  Critical/High findings back to the implementer for up to 2 rework rounds, and \

@@ -243,6 +243,57 @@ fn the_project_roles_and_thresholds_are_rendered_in() {
     assert!(md.contains("(the brief's `Check:` command)"));
 }
 
+/// The integrated change gets the review check too: three reviewer runs between
+/// the scope check and the adversary, each finding the loop sends back going to
+/// the worker whose workstream owns it.
+#[test]
+fn check_the_whole_runs_the_review_check() {
+    let (_dir, md) = scaffolded(&claude("ws"));
+    let start = md.find("## 6. Check the whole").expect("step 6");
+    let step = &md[start..md.find("## 7. Close").expect("step 7")];
+    for must in [
+        "exactly as\n`.claude/rules/ocgen-team.md` describes the loops",
+        "**Review check** next",
+        "three `reviewer` runs, one per angle",
+        "the board's `Base:`",
+        "the `conformance` run lists the precedents itself",
+        "finding the loop sends back goes to the worker whose workstream owns it",
+        "the brief whose files hold its",
+        "one list per workstream",
+        "a finding that fits no single workstream",
+        "at most 2 rework rounds",
+    ] {
+        assert!(step.contains(must), "missing {must:?} in:\n{step}");
+    }
+    let at = |s: &str| {
+        step.find(s)
+            .unwrap_or_else(|| panic!("no {s:?} in:\n{step}"))
+    };
+    assert!(at("**Scope check** first") < at("**Review check** next"));
+    assert!(at("**Review check** next") < at("**Adversary check** last"));
+
+    // Without a reviewer, step 6 reads as before.
+    let mut p = claude("ws");
+    p.agents.retain(|a| a.role != "reviewer");
+    let (_dir, md) = scaffolded(&p);
+    let start = md.find("## 6. Check the whole").expect("step 6");
+    let step = &md[start..md.find("## 7. Close").expect("step 7")];
+    assert!(
+        !step.contains("Review check") && !step.contains("`reviewer`"),
+        "{step}"
+    );
+
+    // With the reviewer as the only check, step 6 still points at the loop.
+    let mut p = claude("ws");
+    p.agents
+        .retain(|a| a.role != "scope-guard" && a.role != "adversary");
+    let (_dir, md) = scaffolded(&p);
+    let start = md.find("## 6. Check the whole").expect("step 6");
+    let step = &md[start..md.find("## 7. Close").expect("step 7")];
+    assert!(step.contains("describes the loops"), "{step}");
+    assert!(step.contains("**Review check** next"), "{step}");
+}
+
 #[test]
 fn one_workstream_offers_deliver_only_when_the_project_has_it() {
     let (_dir, md) = scaffolded(&claude("ws"));

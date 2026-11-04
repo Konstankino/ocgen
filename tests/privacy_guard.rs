@@ -290,7 +290,7 @@ fn deliver_runs_the_privacy_check() {
         assert!(deliver.contains(must), "missing {must:?} in:\n{deliver}");
     }
     let privacy = deliver.find("**Privacy check.**").unwrap();
-    assert!(deliver.find("**Conformance check.**").unwrap() < privacy);
+    assert!(deliver.find("**Review check.**").unwrap() < privacy);
     assert!(privacy < deliver.find("**Adversary check.**").unwrap());
 }
 

@@ -1,0 +1,109 @@
+{% if language == "Ukrainian" -%}
+Перевірка ревʼю ({{ reviewer }}):
+- Коли всі зміни готові{% if parallel %} (в Agent Teams — усі задачі){% endif %}{% if scope_guard %}, після {{ scope_guard }}{% endif %}{% if privacy_guard or adversary %}{% if scope_guard %} і{% else %},{% endif %} до {{ privacy_guard if privacy_guard else adversary }}{% endif %}, запусти хвилю:
+  три свіжі запуски {{ reviewer }}, по одному на ракурс{% if parallel %}, як підагенти в одному повідомленні, щоб жоден не чекав іншого{% else %}, по черзі{% endif %}.
+{% if implementer_isolated -%}
+- {{ implementer }} працює в окремому git worktree, і ocgen комітить його зміни в його гілку, коли він
+  завершує (ніколи не проси користувача комітити їх): перед кожною хвилею злий його гілку в робочу,
+  інакше {{ reviewer }} перевірятиме код без змін.
+{% endif -%}
+- Перед кожною хвилею запиши пакет у `.claude/scratch/review-pack.md` (це тимчасовий файл, а не зміна в
+  робочому дереві; спершу створи `.claude/scratch/.gitignore` з рядком `*`): задачу й останній
+  затверджений план або бриф із критеріями приймання, список прецедентів із дослідження, якщо він є,
+  базу, змінені файли й сам diff, разом із новими файлами, яких git ще не відстежує. {% if parallel %}Агент без
+  оболонки не може запустити git, а diff,{% else %}Diff,{% endif %} вставлений у кожен запит, коштує копії на кожен запуск і
+  обрізається: дай кожному запускові абсолютний шлях до файлу, одного для всіх. Якщо diff довший за
+  3 000 рядків, запиши окремий файл на кожну групу повʼязаних файлів, і в кожному — перелік усіх змінених
+  файлів; запуски для всіх груп складають одну хвилю{% if parallel %}, не більше 8 одночасно{% endif %}. Ніколи не передавай
+  запускові звіт іншого запуску чи будь-чиї твердження або впевненість, крім твердження, яке перевіряє
+  підтверджувальний запуск, і того, що нова хвиля отримує нижче. Коли перевірка ревʼю завершиться,
+  видали файли пакета.
+- Один ракурс на запуск. `conformance`: кожен прецедент — Followed, Broken або Not applicable, з його
+  `file:line` (якщо списку немає, запуск спершу сам перелічує код, який слід використати повторно,
+  шаблони, яких дотримується сусідній код, і контракти, на які покладаються виклики), а також новий
+  код, що дублює наявну функцію, тип чи хелпер. `correctness`: проти критеріїв — логічні хиби,
+  пропущені й крайні випадки, обробка помилок, зламані виклики чи контракти, регресії. `tests`: тест
+  на кожен критерій і крайній випадок, що падає без зміни; відсутні негативні тести; тести, що
+  проходять за будь-якого коду.
+- Скажи кожному запускові його ракурс і формат звіту: `Angle:`, `Verdict: PASS` або `Verdict: REWORK`
+  (REWORK — якщо є хоч одна знахідка Critical чи High, порушений прецедент або дублікат), знахідки у
+  форматі `[Severity] file:line — проблема — сценарій або доказ — виправлення — Verified | Inferred (Confidence: NN%)`,
+  а потім `Not checked:`. Якщо у звіті немає рядка `Verdict:`, запусти цей ракурс ще раз, свіжим
+  запуском; якщо вердикту знову немає, познач ракурс як UNRESOLVED, але його знахідки все одно
+  підтверди (знахідка без рівня серйозності має рівень Medium).
+- Нічого не змінюй у робочому дереві, доки не надійде останній звіт. Потім обʼєднай знахідки з тією
+  самою причиною в тому самому місці, зберігши всі ракурси, що їх знайшли, і дай кожній slug. У
+  наступній хвилі знахідка з тією самою причиною й місцем, що й уже підтверджена, зберігає її slug і
+  повторно не підтверджується.
+- Підтверди кожну знахідку свіжим запуском {{ reviewer }}: по одному на знахідку рівня Medium і вище
+  (порушений прецедент чи дублікат має рівень Medium), один на всі Low{% if parallel %}, в одному повідомленні, не більше 8 одночасно{% else %}, по черзі{% endif %}.
+  Дай йому твердження, його `file:line`, виправлення й абсолютний шлях до пакета, але ніколи — міркування чи
+  впевненість того, хто знайшов, і хай він спробує спростувати твердження: Confirmed (за читанням коду,
+  з `Confidence: NN%`), Rejected з причиною або Unsettled з тим, що це вирішить. Знахідка Critical чи
+  High зі статусом Unsettled — UNRESOLVED.
+- Коли всі знахідки перевірено, передай {% if implementer %}агентові {{ implementer }}{% else %}агентові, який вносив зміни,{% endif %} один список, дослівно:
+  підтверджені знахідки Critical і High, підтверджені порушені прецеденти без причини, яку схвалив
+  користувач, і підтверджені дублікати. Якщо список порожній, яким би не був вердикт, перевірка ревʼю
+  завершена: рухайся далі.
+- Інакше запусти нову хвилю на всю зміну від тієї самої бази й обробляй її знахідки так само. Дай
+  кожному її запускові, разом із пакетом, надіслані знахідки — кожну як slug, твердження, `file:line` і
+  виправлення (ніколи — міркування чи впевненість того, хто знайшов): спершу підтвердити або
+  спростувати кожне виправлення, потім шукати вади, які внесли виправлення.
+- Не більше {{ rounds }} кіл доопрацювання: до {{ rounds }} виправлень і {{ rounds + 1 }} хвиль. Знахідку, яку треба повернути,
+  але яка й далі відкрита, познач як UNRESOLVED; прецедент, що й далі Broken, у звіті позначай як
+  порушений, ніколи як дотриманий.
+- Підагенти не викликають одне одного: знахідки від запусків {% if implementer %}агентові {{ implementer }}{% else %}агентові, який вносив зміни,{% endif %} передаєш лише ти.
+- У фінальному звіті вкажи вердикт кожного ракурсу, кількість хвиль, усі знахідки UNRESOLVED, знахідки
+  Medium і Low — у зауваженнях і ризиках, а кожну відхилену чи невирішену — з причиною.
+{%- else -%}
+Review check ({{ reviewer }}):
+- When every change is done{% if parallel %} (with Agent Teams, every task){% endif %}{% if scope_guard %}, after {{ scope_guard }}{% endif %}{% if privacy_guard or adversary %}{% if scope_guard %} and{% else %},{% endif %} before {{ privacy_guard if privacy_guard else adversary }}{% endif %}, run a wave:
+  three fresh {{ reviewer }} runs, one per angle{% if parallel %}, as subagents in one message, so none waits for another{% else %}, one after another{% endif %}.
+{% if implementer_isolated -%}
+- {{ implementer }} works in its own git worktree, and ocgen commits its changes on its branch when it
+  stops (never ask the user to commit them): merge that branch into the working branch before every wave,
+  or {{ reviewer }} checks code without the change.
+{% endif -%}
+- Before each wave, write the pack to `.claude/scratch/review-pack.md` (a scratch file, not a change to the work tree;
+  first create `.claude/scratch/.gitignore` holding `*`): the task and the latest approved plan or brief
+  with its acceptance criteria, research's precedent list if there is one, the base, the changed files and
+  the diff itself, untracked new files included. {% if parallel %}An agent without a shell can't run git, and a{% else %}A{% endif %} diff
+  pasted into every prompt costs a copy per run and gets cut short:
+  give every run its absolute path, the same file for each. Over about 3,000 lines of diff, write one
+  file per group of related files, each listing every changed file;
+  the runs for all groups make up one wave{% if parallel %}, at most 8 at a time{% endif %}. Never pass a run another run's report,
+  or anyone's claims or confidence, except the claim a
+  confirmation run checks and what a new wave is given below. Delete the pack files once the review check is done.
+- One angle per run. `conformance`: each precedent Followed, Broken or Not applicable, with its
+  `file:line` (with no list, it first lists the code to reuse, the patterns nearby code follows and
+  the contracts callers rely on), and new code that duplicates an existing function, type or helper.
+  `correctness`: against the criteria — logic errors, missed and edge cases, error handling, broken
+  callers or contracts, regressions. `tests`: a test for each criterion and edge case that fails
+  without the change, missing negative tests, tests that pass whatever the code does.
+- Tell each run its angle and this report format: `Angle:`, `Verdict: PASS` or `Verdict: REWORK`
+  (REWORK for any Critical or High finding, Broken precedent or duplicate), findings as
+  `[Severity] file:line — problem — scenario or evidence — fix — Verified | Inferred (Confidence: NN%)`,
+  then `Not checked:`. With no `Verdict:` line, run that angle once more, fresh; if there is still
+  none, that angle is UNRESOLVED, but its findings are still confirmed
+  (a finding with no severity counts as Medium).
+- Change nothing in the work tree until the last report is in. Then merge findings with the same
+  cause in the same place, keeping every angle that found them, and give each a slug. In a later
+  wave, a finding with the cause and place of one already confirmed keeps its slug and isn't confirmed again.
+- Confirm each with a fresh {{ reviewer }} run: one per finding of Medium or higher (a Broken precedent
+  or a duplicate counts as Medium), one for all the Low ones{% if parallel %}, in one message, at most 8 at a time{% else %}, one after another{% endif %}.
+  Give it the claim, its `file:line`, the fix and the pack's absolute path, never the finder's reasoning or confidence,
+  and have it try to disprove the claim: Confirmed (by reading, with `Confidence: NN%`), Rejected with
+  the reason, or Unsettled with what would settle it. An Unsettled Critical or High finding is UNRESOLVED.
+- Once every finding is checked, send {{ implementer if implementer else "the subagent that made the change" }} one list, verbatim: the confirmed Critical and
+  High findings, the confirmed Broken precedents without a reason the user approved, and the confirmed duplicates.
+  If that list is empty, whatever the verdicts, the review check is done: go on.
+- Otherwise run a new wave on the whole change from the same base, and treat its findings the same way.
+  Give each of its runs, with the pack, the findings sent back, each as slug, claim, `file:line` and fix
+  (never the finder's reasoning or confidence): first confirm or refute each fix, then look for flaws
+  the fixes added.
+- At most {{ rounds }} rework rounds: up to {{ rounds }} fixes and {{ rounds + 1 }} waves. A finding that would go back but is still
+  open after that is UNRESOLVED; a precedent still broken is reported as broken, never as followed.
+- Subagents can't call each other: only you pass findings from the runs to {{ implementer if implementer else "the subagent that made the change" }}.
+- In the final report, give each angle's verdict, the waves used, every UNRESOLVED finding, the Medium
+  and Low ones under remarks and risks, and every rejected or unsettled one with its reason.
+{%- endif %}

@@ -91,6 +91,11 @@ archetype = "implementer"
 name = "scope-guard"
 archetype = "scope-guard"
 
+# Reviews the finished change three ways at once — conformance to the precedents,
+# correctness, tests — each run blind to the others, and a fresh run confirms each
+# finding. With it in the team, the coordinator runs the wave after the scope check
+# and before the privacy and adversary checks, and sends the confirmed serious
+# findings back to the implementer in one list (see coordination/reviewer.md.j2).
 [[pipeline]]
 name = "reviewer"
 archetype = "reviewer"
