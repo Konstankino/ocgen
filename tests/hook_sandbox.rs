@@ -316,6 +316,13 @@ fn the_check_broker_runs_its_check_in_the_sandbox() {
 
 /// Network off by default, on with `hook_network` (where the internet is
 /// reachable at all: OCGEN_TEST_NETWORK=1).
+///
+/// Plain HTTP on purpose: the claim is about reaching the network, and an
+/// HTTPS fetch also checks the site's certificate chain against the machine's
+/// trust store. On the macOS runners that check began to fail (`curl` exit 60,
+/// "unable to get local issuer certificate") between two commits that changed
+/// no Rust code: something outside the repository, the site's chain or the
+/// runner's trust store, turned the test red.
 #[cfg(unix)]
 #[test]
 fn the_network_is_off_unless_the_project_turns_it_on() {
@@ -323,7 +330,7 @@ fn the_network_is_off_unless_the_project_turns_it_on() {
         eprintln!("skipped: OCGEN_TEST_NETWORK isn't 1");
         return;
     }
-    let fetch = "curl -sS -m 10 -o /dev/null https://example.com";
+    let fetch = "curl -sS -m 10 -o /dev/null http://example.com";
     let off = run(&fixture(false), fetch);
     assert_ne!(off.0, 0, "{off:?}");
     let on = run(&fixture(true), fetch);
