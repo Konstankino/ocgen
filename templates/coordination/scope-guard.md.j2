@@ -9,7 +9,9 @@
 {% if implementer_isolated -%}
 - {{ implementer }} працює в окремому git worktree, і ocgen комітить його зміни в його гілку, коли він
   завершує (ніколи не проси користувача комітити їх): перед кожним викликом {{ scope_guard }} злий його гілку
-  в робочу, інакше {{ scope_guard }} перевірятиме код без змін.
+  в робочу, інакше {{ scope_guard }} перевірятиме код без змін. Зливай її окремою командою,
+  `git merge --no-ff --no-edit <його гілка worktree-agent-*>`, і нічого більше в цій команді; якщо ocgen
+  зупинить це злиття, щоб закомітити те, що лишилось незакоміченим, запусти його ще раз.
 {% endif -%}
 - Передай {{ scope_guard }} мету й останній затверджений план або бриф дослівно, з критеріями приймання;
   рішення, які користувач підтвердив під час роботи; базу й уже змінені файли;{% if formatter %} форматер, що
@@ -42,7 +44,9 @@ Scope check ({{ scope_guard }}):
 {% if implementer_isolated -%}
 - {{ implementer }} works in its own git worktree, and ocgen commits its changes on its branch when it
   stops (never ask the user to commit them): merge that branch into the working branch before
-  every call to {{ scope_guard }}, or {{ scope_guard }} checks code without the change.
+  every call to {{ scope_guard }}, or {{ scope_guard }} checks code without the change. Merge it on its
+  own, `git merge --no-ff --no-edit <its worktree-agent-* branch>` and nothing else in that command; if
+  ocgen holds that merge to commit what was left uncommitted, run it again.
 {% endif -%}
 - Give {{ scope_guard }} the goal and the latest approved plan or brief, verbatim, with its acceptance
   criteria; the decisions the user confirmed during the work; the base and the already-modified

@@ -225,6 +225,74 @@ fn the_script_and_the_binary_share_the_self_approval_pattern() {
     );
 }
 
+/// The coordinator merging its own subagent's worktree branch (`worktree-agent-*`,
+/// the branch the worker's changes are committed on) is local work the workflow
+/// prescribes before every check, not an external action: it passes without an
+/// approval, and so does undoing it (`--abort`). Only that exact shape passes:
+/// any other branch, option, message, strategy or second command keeps the
+/// merge gated.
+#[test]
+fn a_merge_of_a_subagents_own_worktree_branch_needs_no_approval() {
+    let dir = project();
+    for cmd in [
+        "git merge worktree-agent-a9dc746792d16c94a",
+        "git merge --no-ff --no-edit refs/heads/worktree-agent-a9dc746792d16c94a",
+        "git merge --ff-only worktree-agent-abc",
+        "git merge worktree-agent-abc --no-edit",
+        "git merge \"worktree-agent-abc\"",
+        "  git merge worktree-agent-abc  ",
+        "git merge \\\n  --no-ff worktree-agent-abc",
+        "git merge --abort",
+    ] {
+        assert!(ocgen::risk::high_impact(cmd).is_some(), "risk: {cmd:?}");
+        assert!(ocgen::risk::subagent_merge(cmd), "exempt: {cmd:?}");
+        expect(dir.path(), &bash(cmd), 0);
+    }
+    for cmd in [
+        "git merge main",
+        "git merge refs/heads/feature",
+        // A session's worktree branch (`claude --worktree issue-1335`).
+        "git merge worktree-issue-1335",
+        "git merge origin/worktree-agent-abc",
+        "git merge worktree-agent-abc/../main",
+        "git merge worktree-agent-$(git rev-parse main)",
+        "git merge worktree-agent-a worktree-agent-b",
+        "git merge -m done worktree-agent-abc",
+        "git merge -s ours worktree-agent-abc",
+        "git merge --continue",
+        "git -C ../other merge worktree-agent-abc",
+        "git -c core.hooksPath=/tmp/x merge worktree-agent-abc",
+        "git merge worktree-agent-abc && git push origin main",
+        "git merge worktree-agent-abc; git merge main",
+        "git merge worktree-agent-abc\ngit merge main",
+        "git status\ngit merge main",
+        "git merge worktree-agent-abc\u{1}",
+        "git push origin worktree-agent-abc",
+        "gh pr merge 47",
+    ] {
+        assert!(!ocgen::risk::subagent_merge(cmd), "not exempt: {cmd:?}");
+        expect(dir.path(), &bash(cmd), 2);
+    }
+}
+
+/// The worker-commit hook reads the same merge (to commit what the worker left
+/// first), so the two scripts and the binary share one pattern.
+#[test]
+fn the_scripts_and_the_binary_share_the_subagent_merge_pattern() {
+    for script in ["team-approval-gate.sh", "worker-commit.sh"] {
+        let body = ocgen::templates::load_embedded(&format!("claude/hooks/{script}")).unwrap();
+        let line = body
+            .lines()
+            .find(|l| l.starts_with("SUBAGENT_MERGE='"))
+            .unwrap_or_else(|| panic!("{script} defines SUBAGENT_MERGE"));
+        assert_eq!(
+            line,
+            format!("SUBAGENT_MERGE='{}'", ocgen::risk::SUBAGENT_MERGE),
+            "{script}"
+        );
+    }
+}
+
 #[test]
 fn self_approval_is_blocked_however_the_store_is_spelled() {
     let dir = project();

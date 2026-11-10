@@ -5,7 +5,9 @@
 {% if implementer_isolated -%}
 - {{ implementer }} працює в окремому git worktree, і ocgen комітить його зміни в його гілку, коли він
   завершує (ніколи не проси користувача комітити їх): перед кожним викликом {{ privacy_guard }} злий його гілку
-  в робочу, інакше {{ privacy_guard }} перевірятиме код без змін.
+  в робочу, інакше {{ privacy_guard }} перевірятиме код без змін. Зливай її окремою командою,
+  `git merge --no-ff --no-edit <його гілка worktree-agent-*>`, і нічого більше в цій команді; якщо ocgen
+  зупинить це злиття, щоб закомітити те, що лишилось незакоміченим, запусти його ще раз.
 {% endif -%}
 - Передай {{ privacy_guard }} задачу, базу, змінені файли й те, що зміна робить із даними. Ніколи не вставляй
   персональні чи медичні дані в запит, звіт чи повідомлення коміту: називай поле і його `file:line`.
@@ -28,7 +30,9 @@ Privacy check ({{ privacy_guard }}):
 {% if implementer_isolated -%}
 - {{ implementer }} works in its own git worktree, and ocgen commits its changes on its branch when it
   stops (never ask the user to commit them): merge that branch into the working branch before
-  every call to {{ privacy_guard }}, or {{ privacy_guard }} checks code without the change.
+  every call to {{ privacy_guard }}, or {{ privacy_guard }} checks code without the change. Merge it on its
+  own, `git merge --no-ff --no-edit <its worktree-agent-* branch>` and nothing else in that command; if
+  ocgen holds that merge to commit what was left uncommitted, run it again.
 {% endif -%}
 - Give {{ privacy_guard }} the task, the base, the changed files and what the change does with data.
   Never paste personal or health data into a prompt, a report or a commit message: name the field

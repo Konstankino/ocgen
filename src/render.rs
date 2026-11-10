@@ -3241,6 +3241,18 @@ impl Project {
                 json!({ "hooks": [ command_hook(hook_cmd(prefix, dir, "worker-commit.sh")) ] }),
             );
         }
+        if self.isolates_workers() {
+            // Before the coordinator merges a worker's branch, whatever its stop
+            // left uncommitted is committed there, with the worker gate on too:
+            // a stop hook that failed, never ran or didn't see the worktree would
+            // otherwise make the merge take nothing, and Claude Code refuses
+            // git aimed at another worktree, even the user's `!` command. The
+            // hook then holds that one merge and says why.
+            push(
+                "PreToolUse",
+                json!({ "matcher": "Bash|PowerShell", "hooks": [ command_hook(hook_cmd(prefix, dir, "worker-commit.sh")) ] }),
+            );
+        }
         if self.keeps_notes() {
             // Notes are git-ignored and count as no change, so removing a worktree
             // would delete its own silently, and most removals run no hook (`:q`,

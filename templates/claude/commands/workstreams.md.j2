@@ -230,9 +230,11 @@ stop and tell me what is there. Once, before the first merge, record the way bac
 `Undo: git reset --keep <sha of HEAD>`.
 {%- if approval_gate %}
 
-This project's approval gate holds every `git merge`, `--abort` included. Ask me to run
-`ocgen approve` in my own terminal right before you merge (it lasts 3 minutes and re-locks by
-itself), and ask again when it lapses mid-way. Never phrase a command to get past it.
+This project's approval gate holds the merge of a session worker's branch. A subagent worker's
+`worktree-agent-*` branch, merged alone in its command, passes, and so does `git merge --abort`.
+Before you merge a session worker's branch, ask me to run `ocgen approve` in my own terminal (it
+lasts 3 minutes and re-locks by itself), and ask again when it lapses mid-way. Never phrase a
+command to get past it.
 {%- endif %}
 
 In dependency order (`After:` first), for each `checked` workstream:

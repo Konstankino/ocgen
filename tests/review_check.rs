@@ -167,6 +167,10 @@ fn claude_coordinator_runs_the_review_wave() {
         // The implementer works in a worktree: its branch is merged first.
         "implementer works in its own git worktree",
         "merge that branch into the working branch before every wave",
+        // …alone in its command: the approval gate lets exactly that merge
+        // through, and ocgen commits what the worker left before it.
+        "`git merge --no-ff --no-edit <its worktree-agent-* branch>` and nothing else in that command",
+        "holds that merge to commit what was left uncommitted, run it again",
     ] {
         assert!(block.contains(must), "missing {must:?} in:\n{block}");
     }
@@ -287,6 +291,8 @@ fn the_review_loop_speaks_ukrainian() {
         "не більше 8 одночасно",
         "Не більше 2 кіл доопрацювання",
         "злий його гілку",
+        "`git merge --no-ff --no-edit <його гілка worktree-agent-*>`, і нічого більше в цій команді",
+        "запусти його ще раз",
         "`.claude/scratch/review-pack.md`",
         "Confirmed (за читанням коду",
         "Якщо список порожній",

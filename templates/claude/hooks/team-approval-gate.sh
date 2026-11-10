@@ -129,11 +129,23 @@ HIGH_IMPACT='(^|[^[:alnum:]_./-])(ssh|scp|sftp|rsync)([[:space:];&|)<>`]|$)|git(
 # test keeps them identical).
 SELF_APPROVAL='ocgen[[:space:]]+approve|ocgen[/.]*approv(als|~)|(\.claude|claude~)[/.0-9]*ocgen([^-_[:alnum:]]|$)|(\.claude|claude~).*[^-_[:alnum:]]ocgen[^-_[:alnum:]].*approv(als|~)|(\.claude|claude~).*[^[:space:];&|()<>]approv(als|~)|[^[:space:];&|()<>]approv(als|~).*(\.claude|claude~)|(\.claude|claude~)[/.0-9]*(o|oc|ocg|ocge)?(\[|[*?{$`])[^./[:space:];&|()<>`]*([/[:space:];&|()<>`]|$).*approv(als|~)|approv(als|~).*(\.claude|claude~)[/.0-9]*(o|oc|ocg|ocge)?(\[|[*?{$`])[^./[:space:];&|()<>`]*([/[:space:];&|()<>`]|$)|((^|[^-_[:alnum:]])(cd|pushd)[[:space:]]+|[[:alnum:]_][[:space:]]*=[[:space:]]*)[^[:space:];&|()<>`]*(\.claude|claude~)[/.0-9]*(o|oc|ocg|ocge)?[[:space:];&|()<>`].*[^-_[:alnum:]](o|oc|ocg|ocge)?(\[|[*?{`]|\$[^(])[^./[:space:];&|()<>`]*([/[:space:];&|()<>`]|$).*approv(als|~)'
 
+# A coordinator's merge of its own subagent's worktree branch, as the whole
+# command (one line): the local step the workflow takes before every check, so it
+# passes without an approval; so does `git merge --abort`. Anything more (-C, -c,
+# -m, -s, another branch or command) stays gated (ocgen's risk::SUBAGENT_MERGE;
+# a test keeps them identical).
+SUBAGENT_MERGE='^[[:space:]]*git[[:space:]]+merge(([[:space:]]+--(no-ff|ff-only|no-edit))*[[:space:]]+(refs/heads/)?worktree-agent-[[:alnum:]_-]+([[:space:]]+--(no-ff|ff-only|no-edit))*|[[:space:]]+--abort)[[:space:]]*$'
+
 if [ -n "$cmd" ]; then
     # Join lines continued with a trailing backslash (as the shell does), then
     # strip what a shell would strip, so `git "push"` can't slip through.
     ncmd=$(printf '%s\n' "$cmd" | awk '{ if (sub(/\\$/, "")) printf "%s", $0; else print }' |
         tr -d "\"'\\\\")
+    exempt=
+    case $ncmd in
+    *"$nl"*) ;;
+    *) printf '%s\n' "$ncmd" | LC_ALL=C grep -Eq "$SUBAGENT_MERGE" && exempt=1 ;;
+    esac
     # (The long s, \305\277, reads as s: APFS and NTFS fold it so.)
     longs=$(printf '\305\277')
     if printf '%s' "$ncmd" | tr '\n\r' '  ' | LC_ALL=C sed "s/$longs/s/g" |
@@ -144,7 +156,7 @@ if [ -n "$cmd" ]; then
     if printf '%s' "$cmd" | LC_ALL=C tr -d '\t\n\r' | LC_ALL=C grep -q '[[:cntrl:]]'; then
         unsure=1
     fi
-    if { [ -n "$unsure" ] || printf '%s\n' "$ncmd" | LC_ALL=C grep -Eq "$HIGH_IMPACT"; } && ! approved; then
+    if { [ -n "$unsure" ] || { [ -z "$exempt" ] && printf '%s\n' "$ncmd" | LC_ALL=C grep -Eq "$HIGH_IMPACT"; }; } && ! approved; then
         echo "BLOCKED by the execution-approval gate: this is a high-impact external" >&2
         echo "action (ssh / cloud mutation / git push|merge / deploy / publish / etc.)." >&2
         echo "A human must review, then approve from their own terminal (it expires by itself):" >&2

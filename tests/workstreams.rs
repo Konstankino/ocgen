@@ -222,8 +222,11 @@ fn the_project_roles_and_thresholds_are_rendered_in() {
         "`adversary`",
         "at least 97%",
         "(`cargo test`)",
-        // The approval gate holds every merge: integration waits for a human.
+        // The approval gate holds a session worker's merge: that waits for a
+        // human; a subagent worker's own branch passes.
         "ocgen approve",
+        "holds the merge of a session worker's branch",
+        "`worktree-agent-*` branch, merged alone in its command, passes",
     ] {
         assert!(md.contains(must), "missing {must:?}");
     }
