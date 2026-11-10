@@ -186,6 +186,54 @@ pub fn unread_merge(command: &str) -> bool {
         .any(|line| re.is_match(line))
 }
 
+/// A coordinator's merge of its own subagent's worktree branch, as the whole
+/// command: `git merge`, one `worktree-agent-<id>` branch (short, or as
+/// `refs/heads/…`) with `--no-ff`, `--ff-only` or `--no-edit` on either side,
+/// or `git merge --abort` alone. That branch is where a worktree-isolated
+/// worker's changes are committed, and merging it into the working branch is
+/// the local step /deliver, the coordination loops and /fanout take before every
+/// check — not an external action. Anything more is something else: `git -C` or
+/// `-c`, `-m`, `-s`, a second branch or command, another line. Matched on the
+/// normalized command as one line (see [`subagent_merge`]). Kept in sync with
+/// the approval-gate and worker-commit scripts' `SUBAGENT_MERGE` (a test
+/// compares them).
+pub const SUBAGENT_MERGE: &str = r"^[[:space:]]*git[[:space:]]+merge(([[:space:]]+--(no-ff|ff-only|no-edit))*[[:space:]]+(refs/heads/)?worktree-agent-[[:alnum:]_-]+([[:space:]]+--(no-ff|ff-only|no-edit))*|[[:space:]]+--abort)[[:space:]]*$";
+
+/// The branch in a [`SUBAGENT_MERGE`] (the scripts' `grep -o` of it).
+const SUBAGENT_BRANCH: &str = r"worktree-agent-[[:alnum:]_-]+";
+
+/// `command` as the shell runs it, when that is one line: continued lines
+/// joined and quotes and backslashes stripped (as in [`high_impact`]), trailing
+/// newlines dropped (as the scripts' `$(…)` drops them). `None` for two lines
+/// or more.
+fn one_line(command: &str) -> Option<String> {
+    let line = normalize(&command.replace("\\\n", ""));
+    let line = line.trim_end_matches('\n');
+    (!line.contains('\n')).then(|| line.to_string())
+}
+
+/// Whether `command` is only a merge of a subagent's own worktree branch, or
+/// `git merge --abort` (see [`SUBAGENT_MERGE`]). The approval gate lets it pass
+/// without an approval. A control character never passes (see [`has_control`]).
+pub fn subagent_merge(command: &str) -> bool {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re =
+        RE.get_or_init(|| Regex::new(SUBAGENT_MERGE).expect("subagent-merge pattern compiles"));
+    !has_control(command) && one_line(command).is_some_and(|l| re.is_match(&l))
+}
+
+/// The worker branch a [`subagent_merge`] takes (`worktree-agent-<id>`, never
+/// `refs/heads/…`); `None` for `--abort` and for any other command.
+pub fn subagent_merge_branch(command: &str) -> Option<String> {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re =
+        RE.get_or_init(|| Regex::new(SUBAGENT_BRANCH).expect("subagent-branch pattern compiles"));
+    if !subagent_merge(command) {
+        return None;
+    }
+    re.find(&one_line(command)?).map(|m| m.as_str().to_string())
+}
+
 /// Whether `command` holds an ASCII control character other than tab, newline or
 /// carriage return. No ordinary command needs one, and it could hide a word from
 /// the pattern, so the gate treats such a command as high-impact (fail closed).

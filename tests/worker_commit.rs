@@ -81,6 +81,17 @@ impl Repo {
         self.main.path().join(".claude/worktrees/agent-abc")
     }
 
+    /// The coordinator's shell command, run from `cwd`, as PreToolUse sees it.
+    fn shell(&self, cwd: &Path, command: &str) -> Value {
+        json!({
+            "hook_event_name": "PreToolUse",
+            "session_id": "s-1",
+            "tool_name": "Bash",
+            "tool_input": { "command": command, "description": "Merge the worker" },
+            "cwd": ocgen::paths::for_shell(cwd),
+        })
+    }
+
     fn stop(&self, cwd: &Path) -> Value {
         json!({
             "hook_event_name": "SubagentStop",
@@ -289,6 +300,180 @@ fn a_commit_that_fails_says_so_and_never_blocks() {
     }
 }
 
+/// A worker whose stop left its changes uncommitted (the stop hook failed, never
+/// ran, or didn't see the worker's worktree): the coordinator's merge of its
+/// branch would take nothing ("Already up to date"), and Claude Code refuses git
+/// aimed at another worktree, the user's `!` command included. So before that
+/// merge the hook commits what the worker left, on its branch, and holds this one
+/// call: run again, the merge takes the commit (and a board's gate sees the new
+/// tip). The coordinator is told either way.
+#[test]
+fn a_merge_commits_what_the_worker_left_then_asks_to_run_it_again() {
+    for via in BOTH {
+        for no_jq in [false, true] {
+            let r = Repo::new();
+            let wt = r.wt();
+            write(&wt.join("app.py"), "x = 2\n");
+            write(&wt.join("tests/test_app.py"), "def test(): pass\n");
+            write(&wt.join(".claude/notes/n.md"), "n\n");
+            let extra: &[(&str, &str)] = if no_jq { &[("OCGEN_NO_JQ", "1")] } else { &[] };
+            let merge = r.shell(&r.main(), "git merge worktree-agent-abc");
+            let (code, out, err) = r.run(via, &merge, extra);
+            assert_eq!(code, 2, "{via:?} no_jq={no_jq}: {out} {err}");
+            assert_eq!(out, "", "{via:?}");
+            assert!(
+                err.contains("worktree-agent-abc") && err.contains("Run the merge again"),
+                "{via:?}: {err}"
+            );
+            assert_eq!(r.commits("worktree-agent-abc"), 2, "{via:?}");
+            assert_eq!(git(&wt, &["status", "--porcelain"]), "", "{via:?}");
+            assert_eq!(
+                git(&wt, &["show", "--name-only", "--format=", "HEAD"]),
+                "app.py\ntests/test_app.py",
+                "{via:?}"
+            );
+            assert_eq!(
+                git(&wt, &["log", "-1", "--format=%s"]),
+                "chore(subagent): the subagent's changes",
+                "{via:?}"
+            );
+            assert!(!git(&wt, &["log", "-1", "--format=%B"]).contains("Co-Authored-By"));
+            // Run again: nothing left to commit, the merge goes ahead and takes it.
+            assert_eq!(
+                r.run(via, &merge, extra),
+                (0, String::new(), String::new()),
+                "{via:?}"
+            );
+            git(
+                &r.main(),
+                &["merge", "-q", "--no-edit", "worktree-agent-abc"],
+            );
+            assert_eq!(
+                fs::read_to_string(r.main().join("app.py")).unwrap(),
+                "x = 2\n"
+            );
+        }
+    }
+}
+
+/// The coordinator may itself run in a session's worktree (`claude --worktree`),
+/// a sibling of the worker's: the hook finds the worker's worktree by its branch.
+#[test]
+fn a_merge_from_a_session_worktree_commits_the_worker_too() {
+    for via in BOTH {
+        let r = Repo::new();
+        let main = r.main();
+        git(
+            &main,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "worktree-issue",
+                ".claude/worktrees/issue",
+            ],
+        );
+        let session = main.join(".claude/worktrees/issue");
+        write(&r.wt().join("app.py"), "x = 2\n");
+        let merge = r.shell(
+            &session,
+            "git merge --no-ff --no-edit refs/heads/worktree-agent-abc",
+        );
+        let (code, _, err) = r.run(via, &merge, &[]);
+        assert_eq!(code, 2, "{via:?}: {err}");
+        assert_eq!(r.commits("worktree-agent-abc"), 2, "{via:?}");
+        assert_eq!(
+            r.commits("worktree-issue"),
+            1,
+            "{via:?}: the session is untouched"
+        );
+        git(
+            &session,
+            &["merge", "-q", "--no-edit", "worktree-agent-abc"],
+        );
+        assert_eq!(
+            fs::read_to_string(session.join("app.py")).unwrap(),
+            "x = 2\n"
+        );
+    }
+}
+
+/// A commit the repository refuses (its pre-commit hook) holds the merge, which
+/// would take nothing, and tells the coordinator why, with git's own words, so it
+/// can send the cause to the worker instead of asking the user to merge by hand.
+/// Nothing is left staged.
+#[cfg(unix)]
+#[test]
+fn a_merge_whose_commit_fails_is_held_with_the_reason() {
+    use std::os::unix::fs::PermissionsExt as _;
+    for via in BOTH {
+        let r = Repo::new();
+        let wt = r.wt();
+        let hook = r.main().join(".git/hooks/pre-commit");
+        write(
+            &hook,
+            "#!/bin/sh\necho 'ruff: would reformat app.py' >&2\nexit 1\n",
+        );
+        fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
+        write(&wt.join("app.py"), "x = 2\n");
+        let merge = r.shell(&r.main(), "git merge worktree-agent-abc");
+        let (code, out, err) = r.run(via, &merge, &[]);
+        assert_eq!(code, 2, "{via:?}: {out} {err}");
+        assert!(
+            err.contains("could not commit")
+                && err.contains("worktree-agent-abc")
+                && err.contains("would reformat app.py"),
+            "{via:?}: {err}"
+        );
+        assert_eq!(r.commits("worktree-agent-abc"), 1, "{via:?}");
+        assert_eq!(git(&wt, &["status", "--porcelain"]), "M app.py", "{via:?}");
+    }
+}
+
+/// Every other command, a merge of anything else, a worker with nothing left, a
+/// branch no worktree holds, a tool without a command and `ocgen verify`'s probe:
+/// the hook says nothing and changes nothing.
+#[test]
+fn other_commands_leave_the_worker_alone() {
+    for via in BOTH {
+        let r = Repo::new();
+        let main = r.main();
+        let quiet = (0, String::new(), String::new());
+        // Clean: nothing to commit.
+        let merge = r.shell(&main, "git merge worktree-agent-abc");
+        assert_eq!(r.run(via, &merge, &[]), quiet, "{via:?}");
+        write(&r.wt().join("app.py"), "x = 2\n");
+        for cmd in [
+            "git status",
+            "git merge main",
+            "git merge worktree-agent-abc && echo done",
+            "git merge --abort",
+            "git merge worktree-agent-zzz",
+            "git log worktree-agent-abc",
+        ] {
+            assert_eq!(
+                r.run(via, &r.shell(&main, cmd), &[]),
+                quiet,
+                "{via:?} {cmd}"
+            );
+        }
+        let read = json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Read",
+            "tool_input": { "file_path": "app.py" },
+            "cwd": ocgen::paths::for_shell(&main),
+        });
+        assert_eq!(r.run(via, &read, &[]), quiet, "{via:?}");
+        assert_eq!(
+            r.run(via, &merge, &[("OCGEN_HOOK_PROBE", "1")]),
+            quiet,
+            "{via:?}"
+        );
+        assert_eq!(r.commits("worktree-agent-abc"), 1, "{via:?}");
+    }
+}
+
 /// The worker gate's settings, with the gate committing for the worker.
 const GATED: [(&str, &str); 3] = [
     ("SUBAGENT_CONFIDENCE_THRESHOLD", "96"),
@@ -481,4 +666,50 @@ fn the_hook_is_wired_on_subagent_stop_when_workers_are_isolated() {
     assert!(wired(&p), "/fanout spawns isolated workers");
     p.claude.workflow.fanout = false;
     assert!(!wired(&p));
+}
+
+/// Before a merge the hook runs wherever workers are isolated, with the worker
+/// gate on too (that gate commits at the stop, but not a change the stop never
+/// saw), on the tools that run a shell command; never where no worker is.
+#[test]
+fn the_hook_also_runs_before_a_merge_wherever_workers_are_isolated() {
+    let m = ocgen::manifest::Manifest::load().unwrap();
+    let mut p = ocgen::render::Project::from_manifest(&m, "English");
+    p.target = ocgen::target::Target::ClaudeCode;
+    p.project_name = "wc".into();
+    p.providers.clear();
+    p.agents = ocgen::agent::claude_default_pipeline("English").unwrap();
+    let pre = |p: &ocgen::render::Project| -> Option<Value> {
+        let dir = tempdir().unwrap();
+        p.scaffold(dir.path(), false).unwrap();
+        let s: Value = serde_json::from_str(
+            &fs::read_to_string(dir.path().join(".claude/settings.json")).unwrap(),
+        )
+        .unwrap();
+        s["hooks"]["PreToolUse"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|g| g.to_string().contains("worker-commit"))
+            .cloned()
+    };
+    for a in p.agents.iter_mut() {
+        a.isolation.clear();
+    }
+    p.claude.workflow.fanout = false;
+    assert!(pre(&p).is_none(), "no isolated worker, no hook");
+    for a in p.agents.iter_mut() {
+        if a.role == "implementer" {
+            a.isolation = "worktree".into();
+        }
+    }
+    for confidence in [0, 90] {
+        p.claude.workflow.subagent_confidence = confidence;
+        let g = pre(&p).unwrap_or_else(|| panic!("wired (worker gate {confidence})"));
+        assert_eq!(g["matcher"], "Bash|PowerShell", "{g}");
+        let h = &g["hooks"][0];
+        let cmd = h["command"].as_str().unwrap_or_default();
+        assert!(cmd.contains(ocgen::hooks::PROTOCOL), "{cmd}");
+        assert!(h.get("onFailure").is_none(), "never fail-closed: {h}");
+    }
 }

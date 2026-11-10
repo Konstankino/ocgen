@@ -1552,16 +1552,18 @@ fn team_confidence_zero_disables_gate() {
     assert!(s["env"].get("TEAM_PLAN_GATE").is_none());
     assert!(s["env"].get("TEAM_RISK_ROUNDS").is_none());
     assert!(s["env"].get("TEAM_APPROVAL_GATE").is_none());
-    // No approval gate: PreToolUse holds only the WebFetch guard and the
-    // worktree notes' carrier, each with its matcher.
+    // No approval gate: PreToolUse holds only the WebFetch guard, the worktree
+    // notes' carrier and the isolated implementer's commit before its merge,
+    // each with its matcher.
     let pre: Vec<&serde_json::Value> = s["hooks"]["PreToolUse"]
         .as_array()
         .unwrap()
         .iter()
         .collect();
     assert!(
-        pre.iter()
-            .all(|g| g["matcher"] == "WebFetch" || g["matcher"] == "ExitWorktree"),
+        pre.iter().all(|g| g["matcher"] == "WebFetch"
+            || g["matcher"] == "ExitWorktree"
+            || (g["matcher"] == "Bash|PowerShell" && g.to_string().contains("worker-commit"))),
         "{pre:?}"
     );
     assert!(!dir
@@ -5142,7 +5144,7 @@ fn verify_flags_safety_gates_that_fail_open() {
     let gate = |extra: serde_json::Value| {
         let mut h = serde_json::json!({
             "type": "command",
-            "command": "if [ \"$(ocgen hook --check 2>/dev/null)\" = \"ocgen-hooks 29\" ]; then ocgen hook team-approval-gate; else sh \".claude/hooks/team-approval-gate.sh\"; fi",
+            "command": "if [ \"$(ocgen hook --check 2>/dev/null)\" = \"ocgen-hooks 30\" ]; then ocgen hook team-approval-gate; else sh \".claude/hooks/team-approval-gate.sh\"; fi",
             "shell": "bash"
         });
         for (k, v) in extra.as_object().unwrap() {
@@ -6710,7 +6712,7 @@ fn inquire_registers_the_notes_hook() {
     assert_eq!(notes["matcher"], "Write|Edit|MultiEdit");
     let cmd = notes["hooks"][0]["command"].as_str().unwrap();
     assert!(
-        cmd.contains("ocgen hook inquire-notes") && cmd.contains("ocgen-hooks 29"),
+        cmd.contains("ocgen hook inquire-notes") && cmd.contains("ocgen-hooks 30"),
         "{cmd}"
     );
     assert_eq!(notes["hooks"][0]["shell"], "bash");

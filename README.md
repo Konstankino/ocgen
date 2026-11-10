@@ -1786,7 +1786,8 @@ For one piece it offers `/deliver` instead.
    check after each merge. A conflict is aborted and handed back to the worker (the desktop
    app's sync tool, or `git merge <base>` in its worktree); a failed check is undone with
    `git reset --keep` and handed back. The manager never resolves a conflict itself. With the
-   approval gate on, you run `ocgen approve` before this step: it holds every `git merge`.
+   approval gate on, you run `ocgen approve` before a session worker's branch merges; a subagent
+   worker's `worktree-agent-*` branch, merged alone in its command, needs none.
 6. **Check the whole**: the scope-guard, review and adversary loops on the integrated change, with
    reworks going back to the owning worker.
 7. **Close.** A coordinator-style report, subagent worktrees removed (`git worktree remove`,
@@ -2287,7 +2288,7 @@ and inside the ocgen binary (`ocgen hook <name>`). The generated hook command us
 binary when a compatible ocgen is installed, and the script otherwise:
 
 ```sh
-if [ "$(ocgen hook --check 2>/dev/null)" = "ocgen-hooks 29" ]; then ocgen hook team-approval-gate; else sh ".../team-approval-gate.sh"; fi
+if [ "$(ocgen hook --check 2>/dev/null)" = "ocgen-hooks 30" ]; then ocgen hook team-approval-gate; else sh ".../team-approval-gate.sh"; fi
 ```
 
 - **The binary gives you** real JSON parsing instead of `grep`, and hooks that work on
@@ -2381,6 +2382,14 @@ ocgen approve --revoke     # re-lock now
   shell commands can't write the approval store and, unless you opt in, run without the
   credentials ocgen knows about, so a push or publish that needs those fails whatever its
   phrasing (the gaps are under *Credentials* and *Defence in depth*).
+- **One merge passes: a subagent's own branch.** The coordinator merges an isolated worker's
+  `worktree-agent-*` branch before every check, and that is local work, not an external action.
+  So a command that is only that merge (`git merge --no-ff --no-edit worktree-agent-<id>`,
+  short or `refs/heads/…`, with `--no-ff`, `--ff-only` or `--no-edit`) passes without an
+  approval, and so does `git merge --abort`. Anything more stays gated: another branch (a
+  `claude --worktree` session's included), `git -C` or `-c`, `-m`, `-s`, a second branch,
+  command or line. Before this, every such merge waited for `ocgen approve` or your own `!`
+  command.
 - **Approving is for you.** `ocgen approve` refuses to run under Claude Code or without a
   terminal. The approval is only an expiry time, stored outside the project
   (`~/.claude/ocgen/approvals/`, one per repository, shared by its worktrees). The gate blocks
@@ -2419,9 +2428,10 @@ ocgen approve --revoke     # re-lock now
 The old `touch .claude/team/execution-approved` file is no longer honoured, because an agent
 could create it. `ocgen verify` flags a leftover one.
 
-If you use `/fanout` with the gate on: its final `git merge` is gated too, so approve before
-the merge step. `/workstreams` asks you to approve before it integrates, and integrates only once
-every session worker is idle: the approval covers every worktree of the repository.
+`/fanout` merges its workers' `worktree-agent-*` branches, so it needs no approval when each
+merge is a command of its own. `/workstreams` asks you to approve before it integrates a session
+worker's branch, and integrates only once every session worker is idle: the approval covers every
+worktree of the repository.
 
 #### The check command: an objective gate
 
@@ -2608,6 +2618,16 @@ Committing `.claude/` is optional. Both ways work:
   event run at once, and the mark it puts on a released worker would race a separate commit. It
   commits only a worker it lets go: one it sends back keeps its change uncommitted, so its next
   stop is judged on that change even where no SubagentStart recorded where the worker began.
+- **…and again before the merge:** a stop can still leave the change uncommitted (the commit
+  failed, the hook didn't run, or it didn't see the worker's worktree), and then the merge says
+  "Already up to date" while the change sits in the worker's worktree, out of reach: Claude Code
+  refuses git aimed at another worktree, even your own `!` command in a `claude --worktree`
+  session. So `worker-commit` also runs before a Bash or PowerShell call that only merges a
+  `worktree-agent-*` branch (with the worker gate on too). It finds the worktree that has the
+  branch checked out, commits what is left there, and holds that one merge, telling the
+  coordinator to run it again. Holding the call lets a `/workstreams` board's gate read the new
+  tip. If the commit fails, it holds the merge with git's own output (a pre-commit hook's
+  complaint, say), so the coordinator can send the cause to the worker.
 - **Notes when a worktree goes:** notes (`.claude/notes/`, `.claude/briefs/` and
   `.claude/intent/drafts/`) are git-ignored, so the main checkout never sees a worktree's own.
   Claude Code also counts them as no change, so removing the worktree would delete them without

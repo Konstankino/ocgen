@@ -23,7 +23,7 @@ use serde_json::Value;
 /// embedded in the ocgen that generated the project (hook scripts can't be
 /// overridden from the template dir), so they implement the same protocol —
 /// unless someone edits the project's copies by hand.
-pub const PROTOCOL: &str = "ocgen-hooks 29";
+pub const PROTOCOL: &str = "ocgen-hooks 30";
 
 /// How long Claude Code lets a gate that runs the project check (SubagentStop,
 /// TaskCompleted) take, in seconds: its hook `timeout`. Claude Code treats a
@@ -1151,7 +1151,11 @@ impl<'a> Hook<'a> {
             if crate::risk::self_approval(&cmd) {
                 return self_approval();
             }
-            let gated = crate::risk::has_control(&cmd) || crate::risk::high_impact(&cmd).is_some();
+            // A merge of a subagent's own worktree branch is local work the
+            // workflow prescribes before every check: it passes (see
+            // `risk::SUBAGENT_MERGE`).
+            let gated = crate::risk::has_control(&cmd)
+                || (crate::risk::high_impact(&cmd).is_some() && !crate::risk::subagent_merge(&cmd));
             if gated && !self.approved() {
                 return self.deny(
                     "BLOCKED by the execution-approval gate: this is a high-impact external\n\
@@ -1530,6 +1534,9 @@ impl<'a> Hook<'a> {
         if self.probe() {
             return Outcome::allow();
         }
+        if self.field("hook_event_name") == "PreToolUse" {
+            return self.commit_before_merge();
+        }
         let cwd = self.cwd();
         let Some((git_dir, branch)) = agent_worktree(&cwd) else {
             return Outcome::allow();
@@ -1573,6 +1580,85 @@ impl<'a> Hook<'a> {
             stdout: format!("{}\n", serde_json::json!({ "systemMessage": say })),
             stderr: String::new(),
         }
+    }
+
+    /// PreToolUse: the coordinator is about to merge a worker's branch
+    /// ([`crate::risk::subagent_merge_branch`]). A worker whose stop left its
+    /// changes uncommitted (the stop hook failed or never ran there, or didn't
+    /// see the worker's worktree) would merge as nothing, and Claude Code refuses
+    /// git aimed at another worktree, the user's `!` command included; hooks
+    /// aren't held to that. So commit what the worker left, on its branch, and
+    /// hold this one call: run again, the merge takes the commit, and a
+    /// workstreams board's gate reads the new tip. A commit that fails holds the
+    /// merge too, with git's words, so the coordinator can send the cause to the
+    /// worker. Any other command is left alone.
+    fn commit_before_merge(&self) -> Outcome {
+        let cmd = self
+            .json
+            .get("tool_input")
+            .and_then(|i| i.get("command"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let Some(branch) = crate::risk::subagent_merge_branch(cmd) else {
+            return Outcome::allow();
+        };
+        let Some(wt) = worktree_on(&self.cwd(), &branch) else {
+            return Outcome::allow();
+        };
+        if git_line(&wt, &["status", "--porcelain", "--untracked-files=all"]).is_none() {
+            return Outcome::allow();
+        }
+        let run = |args: &[&str]| {
+            Command::new("git")
+                .arg("-C")
+                .arg(crate::paths::plain(&wt))
+                .args(args)
+                .stdin(Stdio::null())
+                .output()
+        };
+        let mut said = String::new();
+        let mut committed = true;
+        for args in [
+            &["add", "-A"][..],
+            &[
+                "commit",
+                "-q",
+                "-m",
+                "chore(subagent): the subagent's changes",
+                "-m",
+                "Committed by ocgen's worker-commit hook before the coordinator's merge: the subagent stopped with them uncommitted.",
+            ][..],
+        ] {
+            match run(args) {
+                Ok(o) => {
+                    said.push_str(&String::from_utf8_lossy(&o.stdout));
+                    said.push_str(&String::from_utf8_lossy(&o.stderr));
+                    if !o.status.success() {
+                        committed = false;
+                        break;
+                    }
+                }
+                Err(e) => {
+                    said.push_str(&format!("{e}\n"));
+                    committed = false;
+                    break;
+                }
+            }
+        }
+        if committed {
+            let sha = git_line(&wt, &["rev-parse", "--short", "HEAD"]).unwrap_or_default();
+            return Outcome::block(format!(
+                "ocgen committed the changes the subagent left uncommitted on {branch} ({sha}): its stop didn't commit them, so this merge would have taken nothing. Run the merge again to take them.\n"
+            ));
+        }
+        git_ok(&wt, &["reset", "-q"]);
+        let lines: Vec<&str> = said.lines().collect();
+        let tail = lines[lines.len().saturating_sub(20)..].join("\n");
+        Outcome::block(format!(
+            "ocgen could not commit the changes the subagent left uncommitted on {branch} (git commit failed), so this merge would take none of them. git said:\n{tail}\n\
+             They are still uncommitted in its worktree ({}). Send the cause to the worker to fix, then merge again; never ask the user to merge or copy files by hand.\n",
+            wt.display()
+        ))
     }
 
     /// The stopping worker's role as a commit names it.
@@ -3862,6 +3948,32 @@ fn agent_worktree(cwd: &Path) -> Option<(String, String)> {
     let (git_dir, common) = (abs("--git-dir")?, abs("--git-common-dir")?);
     let branch = git_line(cwd, &["symbolic-ref", "--quiet", "--short", "HEAD"])?;
     (git_dir != common && branch.starts_with("worktree-agent-")).then_some((git_dir, branch))
+}
+
+/// The worktree that has `refs/heads/<branch>` checked out, from `git worktree
+/// list` run in `dir` (any worktree of the repository lists them all); `None`
+/// when none has (a removed worktree).
+fn worktree_on(dir: &Path, branch: &str) -> Option<PathBuf> {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(crate::paths::plain(dir))
+        .args(["worktree", "list", "--porcelain"])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()
+        .filter(|o| o.status.success())?;
+    let want = format!("branch refs/heads/{branch}");
+    let mut path = None;
+    for line in String::from_utf8_lossy(&out.stdout).lines() {
+        let line = line.trim_end_matches('\r');
+        if let Some(p) = line.strip_prefix("worktree ") {
+            path = Some(PathBuf::from(p));
+        } else if line == want {
+            return path;
+        }
+    }
+    None
 }
 
 /// The `systemMessage` an outcome shows the user, if any.

@@ -5,7 +5,9 @@
 {% if implementer_isolated -%}
 - {{ implementer }} працює в окремому git worktree, і ocgen комітить його зміни в його гілку, коли він
   завершує (ніколи не проси користувача комітити їх): перед кожним викликом {{ adversary }}
-  злий його гілку в робочу, інакше {{ adversary }} перевірятиме код без змін.
+  злий його гілку в робочу, інакше {{ adversary }} перевірятиме код без змін. Зливай її окремою командою,
+  `git merge --no-ff --no-edit <його гілка worktree-agent-*>`, і нічого більше в цій команді; якщо ocgen
+  зупинить це злиття, щоб закомітити те, що лишилось незакоміченим, запусти його ще раз.
 {% endif -%}
 - `Verdict: PASS` — переходь до фінального звіту; знахідки Medium і Low внеси в зауваження й ризики.
 - `Verdict: REWORK` — передай {% if implementer %}агентові {{ implementer }}{% else %}агентові, який вносив зміни,{% endif %}
@@ -26,7 +28,9 @@ Adversary check ({{ adversary }}):
 {% if implementer_isolated -%}
 - {{ implementer }} works in its own git worktree, and ocgen commits its changes on its branch when it
   stops (never ask the user to commit them): merge that branch into the working branch before
-  every call to {{ adversary }}, or {{ adversary }} checks code without the change.
+  every call to {{ adversary }}, or {{ adversary }} checks code without the change. Merge it on its
+  own, `git merge --no-ff --no-edit <its worktree-agent-* branch>` and nothing else in that command; if
+  ocgen holds that merge to commit what was left uncommitted, run it again.
 {% endif -%}
 - `Verdict: PASS` — go on to the final report; put its Medium and Low findings under remarks and risks.
 - `Verdict: REWORK` — send {{ implementer if implementer else "the subagent that made the change" }} only the Critical and High findings

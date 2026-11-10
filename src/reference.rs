@@ -334,7 +334,8 @@ const CLAUDE_FIELDS: &[Field] = &[
         label: "execution approval gate",
         detail: "A human-approval line for high-impact EXTERNAL actions (ssh, cloud mutations, \
                  git push/merge, gh pr merge/release/workflow run, terraform/pulumi/kubectl/helm, \
-                 deploys, publishes). A PreToolUse hook checks every tool call's command and file \
+                 deploys, publishes). A subagent's own worktree-agent-* branch merged alone in its \
+                 command is local work and passes, as does git merge --abort. A PreToolUse hook checks every tool call's command and file \
                  path (through flags, quoting and shell operators) and blocks a match until you \
                  run `ocgen approve` from your own terminal (1 to 1440 minutes, 30 by default; \
                  the command refuses to run under Claude Code). The approval is stored outside \

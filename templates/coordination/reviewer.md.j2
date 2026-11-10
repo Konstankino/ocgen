@@ -5,7 +5,9 @@
 {% if implementer_isolated -%}
 - {{ implementer }} працює в окремому git worktree, і ocgen комітить його зміни в його гілку, коли він
   завершує (ніколи не проси користувача комітити їх): перед кожною хвилею злий його гілку в робочу,
-  інакше {{ reviewer }} перевірятиме код без змін.
+  інакше {{ reviewer }} перевірятиме код без змін. Зливай її окремою командою,
+  `git merge --no-ff --no-edit <його гілка worktree-agent-*>`, і нічого більше в цій команді; якщо ocgen
+  зупинить це злиття, щоб закомітити те, що лишилось незакоміченим, запусти його ще раз.
 {% endif -%}
 - Перед кожною хвилею запиши пакет у `.claude/scratch/review-pack.md` (це тимчасовий файл, а не зміна в
   робочому дереві; спершу створи `.claude/scratch/.gitignore` з рядком `*`): задачу й останній
@@ -62,7 +64,9 @@ Review check ({{ reviewer }}):
 {% if implementer_isolated -%}
 - {{ implementer }} works in its own git worktree, and ocgen commits its changes on its branch when it
   stops (never ask the user to commit them): merge that branch into the working branch before every wave,
-  or {{ reviewer }} checks code without the change.
+  or {{ reviewer }} checks code without the change. Merge it on its own,
+  `git merge --no-ff --no-edit <its worktree-agent-* branch>` and nothing else in that command; if
+  ocgen holds that merge to commit what was left uncommitted, run it again.
 {% endif -%}
 - Before each wave, write the pack to `.claude/scratch/review-pack.md` (a scratch file, not a change to the work tree;
   first create `.claude/scratch/.gitignore` holding `*`): the task and the latest approved plan or brief

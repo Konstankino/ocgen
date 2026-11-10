@@ -4,7 +4,29 @@
 use std::fs;
 
 use ocgen::approval;
-use ocgen::risk::high_impact;
+use ocgen::risk::{high_impact, subagent_merge_branch};
+
+/// The branch a coordinator's merge of its own subagent's worktree takes, short
+/// or in full; `--abort` and every other merge name none.
+#[test]
+fn a_subagent_merge_names_its_worktree_branch() {
+    for (cmd, want) in [
+        (
+            "git merge worktree-agent-a9dc746792d16c94a",
+            Some("worktree-agent-a9dc746792d16c94a"),
+        ),
+        (
+            "git merge --no-ff --no-edit refs/heads/worktree-agent-abc",
+            Some("worktree-agent-abc"),
+        ),
+        ("git merge --abort", None),
+        ("git merge main", None),
+        ("git merge worktree-agent-abc && make", None),
+        ("git status", None),
+    ] {
+        assert_eq!(subagent_merge_branch(cmd).as_deref(), want, "{cmd:?}");
+    }
+}
 
 #[test]
 fn detection_survives_flags_quotes_and_indirection() {

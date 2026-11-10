@@ -5,7 +5,11 @@
 # another worktree, so its merge would find nothing. Only Claude Code's agent
 # worktrees count (`worktree-agent-*` branches): never the main checkout, nor a
 # session's worktree. Git-ignored files stay out; the repository's own git hooks
-# run. Never blocks.
+# run. Never blocks a worker.
+#
+# Also PreToolUse (Bash, PowerShell): before the coordinator merges a worker's
+# branch, the same commit for whatever is still uncommitted there; it then holds
+# that one merge, saying why (see below).
 LC_ALL=C
 export LC_ALL
 payload=$(cat)
@@ -57,6 +61,54 @@ json_str() {
 
 # safe <text> -> a filename-safe token
 safe() { printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_' | cut -c1-80; }
+
+# PreToolUse: the coordinator is about to merge a worker's branch. A worker whose
+# stop left its changes uncommitted (this hook failed or never ran there, or
+# didn't see the worker's worktree) would merge as nothing, and Claude Code
+# refuses git aimed at another worktree, the user's `!` command included. Hooks
+# aren't held to that: commit what the worker left, on its branch, and hold this
+# one call so the coordinator runs the merge again (and a workstreams board's gate
+# reads the new tip). The merge is ocgen's risk::SUBAGENT_MERGE (a test keeps
+# this line identical); any other command is left alone.
+SUBAGENT_MERGE='^[[:space:]]*git[[:space:]]+merge(([[:space:]]+--(no-ff|ff-only|no-edit))*[[:space:]]+(refs/heads/)?worktree-agent-[[:alnum:]_-]+([[:space:]]+--(no-ff|ff-only|no-edit))*|[[:space:]]+--abort)[[:space:]]*$'
+nl='
+'
+if [ "$(json_str hook_event_name)" = PreToolUse ]; then
+    if [ -n "$jq" ]; then
+        cmd=$(printf '%s' "$payload" | jq -r '.tool_input.command | strings' 2>/dev/null)
+    else
+        cmd=$(printf '%s' "$payload" | grep -oE '"command"[[:space:]]*:[[:space:]]*"([^"\\]|\\.)*"' | head -n 1 |
+            sed -E 's/^"[^"]*"[[:space:]]*:[[:space:]]*"//; s/"$//' | json_unescape)
+    fi
+    [ -n "$cmd" ] || exit 0
+    ! printf '%s' "$cmd" | tr -d '\t\n\r' | grep -q '[[:cntrl:]]' || exit 0
+    # As the shell runs it: continued lines joined, quotes and backslashes gone.
+    ncmd=$(printf '%s\n' "$cmd" | awk '{ if (sub(/\\$/, "")) printf "%s", $0; else print }' |
+        tr -d "\"'\\\\")
+    case $ncmd in *"$nl"*) exit 0 ;; esac
+    printf '%s\n' "$ncmd" | grep -Eq "$SUBAGENT_MERGE" || exit 0
+    branch=$(printf '%s\n' "$ncmd" | grep -oE 'worktree-agent-[[:alnum:]_-]+' | head -n 1)
+    [ -n "$branch" ] || exit 0 # --abort
+    cwd=$(json_str cwd)
+    [ -n "$cwd" ] || cwd="${CLAUDE_PROJECT_DIR:-.}"
+    # The worktree that has the branch checked out (none once it is removed).
+    wt=$(git -C "$cwd" worktree list --porcelain 2>/dev/null |
+        awk -v ref="branch refs/heads/$branch" '{ sub(/\r$/, "") } /^worktree / { p = substr($0, 10) } $0 == ref { print p; exit }')
+    [ -n "$wt" ] || exit 0
+    [ -n "$(git -C "$wt" status --porcelain --untracked-files=all 2>/dev/null)" ] || exit 0
+    out=$({ git -C "$wt" add -A && git -C "$wt" commit -q -m "chore(subagent): the subagent's changes" \
+        -m "Committed by ocgen's worker-commit hook before the coordinator's merge: the subagent stopped with them uncommitted."; } </dev/null 2>&1)
+    if [ $? -eq 0 ]; then
+        sha=$(git -C "$wt" rev-parse --short HEAD 2>/dev/null)
+        echo "ocgen committed the changes the subagent left uncommitted on $branch ($sha): its stop didn't commit them, so this merge would have taken nothing. Run the merge again to take them." >&2
+    else
+        git -C "$wt" reset -q >/dev/null 2>&1
+        echo "ocgen could not commit the changes the subagent left uncommitted on $branch (git commit failed), so this merge would take none of them. git said:" >&2
+        printf '%s\n' "$out" | tail -n 20 >&2
+        echo "They are still uncommitted in its worktree ($wt). Send the cause to the worker to fix, then merge again; never ask the user to merge or copy files by hand." >&2
+    fi
+    exit 2
+fi
 
 # The hook input's `cwd` follows the subagent (its own worktree when isolated).
 cwd=$(json_str cwd)
