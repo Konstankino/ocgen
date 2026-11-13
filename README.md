@@ -1606,6 +1606,17 @@ any other. When `/deliver` finishes an intent, it drafts the pull request that d
 approver's recorded sign-off, and a pending line for each approver's review of the pull request —
 approving the intent doesn't approve the change.
 
+**A follow-up needs no sign-off.** A comment or reply on an issue or pull request that already
+exists has no **Needs from** section and asks no one for approval: the sign-off belongs to the
+description. Before drafting one, Claude asks how many words it should be. If your count is too
+small for the major context (the answer or decision, its reason, the evidence, what is still open),
+Claude keeps that context and says how far over your count it went and why. It writes the text as
+`.claude/intent/drafts/comment-<slug>.md` and gives you the `gh issue comment <number> --body-file …`
+or `gh pr comment <number> --body-file …` command: you post it. None of the checks above hold a
+`comment-` draft to the approvers. The hook still flags its lines wrapped by hand, since GitHub
+shows each newline in a comment too, and `draft` opens it as a Comment draft. Without `/intent`,
+Claude gives you the text in its reply instead.
+
 Inside Claude this rule is enforced by the skills' instructions only. The hard enforcement is
 GitHub's: link the project's **existing** CODEOWNERS with `ocgen edit intent --codeowners
 .github/CODEOWNERS` (or `CODEOWNERS`, `docs/CODEOWNERS` — wherever GitHub reads it; ocgen never
@@ -2709,7 +2720,7 @@ for a plugin; `--team` is off by default. (The `--base-url` flag is OpenCode-onl
 | `ocgen verify [dir] --run-check` | Also run the project's committed check command, as you and unsandboxed (only on a repository you trust). |
 | `ocgen notes open [topic]` | Show an `/inquire` ledger's HTML page: refresh the tab that shows it, or open one ([details](#the-visual-ledger)); `ocgen notes open workstreams` does the same for the `/workstreams` board's page. |
 | `ocgen notes render <file.md>…` | Render `/inquire` ledgers (`.claude/notes/<topic-slug>.md`), `/recap` reports (`.claude/notes/recap/<date>.md`) and `/intent` reading copies (`.claude/intent/view/<name>.md`), in any of the project's languages, and the `/workstreams` board (`.claude/workstreams/board.md`), to their HTML pages without opening them; any other file is refused. A `/brief` brief is refused too: it has no static page (type `brief` for its editor). |
-| `ocgen draft [name] [-p dir]` | Open an issue or pull request draft (`.claude/intent/drafts/<name>.md`: `/intent`'s, `/review-intent`'s, or a `pr-<slug>.md` Claude wrote) in a local browser editor: edit it as formatted text (Markdown syntax hidden) or as Markdown source, save it back as plain Markdown (untouched blocks keep their exact text), preview it as GitHub shows it, and copy it. A calm black page by default (white on request), the text around the cursor dimmed, and a Focus button for full screen. With no name, the only draft, or with several, their list to pick from (10 a page, newest first); `ADR-0007` picks by intent. Typing `draft` in Claude Code does the same, with the draft that session wrote last selected in the list ([details](#from-findings-to-a-github-issue-intent)). |
+| `ocgen draft [name] [-p dir]` | Open an issue, pull request or comment draft (`.claude/intent/drafts/<name>.md`: `/intent`'s, `/review-intent`'s, or a `pr-<slug>.md` or `comment-<slug>.md` Claude wrote) in a local browser editor: edit it as formatted text (Markdown syntax hidden) or as Markdown source, save it back as plain Markdown (untouched blocks keep their exact text), preview it as GitHub shows it, and copy it. A calm black page by default (white on request), the text around the cursor dimmed, and a Focus button for full screen. With no name, the only draft, or with several, their list to pick from (10 a page, newest first); `ADR-0007` picks by intent. Typing `draft` in Claude Code does the same, with the draft that session wrote last selected in the list ([details](#from-findings-to-a-github-issue-intent)). |
 | `ocgen adr [name] [-p dir]` | Read an `/intent` file (`docs/adr/ADR-0007-<slug>.md` by default; the project's prefix and directory) in a local browser page, read-only and sanitized like the draft's preview, in the drafts' black or white palette. With no name, the only file, or with several, their list to pick from (10 a page, highest number first); a name, its start, or a number (`7`, `0007`, `ADR-7`) picks one. Typing the prefix in lowercase (`adr`) in Claude Code does the same, with the file that session wrote last selected ([details](#from-findings-to-a-github-issue-intent)). |
 | `ocgen sandbox status [-p dir] [--json]` | Which sandbox runs the hooks' check and formatter on this machine (Seatbelt, bubblewrap, Landlock, wasmtime for WASI modules; on native Windows, why there is none), why the others can't, and what it grants. |
 | `ocgen sandbox run '<command>' [-p dir]` | Run a command in the hooks' sandbox, the way the check runs (in the current folder when it is in the project). Exits as the command did. |

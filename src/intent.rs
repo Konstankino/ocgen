@@ -135,7 +135,9 @@ fn mid_sentence(prev: &str, next: &str) -> bool {
 pub enum Kind {
     /// An intent file: `<dir>/<PREFIX>-<n>-<slug>.md` or `<dir>/<n>-<slug>.md`.
     Intent,
-    /// A draft, an issue's or a pull request's: `.claude/intent/drafts/<name>.md`.
+    /// A draft, an issue's, a pull request's or a follow-up comment's:
+    /// `.claude/intent/drafts/<name>.md`. A comment's draft
+    /// ([`crate::notes::draft::is_comment`]) is never held to the approvers.
     Draft,
 }
 
@@ -264,7 +266,8 @@ impl Stale {
 }
 
 /// The pending intent files and the drafts of project `root` that fall
-/// short of its current approvers, intent files first, each by name.
+/// short of its current approvers, intent files first, each by name. A
+/// follow-up comment's draft is never one: it carries no sign-off.
 pub fn stale(project: &Project, root: &Path) -> Vec<Stale> {
     let s = &project.claude.intent;
     if !project.claude.workflow.intent || s.approvers.is_empty() {
@@ -291,7 +294,9 @@ pub fn stale(project: &Project, root: &Path) -> Vec<Stale> {
                 Kind::Intent => format!("{}/{name}", s.dir.trim_matches('/')),
                 Kind::Draft => format!("{}/{name}", crate::notes::draft::DIR),
             };
-            if self::kind(s, &rel) != Some(kind) {
+            if self::kind(s, &rel) != Some(kind)
+                || (kind == Kind::Draft && crate::notes::draft::is_comment(name))
+            {
                 continue;
             }
             if let Some(gaps) = check_file(&path, &s.approvers) {

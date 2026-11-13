@@ -408,3 +408,125 @@ fn opening_a_draft_says_which_approvers_it_misses() {
     let o = ocgen::hooks::run("intent-draft", r#"{"prompt":"draft"}"#, &env);
     assert!(o.stdout.contains("@alice"), "{o:?}");
 }
+
+// ------------------------------------------------------------ follow-ups --
+//
+// A follow-up (a comment on an issue or pull request that already exists)
+// carries no sign-off: that belongs to the description. Its draft,
+// `comment-<slug>.md`, is never held to the approvers, but still checked for
+// lines wrapped by hand: GitHub shows each newline in a comment too.
+
+const COMMENT: &str = "Fixed in 4f2c1d0: the retry now waits for the lock.\n\nThe flaky test passed 50 runs in a row.\n";
+const DRAFTS: &str = ".claude/intent/drafts";
+
+#[test]
+fn a_comment_draft_is_never_held_to_the_approvers() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = project(dir.path(), &["@alice"]);
+    let comment = format!("{DRAFTS}/comment-retry.md");
+    let issue = format!("{DRAFTS}/issue-retry.md");
+    write(dir.path(), &comment, COMMENT);
+    write(dir.path(), &issue, COMMENT);
+
+    assert_eq!(reason(&hook(dir.path(), &comment)), "");
+    // An issue's draft with the same text still is.
+    assert!(reason(&hook(dir.path(), &issue)).contains("@alice"));
+    let stale: Vec<String> = intent::stale(&p, dir.path())
+        .into_iter()
+        .map(|s| s.rel)
+        .collect();
+    assert_eq!(stale, [issue.as_str()]);
+
+    // Wrapped by hand: flagged for that alone.
+    write(
+        dir.path(),
+        &comment,
+        "The retry now waits for the lock,\nso the flaky test passes.\n",
+    );
+    let r = reason(&hook(dir.path(), &comment));
+    assert!(r.contains("wrapped by hand"), "{r}");
+    assert!(!r.contains("@alice") && !r.contains("Needs from"), "{r}");
+}
+
+#[test]
+fn verify_and_opening_pass_a_comment_draft() {
+    use ocgen::verify::Status;
+    let dir = tempfile::tempdir().unwrap();
+    let p = project(dir.path(), &["@alice"]);
+    write(dir.path(), &format!("{DRAFTS}/comment-retry.md"), COMMENT);
+
+    let user = tempfile::tempdir().unwrap();
+    let checks = ocgen::verify::verify(
+        &p,
+        dir.path(),
+        &ocgen::verify::Options {
+            run_claude: false,
+            run_check: false,
+            user_settings: Some(user.path().join("settings.json")),
+        },
+    );
+    let c = checks
+        .iter()
+        .find(|c| c.name.contains("approvers in drafts"))
+        .unwrap();
+    assert_eq!(c.status, Status::Pass, "{c:#?}");
+
+    let out = Command::cargo_bin("ocgen")
+        .unwrap()
+        .arg("draft")
+        .current_dir(dir.path())
+        .env("OCGEN_NOTES_OPEN", "0")
+        .output()
+        .unwrap();
+    let out = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.contains("comment-retry.md") && !out.contains("@alice"),
+        "{out}"
+    );
+
+    let env: HashMap<String, String> = [
+        (
+            "CLAUDE_PROJECT_DIR".to_string(),
+            ocgen::paths::for_shell(dir.path()),
+        ),
+        ("OCGEN_NOTES_OPEN".to_string(), "0".to_string()),
+    ]
+    .into();
+    let o = ocgen::hooks::run("intent-draft", r#"{"prompt":"draft"}"#, &env);
+    assert!(o.stdout.contains("comment draft"), "{o:?}");
+    assert!(!o.stdout.contains("@alice"), "{o:?}");
+}
+
+#[test]
+fn a_comment_drafts_page_names_the_comment_commands_and_no_approvers() {
+    use ocgen::notes::draft;
+    let appr = vec!["@alice".to_string()];
+    let page = draft::page(COMMENT, "comment-retry.md", "r", "n", "English", &appr).unwrap();
+    assert!(page.contains("Comment draft"), "{page}");
+    assert!(
+        page.contains("gh issue comment") && page.contains("gh pr comment"),
+        "{page}"
+    );
+    assert!(!page.contains("gh issue create"), "{page}");
+    assert!(page.contains(r#"data-approvers="""#), "{page}");
+    let banner = page.split(r#"id="approvers""#).nth(1).unwrap();
+    assert!(banner[..banner.find('>').unwrap()].contains("hidden"));
+
+    let uk = draft::page(COMMENT, "comment-retry.md", "r", "n", "Ukrainian", &appr).unwrap();
+    assert!(uk.contains("Чернетка коментаря"), "{uk}");
+
+    assert!(draft::is_comment("comment-retry"));
+    assert!(draft::is_comment(".claude/intent/drafts/Comment-x.md"));
+    assert!(!draft::is_comment("issue-comment-x") && !draft::is_comment("pr-x"));
+    assert_eq!(draft::kind_label("comment-retry.md"), "comment draft");
+
+    // The list doesn't flag it either.
+    let dir = tempfile::tempdir().unwrap();
+    project(dir.path(), &["@alice"]);
+    write(dir.path(), &format!("{DRAFTS}/comment-retry.md"), COMMENT);
+    let list = draft::list_page(&dir.path().join(DRAFTS), None, None, "/t", "n").unwrap();
+    assert!(
+        list.contains("comment-retry") && !list.contains("@alice"),
+        "{list}"
+    );
+}

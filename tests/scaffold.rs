@@ -6282,6 +6282,57 @@ fn every_pr_and_issue_draft_asks_the_approvers_to_sign_off() {
     assert!(!flat_rule(p).contains("pr-<slug>.md"));
 }
 
+/// A follow-up (a comment or reply on an issue or pull request that already
+/// exists) asks how many words first, keeps the major context even over that
+/// count, and carries no sign-off: with /intent it is a `comment-<slug>.md`
+/// draft, which the `intent-approvers` hook never holds to the approvers.
+#[test]
+fn follow_ups_ask_for_words_and_need_no_sign_off() {
+    let flat_rule = |p: Project| {
+        let dir = tempdir().unwrap();
+        p.scaffold(dir.path(), false).unwrap();
+        let rule = read(dir.path(), ".claude/rules/ocgen-workflow.md");
+        rule.split_whitespace().collect::<Vec<_>>().join(" ")
+    };
+    let mut p = claude_default("followup");
+    p.claude.intent.approvers = vec!["@alice".into()];
+    let rule = flat_rule(p);
+    let follow = rule
+        .split("## Follow-ups on GitHub")
+        .nth(1)
+        .unwrap_or_else(|| panic!("no follow-up rule: {rule}"));
+    let follow = &follow[..follow.find(" ## ").unwrap_or(follow.len())];
+    for want in [
+        "a comment or reply on an issue or pull request that already exists",
+        "ask me how many words it should be",
+        "keep the major context anyway",
+        "that it is over mine",
+        "no \"Needs from\" section",
+        "no request for approval",
+        "`.claude/intent/drafts/comment-<slug>.md`",
+        "`gh issue comment <number> --body-file .claude/intent/drafts/comment-<slug>.md`",
+        "`gh pr comment <number> --body-file .claude/intent/drafts/comment-<slug>.md`",
+        "Never post it yourself",
+    ] {
+        assert!(follow.contains(want), "missing {want}: {follow}");
+    }
+    // The sign-off rule says it is the description's, not a follow-up's.
+    assert!(
+        rule.contains("A follow-up comment needs none (**Follow-ups on GitHub**)"),
+        "{rule}"
+    );
+
+    // Without /intent there is no drafts folder: the text comes in the reply.
+    let mut p = claude_default("followup-off");
+    p.claude.workflow.intent = false;
+    let rule = flat_rule(p);
+    assert!(
+        rule.contains("ask me how many words it should be") && !rule.contains("comment-<slug>.md"),
+        "{rule}"
+    );
+    assert!(rule.contains("in a fenced block; I post it"), "{rule}");
+}
+
 /// The pull request that delivers an intent links the intent and its sign-offs,
 /// and asks the approvers to review the change itself.
 #[test]

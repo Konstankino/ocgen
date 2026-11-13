@@ -148,6 +148,30 @@ this project's git remotes:
 
 {{ workspace }}
 
+## Follow-ups on GitHub
+
+A follow-up is a comment or reply on an issue or pull request that already exists: an answer to a
+review, a progress update, a reply to a question.
+- Before drafting one, ask me how many words it should be (AskUserQuestion: three or four counts,
+  your recommendation first, the fewest words that hold what it must say).
+- If my count is too small, keep the major context anyway: the answer or decision, its reason, the
+  evidence or link, and what is still open. Write the shortest text that holds it, and tell me its
+  word count, that it is over mine, and which points needed the room.
+- It has no "Needs from" section, no sign-off checklist and no request for approval: sign-off
+  belongs to the pull request's or issue's description. Ask the reader for something only when the
+  follow-up needs it, in the sentence that says what.
+{%- if intent %}
+- Write it with the Write tool to `.claude/intent/drafts/comment-<slug>.md`, with a kebab-case
+  `<slug>` no draft has yet, each paragraph on one line (GitHub shows every newline as a line
+  break). ocgen checks it only for lines wrapped by hand, never against the approvers. Tell me to
+  type `draft` to review it, and give me the command that posts it:
+  `gh issue comment <number> --body-file .claude/intent/drafts/comment-<slug>.md` or
+  `gh pr comment <number> --body-file .claude/intent/drafts/comment-<slug>.md` (for a reply in a
+  review thread, name the thread; I post it there). Never post it yourself.
+{%- else %}
+- Give it to me in a fenced block; I post it.
+{%- endif %}
+
 ## Shell commands
 
 Read files with **Read**, search with **Grep** and list with **Glob** — not `cat`, `sed`, `head`,
@@ -289,9 +313,10 @@ by default; or a pull request, a branch or a path): the project's agents review 
 findings another agent confirms reach the issue draft, and it writes an ADR only when asked. It never
 posts on a pull request.
 
-**Every pull request and issue you draft needs the approvers' sign-off**, not only `/intent`'s.
-Write its description with the Write tool to a draft: `.claude/intent/drafts/pr-<slug>.md` for a
-pull request, `.claude/intent/drafts/issue-<slug>.md` for an issue (structured by
+**Every pull request and issue you draft needs the approvers' sign-off**, not only `/intent`'s, in
+its description. A follow-up comment needs none (**Follow-ups on GitHub**). Write its description
+with the Write tool to a draft: `.claude/intent/drafts/pr-<slug>.md` for a pull request,
+`.claude/intent/drafts/issue-<slug>.md` for an issue (structured by
 `.claude/intent/issue-template.md`), with a kebab-case `<slug>` no draft has yet; make sure
 `.claude/intent/drafts/.gitignore` exists and holds `*`. End it with a **Needs from** section:
 {% if approvers %}name the approvers in its heading (`## Needs from {{ approvers }}`), then one pending line
