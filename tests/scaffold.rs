@@ -3369,6 +3369,55 @@ fn claude_default(name: &str) -> Project {
     p
 }
 
+/// What agents write for others is short but keeps every fact; what they
+/// explain to me in chat is wide and plain. The output style says the same:
+/// it is part of the system prompt, so it would win over the rule.
+#[test]
+fn written_texts_are_short_but_chat_explains_widely() {
+    for intent in [true, false] {
+        let dir = tempdir().unwrap();
+        let mut p = claude_default("writing");
+        p.claude.workflow.intent = intent;
+        p.scaffold(dir.path(), false).unwrap();
+        let rule = read(dir.path(), ".claude/rules/ocgen-workflow.md");
+        let flat = rule.split_whitespace().collect::<Vec<_>>().join(" ");
+        let writing = flat
+            .split("## Writing for others")
+            .nth(1)
+            .unwrap_or_else(|| panic!("no writing rule: {flat}"));
+        let writing = &writing[..writing.find(" ## ").unwrap_or(writing.len())];
+        for want in [
+            "pull request and issue descriptions, comments on them, commit messages, code comments, docs and notes",
+            "as short as it can be without losing context",
+            "Shorten the wording, never the facts",
+            "check it against the longer version: if a fact is gone, put it back",
+            "A code comment says why",
+            "what you explain to me in chat so I understand a topic",
+            "in plain words",
+            "don't compress it",
+        ] {
+            assert!(writing.contains(want), "missing {want}: {writing}");
+        }
+    }
+
+    let dir = tempdir().unwrap();
+    claude_default("writing-style")
+        .scaffold(dir.path(), false)
+        .unwrap();
+    let style = read(dir.path(), ".claude/output-styles/ocgen-concise.md");
+    let flat = style.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(
+        !flat.contains("Respond concisely") && !flat.contains("technical and direct"),
+        "{flat}"
+    );
+    for want in [
+        "Lead each answer with the result",
+        "explain it fully, in plain words",
+    ] {
+        assert!(flat.contains(want), "missing {want}: {flat}");
+    }
+}
+
 #[test]
 fn output_style_keeps_coding_instructions_and_does_not_shadow_builtin() {
     let dir = tempdir().unwrap();

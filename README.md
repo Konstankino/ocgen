@@ -640,6 +640,14 @@ that says what it is about (`cache-cold-after-deploy`), never a code such as R1,
 and cite it by that slug in later documents and sessions: a reader knows what each one is without a
 lookup.
 
+**Short texts, wide explanations.** The workflow rule's **Writing for others** section keeps every
+text written for others (pull request and issue descriptions, comments on them, commit messages,
+code comments, docs and notes) as short as it can be without losing context: what, why, the
+evidence or link and what is still open stay; restating, hedging and filler go. After shortening,
+the agent compares the text with the longer version and puts back any fact that went missing. What
+an agent explains to you in chat so you understand a topic is the exception: it explains it in
+full, in plain words, with each term defined, the why and an example.
+
 The **coordinator** (an agent whose mode is `primary`) is not written as an agent file —
 it becomes `CLAUDE.md` plus the `/multi` command, because Claude Code's main session *is*
 the coordinator. Every other agent becomes a subagent file. The wizard opens `CLAUDE.md`
@@ -873,9 +881,12 @@ claude plugin install <name>@<name>
   files such as `.env.example` and `example.tfvars` stay readable;
 - a `SessionStart` hook that nudges `/intake` when a session starts (not again on resume,
   `/clear` or compaction);
-- the `ocgen-concise` output style. It sets `keep-coding-instructions: true` so Claude keeps
-  its software-engineering instructions, and has its own name so it doesn't shadow the
-  built-in `Concise`. `doctor` removes the old generated `concise.md`;
+- the `ocgen-concise` output style: lead with the result, keep progress updates and reports
+  short, and explain in full, in plain words, when you ask to understand something (the
+  style is part of the system prompt, so it has to agree with the **Writing for others**
+  rule). It sets `keep-coding-instructions: true` so Claude keeps its software-engineering
+  instructions, and has its own name so it doesn't shadow the built-in `Concise`. `doctor`
+  removes the old generated `concise.md`;
 - a **statusline** (`.claude/statusline.sh`), in the dim style of a typical personal
   statusline:
 
