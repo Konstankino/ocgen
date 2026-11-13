@@ -3011,6 +3011,8 @@ impl<'a> Hook<'a> {
     /// the file before anyone files it.
     /// A draft is also checked for lines wrapped by hand ([`intent::hard_wraps`]):
     /// GitHub shows each newline in an issue or a pull request as a line break.
+    /// A follow-up comment's draft (`comment-<slug>.md`) is checked for that
+    /// alone: it carries no sign-off.
     /// Never fails a write.
     fn intent_approvers(&self) -> Outcome {
         use crate::intent;
@@ -3041,7 +3043,8 @@ impl<'a> Hook<'a> {
             return Outcome::allow();
         };
         let mut reasons = Vec::new();
-        if let Some(gaps) = (!s.approvers.is_empty())
+        let comment = kind == intent::Kind::Draft && crate::notes::draft::is_comment(&rel);
+        if let Some(gaps) = (!s.approvers.is_empty() && !comment)
             .then(|| intent::check_file(&file, &s.approvers))
             .flatten()
         {
@@ -3064,7 +3067,9 @@ impl<'a> Hook<'a> {
                 intent::NO_APPROVERS
             ));
         }
-        reasons.extend(self.check_sign_offs(&root, &file, &rel));
+        if !comment {
+            reasons.extend(self.check_sign_offs(&root, &file, &rel));
+        }
         if kind == intent::Kind::Draft {
             let wraps = std::fs::read_to_string(&file)
                 .map(|t| intent::hard_wraps(&t))

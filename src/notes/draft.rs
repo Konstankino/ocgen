@@ -1,9 +1,10 @@
-//! The browser review of an issue or pull request draft. /intent writes the
-//! GitHub issue description to `.claude/intent/drafts/<name>.md`, and Claude
-//! writes each pull request it drafts there as `pr-<slug>.md` (the workflow
-//! rule); `ocgen draft` — or the word
-//! `draft` sent alone in Claude Code, caught by the `intent-draft` hook — opens
-//! it in a local editor run by the live viewer ([`super::viewer`]): the text
+//! The browser review of an issue, pull request or comment draft. /intent
+//! writes the GitHub issue description to `.claude/intent/drafts/<name>.md`, and
+//! Claude writes each pull request it drafts there as `pr-<slug>.md` and each
+//! follow-up comment as `comment-<slug>.md` (the workflow rule); `ocgen draft`
+//! — or the word `draft` sent alone in Claude Code, caught by the
+//! `intent-draft` hook — opens it in a local editor run by the live viewer
+//! ([`super::viewer`]): the text
 //! formatted, with the Markdown syntax hidden (Milkdown, [`EDITOR_JS`]), the
 //! Markdown source, a preview drawn the way GitHub draws it, and buttons
 //! that copy it. Save writes the file back as plain Markdown: unedited, byte
@@ -41,11 +42,16 @@ use super::words::{self, Words};
 use super::Shown;
 use crate::templates;
 
-/// Where issue and pull request drafts are kept, relative to the project root.
+/// Where issue, pull request and comment drafts are kept, relative to the
+/// project root.
 pub const DIR: &str = ".claude/intent/drafts";
 /// How a pull request's draft is named (`pr-<slug>.md`); any other draft is an
-/// issue's.
+/// issue's, unless it is a comment's.
 pub const PR_PREFIX: &str = "pr-";
+/// How a follow-up's draft is named (`comment-<slug>.md`): a comment on an
+/// issue or pull request that already exists. It carries no sign-off, so it is
+/// never held to the approvers.
+pub const COMMENT_PREFIX: &str = "comment-";
 /// The one-word prompt that opens the draft, or with several, their list.
 pub const WORD: &str = "draft";
 /// The editor page.
@@ -125,10 +131,20 @@ pub fn is_pull_request(name: &str) -> bool {
     file.to_ascii_lowercase().starts_with(PR_PREFIX)
 }
 
-/// What the draft `name` is, for messages: "pull request draft" or "issue draft".
+/// Whether the draft `name` (its stem, file name or path) is a follow-up
+/// comment's.
+pub fn is_comment(name: &str) -> bool {
+    let file = name.rsplit(['/', '\\']).next().unwrap_or(name);
+    file.to_ascii_lowercase().starts_with(COMMENT_PREFIX)
+}
+
+/// What the draft `name` is, for messages: "pull request draft", "comment
+/// draft" or "issue draft".
 pub fn kind_label(name: &str) -> &'static str {
     if is_pull_request(name) {
         "pull request draft"
+    } else if is_comment(name) {
+        "comment draft"
     } else {
         "issue draft"
     }
@@ -423,7 +439,8 @@ pub(crate) fn render_safe(md: &str, hard_breaks: bool) -> String {
 
 /// The editor page for draft text `md` (revision `rev`, at `source`), whose one
 /// script carries `nonce`; its own words in `language`. It warns while the text
-/// doesn't @mention every one of `approvers` (the project's, now).
+/// doesn't @mention every one of `approvers` (the project's, now), unless it is
+/// a comment's draft, which needs no sign-off.
 pub fn page(
     md: &str,
     source: &str,
@@ -434,12 +451,13 @@ pub fn page(
 ) -> Result<String> {
     let w = words::for_language(language);
     let name = source.rsplit('/').next().unwrap_or(source).to_string();
+    let approvers = if is_comment(&name) { &[] } else { approvers };
     let gaps = crate::intent::gaps(md, approvers);
     // Escaped here: minijinja's own escaping also turns `/` into `&#x2f;`.
     let safe = |s: &str| Value::from_safe_string(escape(s));
     let ctx = minijinja::context! {
         brief => false,
-        w => words_value(w, is_pull_request(&name)),
+        w => words_value(w, &name),
         name => safe(&name),
         slug => safe(name.trim_end_matches(".md")),
         source => safe(source),
@@ -589,7 +607,7 @@ pub fn list_page(
                     .captures(u)
                     .map_or_else(|| "issue".to_string(), |c| format!("#{}", &c[1]))
             });
-            let gaps = (!approvers.is_empty())
+            let gaps = (!approvers.is_empty() && !is_comment(&slug))
                 .then(|| crate::intent::check_file(p, &approvers))
                 .flatten()
                 .unwrap_or_default();
@@ -623,7 +641,7 @@ pub fn list_page(
     };
     let d = &w.draft;
     let ctx = minijinja::context! {
-        w => words_value(w, false),
+        w => words_value(w, ""),
         page_of => safe(&fill(d.page_of)),
         count => safe(&fill(d.count)),
         rows => rows,
@@ -646,16 +664,24 @@ pub fn list_page(
     Ok(out)
 }
 
-/// The page's words; a pull request's draft (`pr`) gets its own title, editor
-/// name and footer.
-fn words_value(w: &'static Words, pr: bool) -> Value {
+/// The page's words for the draft named `name` (`""` for the list): a pull
+/// request's draft and a comment's get their own title, editor name and footer.
+fn words_value(w: &'static Words, name: &str) -> Value {
     let d = &w.draft;
     let mut m: BTreeMap<&str, Value> = BTreeMap::new();
     m.insert("lang", Value::from(w.lang));
-    let pick = |issue, pull| if pr { pull } else { issue };
+    let pick = |issue, pull, comment| {
+        if is_pull_request(name) {
+            pull
+        } else if is_comment(name) {
+            comment
+        } else {
+            issue
+        }
+    };
     for (k, v) in [
-        ("title", pick(d.title, d.pr_title)),
-        ("editor", pick(d.editor, d.pr_editor)),
+        ("title", pick(d.title, d.pr_title, d.comment_title)),
+        ("editor", pick(d.editor, d.pr_editor, d.comment_editor)),
         ("source", d.source),
         ("preview", d.preview),
         ("focus", d.focus),
@@ -684,7 +710,7 @@ fn words_value(w: &'static Words, pr: bool) -> Value {
         ("says_none", d.says_none),
         ("wrapped", d.wrapped),
         ("join_lines", d.join_lines),
-        ("footer", pick(d.footer, d.pr_footer)),
+        ("footer", pick(d.footer, d.pr_footer, d.comment_footer)),
         // The editor's link to the list (`all`, as the brief page names its
         // own); `all_drafts` is the list page's.
         ("all", d.all_drafts),
@@ -716,9 +742,13 @@ fn words_value(w: &'static Words, pr: bool) -> Value {
 
 // ---------------------------------------------------------------- show --
 
-/// The approvers of the project containing draft `md`, as its state has them
-/// now (none when /intent is off or there is no project).
+/// The approvers draft `md` is held to: its project's, as its state has them
+/// now (none when /intent is off, there is no project, or `md` is a comment's
+/// draft, which needs no sign-off).
 pub fn approvers_for(md: &Path) -> Vec<String> {
+    if is_comment(&md.to_string_lossy()) {
+        return Vec::new();
+    }
     super::project_of(md)
         .filter(|(_, p)| p.claude.workflow.intent)
         .map(|(_, p)| p.claude.intent.approvers)

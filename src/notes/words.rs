@@ -115,15 +115,18 @@ pub struct VersionWords {
     pub board_offline: &'static str,
 }
 
-/// What a draft's editor page says by itself. An issue's draft and a pull
-/// request's (`pr-<slug>.md`) differ only in the page's title, the editor's
-/// name and the footer, which names the command that files it.
+/// What a draft's editor page says by itself. An issue's draft, a pull
+/// request's (`pr-<slug>.md`) and a comment's (`comment-<slug>.md`) differ only
+/// in the page's title, the editor's name and the footer, which names the
+/// command that files or posts it.
 pub struct DraftWords {
     pub title: &'static str,
     pub pr_title: &'static str,
+    pub comment_title: &'static str,
     /// The formatted editor's name for screen readers.
     pub editor: &'static str,
     pub pr_editor: &'static str,
+    pub comment_editor: &'static str,
     /// The Markdown source view.
     pub source: &'static str,
     /// The preview drawn the way GitHub draws the description.
@@ -174,6 +177,7 @@ pub struct DraftWords {
     pub join_lines: &'static str,
     pub footer: &'static str,
     pub pr_footer: &'static str,
+    pub comment_footer: &'static str,
     /// The editor's link to the list of drafts.
     pub all_drafts: &'static str,
     /// The list of drafts: its title, its pager (`{page}`, `{pages}`) and its
@@ -321,8 +325,10 @@ pub static ENGLISH: Words = Words {
     draft: DraftWords {
         title: "Issue draft",
         pr_title: "Pull request draft",
+        comment_title: "Comment draft",
         editor: "Issue text",
         pr_editor: "Pull request description",
+        comment_editor: "Comment text",
         source: "Source",
         preview: "GitHub preview",
         focus: "Focus",
@@ -355,6 +361,7 @@ pub static ENGLISH: Words = Words {
         join_lines: "Join them",
         footer: "Save writes the file named above — the one gh issue create --body-file files on GitHub.",
         pr_footer: "Save writes the file named above — the one gh pr create --body-file opens on GitHub.",
+        comment_footer: "Save writes the file named above — the one gh issue comment or gh pr comment --body-file posts on GitHub.",
         all_drafts: "All drafts",
         list_title: "Issue and pull request drafts",
         newer: "‹ Newer",
@@ -501,8 +508,10 @@ pub static UKRAINIAN: Words = Words {
     draft: DraftWords {
         title: "Чернетка GitHub issue",
         pr_title: "Чернетка GitHub pull request",
+        comment_title: "Чернетка коментаря GitHub",
         editor: "Текст задачі",
         pr_editor: "Опис PR",
+        comment_editor: "Текст коментаря",
         source: "Код Markdown",
         preview: "Як на GitHub",
         focus: "Фокус",
@@ -535,6 +544,7 @@ pub static UKRAINIAN: Words = Words {
         join_lines: "Об’єднати їх",
         footer: "Кнопка «Зберегти» записує файл, указаний вище, — саме його подає на GitHub команда gh issue create --body-file.",
         pr_footer: "Кнопка «Зберегти» записує файл, указаний вище, — саме з нього команда gh pr create --body-file створює PR на GitHub.",
+        comment_footer: "Кнопка «Зберегти» записує файл, указаний вище, — саме його публікує на GitHub команда gh issue comment або gh pr comment з --body-file.",
         all_drafts: "Усі чернетки",
         list_title: "Чернетки GitHub issue і PR",
         newer: "‹ Новіші",
