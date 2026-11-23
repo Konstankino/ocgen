@@ -938,7 +938,7 @@ impl Default for HooksExtra {
 
 /// The workflow skills ocgen generates (formerly `.claude/commands/`). A user
 /// skill with one of these names would collide with the generated one.
-pub const WORKFLOW_SKILLS: [&str; 15] = [
+pub const WORKFLOW_SKILLS: [&str; 16] = [
     "multi",
     "intake",
     "refine",
@@ -952,6 +952,7 @@ pub const WORKFLOW_SKILLS: [&str; 15] = [
     "review-intent",
     "recap",
     "chapter",
+    "proposal",
     "team",
     "team-plan",
 ];
@@ -1046,6 +1047,21 @@ pub const CHAPTER_TOOLS: [&str; 10] = [
     "Bash(wc:*)",
     "Edit(./.claude/notes/book/**)",
     "Edit(./.claude/notes/github/**)",
+];
+
+/// Tools /proposal may use without asking while it runs (skill `allowed-tools`):
+/// git's reads, listing and word-counting its own files, and writes to its own
+/// folder. The `Edit` rule is scoped, so `skill_issues` doesn't flag it on a
+/// model-invocable skill. Publishing the Artifact is left to the user's own
+/// permission settings: that tool exists only in some sessions.
+pub const PROPOSAL_TOOLS: [&str; 7] = [
+    "Bash(git rev-parse:*)",
+    "Bash(git log:*)",
+    "Bash(git show:*)",
+    "Bash(git status:*)",
+    "Bash(ls:*)",
+    "Bash(wc:*)",
+    "Edit(./.claude/notes/proposals/**)",
 ];
 
 /// One project MCP server (`.mcp.json` entry).
@@ -1299,6 +1315,12 @@ pub struct Workflow {
     /// evidence in a separate sources file and where to dig deeper. Model-invocable
     /// (with `when_to_use`): it writes only to its own git-ignored folder.
     pub chapter: bool,
+    /// Emit the `/proposal` page writer: a short proposal for another team, with
+    /// only the diagrams its readers need, built from working files in
+    /// `.claude/notes/proposals/<slug>/` and published as a private Claude
+    /// Artifact. Model-invocable (with `when_to_use`): it writes only to its own
+    /// git-ignored folder, and an Artifact starts private.
+    pub proposal: bool,
     /// Minimum confidence (0–100) a subagent that wrote files must state before it
     /// may stop, enforced by a `SubagentStop` hook. `0` disables. This pairs with
     /// worktree isolation to give isolated writes + enforced per-worker confidence.
@@ -1329,6 +1351,7 @@ impl Default for Workflow {
             intent: true,
             recap: true,
             chapter: true,
+            proposal: true,
             subagent_confidence: 96,
             loop_guard_max: 3,
             check_cmd: String::new(),

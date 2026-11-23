@@ -570,6 +570,7 @@ fn claude_landscape_plugin_opus_and_no_workflow_no_subagents() {
         intent: false,
         recap: false,
         chapter: false,
+        proposal: false,
         loop_guard_max: 0,
         check_cmd: String::new(),
         subagent_confidence: 0,

@@ -1,4 +1,4 @@
-//! The worktree-notes hook. Notes (/inquire and /recap notes, a /chapter book,
+//! The worktree-notes hook. Notes (/inquire and /recap notes, a /chapter book, /proposal folders,
 //! /brief briefs, /intent drafts) are git-ignored, so a worktree's own never reach the main
 //! checkout, and Claude Code counts them as no change: removing the worktree
 //! deletes them silently. Most removals run no hook at all (`:q` in a `claude
@@ -649,9 +649,14 @@ fn the_hook_is_wired_on_writes_turns_and_exit_worktree_when_the_project_keeps_no
     w.brief = false;
     w.intent = false;
     w.chapter = false;
+    w.proposal = false;
     assert!(groups(&p).is_empty());
     // A book in .claude/notes is a note too: /chapter alone keeps the hook.
     p.claude.workflow.chapter = true;
+    assert_eq!(groups(&p).len(), 4);
+    // So is a proposal's folder: /proposal alone keeps it too.
+    p.claude.workflow.chapter = false;
+    p.claude.workflow.proposal = true;
     assert_eq!(groups(&p).len(), 4);
 }
 
@@ -683,6 +688,34 @@ fn a_book_written_in_a_worktree_reaches_the_main_checkout() {
         .unwrap(),
         "Commit: abc\n"
     );
+}
+
+/// A proposal's folder, its diagrams one folder deeper, reaches the main checkout
+/// like any other note, so `/proposal <slug>` there finds the work done here.
+#[test]
+fn a_proposal_written_in_a_worktree_reaches_the_main_checkout() {
+    let repo = Repo::new();
+    let wt = repo.wt();
+    let dir = ".claude/notes/proposals/vendor-connect";
+    write(&wt.join(format!("{dir}/facts.md")), "Artifact: none\n");
+    write(
+        &wt.join(format!("{dir}/diagrams/sequence-api-does-the-work.svg")),
+        "<svg/>\n",
+    );
+    write(
+        &wt.join(format!("{dir}/vendor-connect.html")),
+        "<!doctype html>\n",
+    );
+    let (code, _, err) = repo.hook(&repo.main(), repo.stop(&wt), &[]);
+    assert_eq!(code, 0, "{err}");
+    for (rel, text) in [
+        ("facts.md", "Artifact: none\n"),
+        ("diagrams/sequence-api-does-the-work.svg", "<svg/>\n"),
+        ("vendor-connect.html", "<!doctype html>\n"),
+    ] {
+        let got = fs::read_to_string(repo.main().join(format!("{dir}/{rel}"))).unwrap();
+        assert_eq!(got, text, "{rel}");
+    }
 }
 
 /// Fetched AWS logs aren't notes: they stay in their worktree and go with it, so

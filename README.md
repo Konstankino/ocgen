@@ -610,6 +610,8 @@ repo used for a plugin's marketplace and release workflow; `--team` enables
 .claude/skills/recap/SKILL.md        # /recap — fast-forward your branches, then a per-branch report of what changed since the last recap, plus new GitHub comments and reviews (you run it)
 .claude/skills/chapter/SKILL.md      # /chapter — one plain-language chapter about a part of the system, as a text file made to be read aloud
 .claude/notes/book/                  # /chapter's book: <NNN>-<slug>.txt, 000-contents.txt, glossary.txt, sources/ (its own .gitignore keeps it out of git)
+.claude/skills/proposal/             # /proposal — SKILL.md, diagrams.md (seven diagram recipes), page.html (the page template)
+.claude/notes/proposals/<slug>/      # one proposal's working files: facts.md, outline.md, diagrams/*.svg, <slug>.html (git-ignored)
 .claude/intent/issue-template.md     # /intent's GitHub issue structure — yours, written once
 .claude/intent/drafts/<name>.md      # an issue or pull request draft (/intent's, or any Claude writes) — type `draft` to edit, preview and copy it in your browser (git-ignored)
 .claude/intent/viewer/               # the intent files' viewer and session records — type `adr` to read them (git-ignored)
@@ -814,7 +816,7 @@ its workflows as `.claude/skills/<name>/SKILL.md`. You still type `/deliver`, `/
   `/review-intent`, `/recap`, `/team` and `/team-plan` carry `disable-model-invocation: true`, so Claude can't start them on
   its own.
 - **Claude may use the rest when relevant:** `/inquire`, `/intake`, `/refine`, `/improve-prompt`,
-  `/brief` and `/chapter`. Each has a `when_to_use` line saying when, so Claude picks it for the right
+  `/brief`, `/chapter` and `/proposal`. Each has a `when_to_use` line saying when, so Claude picks it for the right
   requests; ocgen's own check holds them to it like your skills.
 - **Upgrading:** `ocgen doctor` removes the old generated `.claude/commands/*.md`. Files you
   wrote yourself are kept.
@@ -2025,6 +2027,38 @@ The reader is fixed in the skill's text. To change it, copy the template out wit
 init`. To add `/chapter` to an existing project, re-render it with `ocgen doctor [dir]`. Projects
 created by older versions get it switched on automatically.
 
+#### Writing a proposal for another team (`/proposal`)
+
+**`/proposal <what to propose>`** writes a short proposal page for another team and publishes it as
+a **private Claude Artifact** with a 2–4 word name, ready for you to share (wizard: "Include the
+/proposal page writer command?"; on by default). Claude may also start it when you ask for a
+proposal or an architecture page for others; `/refine` is for talking a plan through with you.
+
+- **Less is more:** only what the readers need to decide, build or answer. The page runs In short
+  (three lines), Today → Goal, 2–3 options, a comparison, what we ask them to do, questions for them,
+  risks, sources. Limits: at most 500 words outside the diagrams (checked with `wc -w`), 20 words a
+  sentence, 12 words a table cell, 3 questions to you. Options are named for what they do, never
+  "Option B".
+- **Diagrams:** it can draw seven kinds (system context, container / component, deployment, network,
+  entity-relationship, sequence, flowchart / activity) and draws only those the readers need, usually
+  2–3, as inline SVG from the recipes in `diagrams.md`. What the proposal changes is highlighted.
+- **Small steps:** each proposal has a folder in `.claude/notes/proposals/<slug>/`, kept out of git:
+  `facts.md` (the evidence, what is to confirm, the artifact's link), `outline.md` (the page's text),
+  one SVG per diagram, and `<slug>.html`, put together from them with nothing added. A fresh subagent
+  reads the outline cold and lists what it had to read twice, for at most two rounds.
+- **Evidence:** facts come from the docs, code and infrastructure definitions; anything unverified
+  shows `(to confirm)` on the page and becomes a question for the readers.
+- **Publishing:** `/proposal <slug>` again updates the same artifact, so the readers' link stays.
+  It checks the page for keys, tokens, account IDs and IP addresses first, asks before publishing what
+  you called confidential, and never shares, pins or deletes the artifact. A session without the
+  Artifact tool keeps the HTML file and says so.
+- **Page:** self-contained (no scripts, no external files), light and dark, readable on a phone. An
+  Artifact can't open the print dialog, so for a PDF print the local `<slug>.html`: one section per
+  page. The page is in English unless you ask for another language.
+
+To add `/proposal` to an existing project, re-render it with `ocgen doctor [dir]`. Projects created
+by older versions get it switched on automatically.
+
 #### Trusted documentation sites (`ocgen edit docs`)
 
 Every way an agent reaches the web follows one list of trusted documentation sites: the main
@@ -2129,7 +2163,7 @@ the agents cite it by:
   testing evidence, searching for precedent, checking the environment, drafting the design) runs
   on the research model, and a subagent given research gets that model explicitly, never the
   agent type's default. Only bookkeeping that draws no conclusions may run cheaper.
-- **Claims** (`/inquire`, `/brief`, `/recap`, `/chapter`; the explorer, verifier, reviewer, scope guard,
+- **Claims** (`/inquire`, `/brief`, `/recap`, `/chapter`, `/proposal`; the explorer, verifier, reviewer, scope guard,
   adversary and privacy guard): `evidence-required` (a `file:line` read in this session, the quoted
   output of a command run in it, or with the AWS check a read-only call, quoted — anything else is
   **unconfirmed**, or `Inferred` where a ledger tags claims), `test-the-evidence`,
@@ -2690,7 +2724,7 @@ defaults to `.`.
 
 | Command | What it does |
 |---|---|
-| `ocgen new [dir] --target claude` | Scaffold a new Claude project (agents, `/multi` `/intake` `/refine` `/brief` `/fanout` `/workstreams` `/deliver` `/inquire` `/intent` `/review-intent` `/recap` `/chapter`, `CLAUDE.md`, `settings.json`). |
+| `ocgen new [dir] --target claude` | Scaffold a new Claude project (agents, `/multi` `/intake` `/refine` `/brief` `/fanout` `/workstreams` `/deliver` `/inquire` `/intent` `/review-intent` `/recap` `/chapter` `/proposal`, `CLAUDE.md`, `settings.json`). |
 | `ocgen new [dir] --target claude --output plugin` | Emit a distributable plugin instead of the project tree. |
 | `ocgen new [dir] --target claude --output both --repo <owner/repo>` | Emit both the project **and** a plugin (marketplace + release workflow). |
 | `ocgen new [dir] --target claude --team` | Also enable Agent Teams (env flag + `/team` + hooks + guidance). With the approval gate on, the sandbox question defaults to yes (macOS, Linux/WSL2). |
@@ -2819,7 +2853,8 @@ opencode/commands/multi.md.j2     # a command that fans out to the subagents
 seeds.toml               # blank-agent seed text (body + external prompt)
 claude/agent.md.j2              # one generic Claude subagent
 claude/CLAUDE.md.j2             # project instructions + roster
-claude/commands/*.md.j2         # multi / intake / refine / brief / fanout / workstreams / deliver / inquire / intent / review-intent / recap / chapter… (rendered as skills)
+claude/commands/*.md.j2         # multi / intake / refine / brief / fanout / workstreams / deliver / inquire / intent / review-intent / recap / chapter / proposal… (rendered as skills)
+claude/proposal/                # /proposal's diagram recipes and page template, copied beside its SKILL.md
 claude/intent/*.md              # default /intent issue and intent-file templates (copied into new projects)
 claude/intent/*.md.j2           # /intent's shared text (writing standard, tone check, numbering, reading copy,
                                 # browser review), included by /intent and /review-intent

@@ -110,6 +110,7 @@ fn a_claude_project_with_nothing_else_turned_on_still_gets_it() {
         intent: false,
         recap: false,
         chapter: false,
+        proposal: false,
         subagent_confidence: 0,
         loop_guard_max: 0,
         check_cmd: String::new(),

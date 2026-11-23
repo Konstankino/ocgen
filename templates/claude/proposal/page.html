@@ -1,0 +1,236 @@
+<title>Name Of The Change</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* A short document: header, a tinted summary, plain sections; only diagrams sit in panels. */
+:root {
+  --bg: #f6f7f9;
+  --panel: #ffffff;
+  --ink: #16191f;
+  --muted: #586070;
+  --rule: #d6dbe3;
+  --accent: #0d7566;
+  --accent-soft: #e1f2ee;
+  --ext: #edf0f4;
+  --warn: #b0361f;
+  --code: #eceff4;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #111419;
+    --panel: #1a1e25;
+    --ink: #e6e9ee;
+    --muted: #a0a8b6;
+    --rule: #343b47;
+    --accent: #4dc1ac;
+    --accent-soft: #163731;
+    --ext: #232831;
+    --warn: #f08a72;
+    --code: #232831;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #111419;
+  --panel: #1a1e25;
+  --ink: #e6e9ee;
+  --muted: #a0a8b6;
+  --rule: #343b47;
+  --accent: #4dc1ac;
+  --accent-soft: #163731;
+  --ext: #232831;
+  --warn: #f08a72;
+  --code: #232831;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font: 16px/1.55 var(--sans); }
+main {
+  max-width: 960px;
+  margin: 0 auto;
+  padding-block: 32px 48px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+p, li { max-width: 68ch; }
+h1, h2 { text-wrap: balance; }
+.kicker { margin: 0 0 6px; font: 600 12px/1.4 var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+h1 { margin: 0 0 8px; font-size: 32px; line-height: 1.15; }
+h2 { margin: 0 0 6px; font-size: 22px; line-height: 1.25; }
+.lead { margin: 0 0 8px; font-size: 18px; }
+.meta { margin: 0; font-size: 14px; color: var(--muted); }
+header { padding-block: 0 20px; }
+section { padding-block: 24px; border-top: 1px solid var(--rule); }
+section p { margin: 6px 0; }
+.short { margin: 0 0 8px; padding: 20px 24px; border-radius: 12px; background: var(--accent-soft); }
+.short p { margin: 6px 0; font-size: 17px; }
+.one-line { margin: 0 0 12px; color: var(--muted); }
+.rec { display: inline-block; margin-left: 10px; padding: 1px 8px; border-radius: 999px; font: 600 11px/1.6 var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--panel); background: var(--accent); vertical-align: middle; }
+.confirm { font-size: 13px; color: var(--warn); white-space: nowrap; }
+ul, ol { margin: 8px 0; padding-left: 22px; }
+li { margin: 4px 0; }
+code { padding: 1px 5px; border-radius: 4px; font: 13px var(--mono); background: var(--code); }
+figure { margin: 16px 0 12px; padding: 16px; background: var(--panel); border: 1px solid var(--rule); border-radius: 10px; }
+figcaption { margin: 0 0 10px; font-size: 14px; font-weight: 600; }
+/* A diagram keeps its own size and only shrinks to fit; on a phone it scrolls in its box. */
+.diagram { overflow-x: auto; }
+.diagram svg { display: block; max-width: 100%; height: auto; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 12px 0 0; padding: 10px 0 0; border-top: 1px solid var(--rule); font-size: 13px; color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend i { display: inline-block; width: 18px; height: 12px; border: 1.5px solid var(--rule); border-radius: 3px; background: var(--panel); }
+.legend i.new { border-color: var(--accent); background: var(--accent-soft); }
+.legend i.ext { background: var(--ext); }
+.legend i.group { border-style: dashed; border-color: var(--muted); background: transparent; }
+.legend i.line, .legend i.reply { height: 0; border: 0; border-top: 1.5px solid var(--ink); border-radius: 0; background: transparent; }
+.legend i.reply { border-top-style: dashed; }
+.table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 15px; font-variant-numeric: tabular-nums; }
+th, td { padding: 10px 12px; text-align: left; vertical-align: top; border-top: 1px solid var(--rule); }
+thead th { border-top: 0; font: 600 12px/1.4 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+tbody th { font-weight: 600; }
+.same { margin: 10px 0 0; font-size: 14px; color: var(--muted); }
+footer { padding-block: 20px 0; border-top: 1px solid var(--rule); font-size: 13px; color: var(--muted); }
+footer p { margin: 4px 0; }
+
+/* Diagrams: the classes the recipes draw with. */
+svg text { font-family: var(--sans); fill: var(--ink); }
+svg .title { font-size: 13px; font-weight: 600; }
+svg .sub, svg .label, svg .note { font-size: 11px; fill: var(--muted); }
+svg .group-label { font: 600 10px var(--mono); letter-spacing: .1em; fill: var(--muted); }
+svg .mid { text-anchor: middle; }
+svg .end { text-anchor: end; }
+svg .box { fill: var(--panel); stroke: var(--rule); stroke-width: 1.5; }
+svg .ext { fill: var(--ext); }
+svg .new { stroke: var(--accent); }
+svg rect.new, svg polygon.new { fill: var(--accent-soft); }
+svg .group { fill: none; stroke: var(--muted); stroke-width: 1; stroke-dasharray: 5 4; }
+svg .line { fill: none; stroke: var(--ink); stroke-width: 1.4; }
+svg .reply, svg .dev { stroke-dasharray: 5 4; }
+svg .line.new { stroke-width: 2.2; }
+svg .life { stroke: var(--rule); stroke-width: 1; stroke-dasharray: 3 4; }
+svg .head { fill: var(--ink); }
+svg .step { fill: var(--ink); }
+svg .check { fill: var(--warn); }
+svg .step-n { font-size: 10px; font-weight: 700; text-anchor: middle; fill: var(--panel); }
+
+@media (max-width: 600px) {
+  h1 { font-size: 26px; }
+  .short { padding: 16px; }
+  .diagram svg { max-width: none; }
+}
+/* Print from the local file (an Artifact can't open the print dialog): light on paper. */
+@media print {
+  :root:root:root {
+    --bg: #ffffff;
+    --panel: #ffffff;
+    --ink: #000000;
+    --muted: #444b57;
+    --rule: #c9ced6;
+    --accent: #0d7566;
+    --accent-soft: #e1f2ee;
+    --ext: #edf0f4;
+    --warn: #b0361f;
+    --code: #eceff4;
+    color-scheme: light;
+  }
+  main { max-width: none; padding-block: 0; }
+  section { break-after: page; }
+  figure { break-inside: avoid; }
+  .diagram { overflow: visible; }
+  .diagram svg { max-width: 100%; }
+}
+</style>
+
+<!-- Fill from outline.md, in its order. Drop a section with nothing to say, except
+     In short, Options and Questions. Paste each diagram's SVG file as it is. -->
+<main>
+
+<header>
+  <p class="kicker">System · Area</p>
+  <h1>Title of at most eight words</h1>
+  <p class="lead">What changes, for whom, in at most twenty words.</p>
+  <p class="meta">Proposed · not built · As of 1 Jan 2027</p>
+</header>
+
+<div class="short" role="note" aria-label="In short">
+  <p><b>We propose</b> …</p>
+  <p><b>We recommend</b> the option's name, because …</p>
+  <p><b>We need from Team:</b> …, by 15 Jan 2027.</p>
+</div>
+
+<section>
+  <h2>Today → Goal</h2>
+  <p><b>Today:</b> …</p>
+  <p><b>Goal:</b> …</p>
+</section>
+
+<section>
+  <p class="kicker">Option</p>
+  <h2>A name that says what it is, never a letter</h2>
+  <p class="one-line">One line.</p>
+  <figure>
+    <figcaption>The question this diagram answers?</figcaption>
+    <div class="diagram">
+      <!-- diagrams/<kind>-<name>.svg -->
+    </div>
+    <div class="legend">
+      <!-- Only the marks this diagram uses. -->
+      <span><i class="new"></i>New or changed</span>
+      <span><i class="line"></i>Request or data</span>
+      <span><i class="reply"></i>Reply</span>
+    </div>
+  </figure>
+  <ul>
+    <li>…</li>
+  </ul>
+</section>
+
+<section>
+  <p class="kicker">Option</p>
+  <h2>The recommended option's name<span class="rec">Recommended</span></h2>
+  <p class="one-line">One line.</p>
+  <!-- Its figures, with the same kinds as the first option, then at most 3 bullets. -->
+</section>
+
+<section>
+  <h2>Compare</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th></th><th>First option's name</th><th>Recommended option's name</th></tr></thead>
+      <tbody>
+        <tr><th>Who builds what</th><td>…</td><td>…</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="same">Same in both: …</p>
+</section>
+
+<section>
+  <h2>What we ask Team to do</h2>
+  <ol>
+    <li>…</li>
+  </ol>
+</section>
+
+<section>
+  <h2>Questions for Team</h2>
+  <ol>
+    <li>… <span class="confirm">(to confirm)</span></li>
+  </ol>
+</section>
+
+<section>
+  <h2>Risks and open points</h2>
+  <ul>
+    <li>Risk → what we do about it.</li>
+  </ul>
+</section>
+
+<footer>
+  <p><b>Sources:</b> a decision record, with what it decided · a document, with what it says</p>
+  <p>Proposed; not built. As of 1 Jan 2027.</p>
+</footer>
+
+</main>
