@@ -1,0 +1,180 @@
+---
+description: Write a short proposal page for another team — key points only, the diagrams its readers need, published as a private Claude Artifact ready to share
+when_to_use: Use when asked to write, draft or update a proposal, a design or an architecture page for other people or another team to read{% if refine %} — not to talk a plan through with me before approving it (/refine){% endif %}, and not to build what it proposes.
+argument-hint: "[what to propose, or a proposal's slug — empty to list them]"
+allowed-tools: {{ allowed_tools }}
+model: {{ research_model }}
+effort: high
+---
+Write a proposal page for: $ARGUMENTS
+
+The readers are busy people on another team. They read the page once, and then they decide, build
+or answer. Less is more: the page holds only what they need for that, in plain words. Everything
+else (the evidence, the detail, how you found it) stays in the proposal's working files.
+
+Change nothing in the project: the only files you write are under `.claude/notes/proposals/`. The
+page is in English unless I ask for another language. You publish it as a private Artifact, and you
+never send it anywhere.
+
+{{ guidance }}
+
+**How those rules fit a proposal.** The evidence lives in `facts.md`, one row per fact the page
+relies on: the fact, its evidence (a `file:line`, a document, or the command and what it printed),
+and its tag, Verified or Inferred with your honest estimate. The page carries no citations. A fact
+it relies on that isn't Verified shows `(to confirm)` on the page and becomes a question for the
+readers. A path, field or endpoint you made up to show the idea is marked `example`.
+
+## Working files
+
+Work in small steps, one file each, so an interrupted session picks up where it stopped. Each
+proposal has its own folder, `.claude/notes/proposals/<slug>/`; the slug is ASCII `a-z`, `0-9` and
+hyphens, in English, at most 60 characters, naming the change (`vendor-connect`).
+
+| File | Holds |
+|---|---|
+| `facts.md` | The readers and what we need from them, the facts, what is to confirm, the diagrams chosen |
+| `outline.md` | The page's text only, in Markdown: headings, lines, table cells, questions |
+| `diagrams/<kind>-<name>.svg` | One diagram per file, such as `diagrams/sequence-api-does-the-work.svg` |
+| `<slug>.html` | The page, put together from the two above: what gets published |
+
+Read each of them by its exact path: search tools skip a git-ignored folder. `facts.md` starts as:
+
+````markdown
+# <slug>
+Readers: <team> · Need: decision | build | answers · By: <date>
+Commit: <git rev-parse --short HEAD> · Updated: <date>
+Artifact: <the link, once published>
+
+## Facts
+| Fact | Evidence | Tag |
+|---|---|---|
+
+## To confirm
+- <what the page marks (to confirm), and who can answer it>
+
+## Diagrams
+- <kind>-<name>: <the question it answers for the readers>
+````
+
+## 0. Start
+1. Run `git rev-parse --path-format=absolute --git-dir --git-common-dir`. If the two differ, you are
+   in a linked worktree: the main checkout's proposals aren't visible here, and the folder you write
+   is copied there. Say so in one line.
+2. Read `.claude/notes/proposals/.gitignore`; if it doesn't exist, write it with the single line
+   `*`, which keeps the folder out of git.
+3. Then:
+   - **Nothing asked:** run `ls -t .claude/notes/proposals/` and, for each folder, show its title,
+     its last step and its `Artifact:` link. Ask which to continue, or what to propose.
+   - **A slug or a title that matches:** read that folder's files first, because I may have edited
+     them and the files win over your memory. Then continue from the first step whose file is
+     missing, or make the change I asked for and say in one line what changed.
+   - **Anything else:** a new proposal in a new folder.
+
+## 1. Ask only what's missing
+Never ask what the request, the code or the docs answer: look first, and write what you inferred in
+`facts.md`. Then ask one question at a time, at most 3 questions in all, each with 2–4 options, the
+recommended one first with a one-line reason:
+- who reads it, and what we need from them: a decision, something built, or answers;
+- the options, if I have some in mind; otherwise propose 2, at most 3;
+- a constraint the code can't show: a date, a cost, a no-go.
+
+## 2. Facts → `facts.md`
+Read-only, in parallel ({{ explorer }} subagents for reading): the README, docs, decision records
+and runbooks; the code of the parts the proposal touches; their infrastructure definitions
+(Terraform, CloudFormation, CDK, Kubernetes, compose), config, schemas and migrations; `git log` for
+what changed lately. Write each fact into `facts.md` as you find it. One that matters but can't be
+checked goes under `To confirm`.
+
+## 3. Choose the diagrams
+Pick only the diagrams the readers need: each one answers a question the text would otherwise take
+a paragraph for. Usually 2 or 3; never one of each kind for its own sake.
+
+| Diagram | Answers | Draw it when the proposal |
+|---|---|---|
+| System context | Who and what talks to the system? | adds or changes an outside party: users, a vendor, another team's system |
+| Container / component | Which parts are inside, and which one changes? | adds or changes a service, store, queue or module |
+| Deployment | Where does each part run? | changes accounts, regions, clusters, hosts or environments |
+| Network | How does traffic get in and out, and through which gate? | changes subnets, gateways, firewalls, endpoints, or who can reach what |
+| Entity-relationship (ER) | Which records exist, and how do they relate? | adds or changes stored data |
+| Sequence | Who calls whom, in what order, and what happens to the data? | changes a request, a hand-off, or a data flow and its transformations |
+| Flowchart / activity | Which path does a case take, and where does it branch? | has decisions, retries or failure paths |
+
+Show every option with the same kinds, so they compare side by side, and draw what the proposal
+adds or changes in the `new` style. Write the list into `facts.md`, one line each on why it's there.
+
+## 4. Text → `outline.md`
+Write the page's text in this order. Drop a section with nothing to say, except In short, Options
+and Questions.
+1. **Header:** a kicker (system · area), a title of at most 8 words naming the change, a lead of at
+   most 20 words (what changes, for whom), and `Proposed · not built · As of <date>`.
+2. **In short:** three lines. We propose … / We recommend <the option's name>, because … / We need
+   from <team>: …, by <date>.
+3. **Today → Goal:** one line each.
+4. **Options:** 2 or 3. Each has a name that says what it is ("The API does the work"), never a
+   letter or a number: the page and the comparison call it by that name, and its slug names its
+   diagram files. Each has one line, its diagrams, and at most 3 bullets. Mark the recommended one.
+5. **Compare:** a table with only the rows where the options differ, at most 12 words a cell. What
+   is the same in all goes in one line under it.
+6. **What we ask <team> to do:** at most 7 numbered lines, each something they can check is done.
+7. **Questions for <team>:** at most 5, each answered by yes, no or one value.
+8. **Risks and open points:** at most 5, each "risk → what we do about it".
+9. **Sources:** the decision records and documents the page rests on, each with what it says in a
+   few words.
+
+**Less is more:**
+- Every line helps the readers decide, build or answer. Cut anything else.
+- One fact per sentence, at most 20 words. Plain words, active voice, the system as the subject:
+  "The API checks the key".
+- A term the readers may not know: use plain words instead, or explain it in at most 6 words the
+  first time.
+- One name for one thing, the same on every line and in every diagram.
+- No bare step numbers or codes: "the key-write call (step 9)", not "step 9"; a decision record
+  with what it decided, not its number alone.
+- Don't retell a diagram in words, tell how we got here, or hedge.
+- Over a limit, cut words; never shrink the type.
+
+When `outline.md` is written, run `wc -w` on it: at most 500 words. Over that, cut and count again.
+
+## 5. Diagrams → `diagrams/`
+Read `${CLAUDE_SKILL_DIR}/diagrams.md` now. Draw one diagram at a time, in its own file, with the
+recipe for its kind, and check it against the recipe's checklist before you start the next. Its
+labels use the outline's names, word for word.
+
+## 6. Cold read
+Start a fresh, read-only subagent ({{ explorer }}; it gets no conversation context) with the paths of
+`outline.md` and the SVG files, and this: *"You are on <readers>, and you see this proposal for the
+first time. Answer in one line each: what changes; which option is recommended, and why; what is
+asked of whom, by when. Then list every sentence or label you had to read twice or could not follow,
+and every term that isn't explained. Write `none` when nothing is unclear."* A wrong answer means the
+page is unclear there: fix that first. Then fix each item it lists, in the outline and the diagrams,
+and run it again: at most 2 rounds in all. Last, compare with `facts.md`: if a fact the readers need
+to act is gone, put it back in as few words as it takes.
+
+## 7. Page → `<slug>.html`
+If an `Artifact` tool is in this session (load it with ToolSearch if it is listed as deferred), call
+it with `action: "quickstart"` and `intent: "other"` first: its page rules win where they differ from
+the template. Then copy `${CLAUDE_SKILL_DIR}/page.html` and fill it from `outline.md` and the SVG
+files, pasted in as they are. Add no content of your own: a change goes into the outline or the
+diagram first. The `<title>` is the page's name, 2 to 4 words naming the change ("One-Button Vendor
+Connect"), or the name I already use for it; never "Proposal: …". Each figure's caption is the question its diagram answers. If you can
+open the page in a browser, look at it in light and dark and at phone width, and fix whatever overlaps
+or is cut off.
+
+## 8. Publish a private Artifact
+Read the page once more for what must not leave this machine: no keys, tokens, passwords, account
+IDs or IP addresses, and no logo or brand styling of a real company. If I called the material
+confidential or sensitive, ask before you publish.
+- **First time:** publish `.claude/notes/proposals/<slug>/<slug>.html` with no `url`, with
+  `icon: "diagram"` and a one-sentence `description`: what we propose and which option we recommend.
+  Write the link into `facts.md` as `Artifact: <url>` straight away.
+- **Again** (`facts.md` has an `Artifact:` line): read that artifact first with `action: "read"` and
+  bring any change made there into your files, then publish with that same `url`, so the readers'
+  link stays the same.
+- The artifact is private, and I share it. Never share, pin or delete it, and never send it anywhere.
+- **No `Artifact` tool** (a session without it): say so, give the path of `<slug>.html`, and tell me
+  that `/proposal <slug>` in a session with the tool publishes it.
+
+## 9. Hand off
+Give the artifact's link, the `(to confirm)` items, and how to make a PDF: open `<slug>.html` in a
+browser, then Print → Save as PDF, one section per page (an Artifact can't open the print dialog).
+Then stop.

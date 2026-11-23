@@ -671,6 +671,12 @@ fn build_claude_project(
         "Writes one plain-language chapter about a part of the system from its docs, code, git history and GitHub issues and pull requests, as a text file made to be read aloud; keeps the growing book, git-ignored, in .claude/notes/book/, with each chapter's evidence in a separate sources file.",
         true,
     )?;
+    p.claude.workflow.proposal = ask_confirm(
+        theme,
+        "Include the /proposal page writer command?",
+        "Writes a short proposal for another team: key points only, the diagrams its readers need (system context, container, deployment, network, ER, sequence, flowchart), published as a private Claude Artifact; its working files stay, git-ignored, in .claude/notes/proposals/.",
+        true,
+    )?;
     let (intent, intent_settings) =
         configure_intent(theme, true, &ocgen::claude::IntentSettings::default(), None)?;
     p.claude.workflow.intent = intent;

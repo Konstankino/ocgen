@@ -190,7 +190,7 @@ pub fn role_guidance(role: &str) -> Option<Guidance> {
 /// The guidance each generated command carries, by its name.
 pub fn command_guidance(name: &str) -> Option<Guidance> {
     match name {
-        "inquire" | "brief" | "recap" | "chapter" => Some(Guidance::CLAIMS),
+        "inquire" | "brief" | "recap" | "chapter" | "proposal" => Some(Guidance::CLAIMS),
         "fanout" | "team-plan" => Some(Guidance::CHANGES),
         "deliver" | "intent" | "review-intent" | "workstreams" | "team" | "multi" => {
             Some(Guidance::BOTH)
@@ -1116,10 +1116,16 @@ impl Project {
     }
 
     /// Whether the project writes notes a worktree session could leave behind:
-    /// /inquire and /recap notes, a /chapter book, /brief briefs, /intent drafts.
+    /// /inquire and /recap notes, a /chapter book, /proposal folders, /brief
+    /// briefs, /intent drafts.
     pub fn keeps_notes(&self) -> bool {
         let w = &self.claude.workflow;
-        w.inquire || w.recap || w.intent || self.brief_enabled() || self.chapter_enabled()
+        w.inquire
+            || w.recap
+            || w.intent
+            || self.brief_enabled()
+            || self.chapter_enabled()
+            || self.proposal_enabled()
     }
 
     /// Whether the /brief skill is rendered: the flag, at least one target
@@ -1138,6 +1144,13 @@ impl Project {
     /// `chapter` (a project from before the name was reserved keeps its own).
     pub fn chapter_enabled(&self) -> bool {
         self.claude.workflow.chapter && !self.skills.iter().any(|s| s.name == "chapter")
+    }
+
+    /// Whether the /proposal skill is rendered: the flag, and no user skill named
+    /// `proposal` (a project from before the name was reserved keeps its own,
+    /// and its folder gets none of the generated skill's files).
+    pub fn proposal_enabled(&self) -> bool {
+        self.claude.workflow.proposal && !self.skills.iter().any(|s| s.name == "proposal")
     }
 
     /// The targets /brief writes a brief for — the enabled ones, in the order
@@ -1730,6 +1743,7 @@ impl Project {
                         language => lang,
                         research_model => research_model,
                         guidance => &guides["refine"],
+                        proposal => self.proposal_enabled(),
                     },
                 )
                 .context("rendering refine command")?,
@@ -2050,6 +2064,31 @@ impl Project {
                 )
                 .context("rendering chapter command")?,
             ));
+        }
+        if self.proposal_enabled() {
+            components.push((
+                "commands/proposal.md".to_string(),
+                env.render_str(
+                    &templates::load("claude/commands/proposal.md.j2")?,
+                    context! {
+                        research_model => research_model,
+                        guidance => &guides["proposal"],
+                        allowed_tools => crate::claude::PROPOSAL_TOOLS.join(", "),
+                        explorer => self.fork_agent_default(),
+                        refine => self.claude.workflow.refine,
+                    },
+                )
+                .context("rendering proposal command")?,
+            ));
+            // Its reference files sit beside SKILL.md and load only when the
+            // skill reaches them: the diagram recipes and the page template. Not
+            // rendered: the page's CSS braces aren't Jinja.
+            for file in ["diagrams.md", "page.html"] {
+                components.push((
+                    format!("skills/proposal/{file}"),
+                    templates::load(&format!("claude/proposal/{file}"))?,
+                ));
+            }
         }
 
         let skill_tmpl = templates::load("claude/skill/SKILL.md.j2")?;
@@ -2419,6 +2458,7 @@ impl Project {
                 refine => self.claude.workflow.refine,
                 brief => self.brief_enabled(),
                 chapter => self.chapter_enabled(),
+                proposal => self.proposal_enabled(),
             };
             let plugin_json = env
                 .render_str(
@@ -4351,6 +4391,15 @@ impl Project {
             if fs::read_to_string(&p).is_ok_and(|md| !self.legacy_command("chapter", &md)) {
                 w.push(
                     "a hand-made /chapter command (.claude/commands/chapter.md) is shadowed by the generated skill — rename or remove it"
+                        .into(),
+                );
+            }
+        }
+        if self.proposal_enabled() {
+            let p = root.join(".claude/commands/proposal.md");
+            if fs::read_to_string(&p).is_ok_and(|md| !self.legacy_command("proposal", &md)) {
+                w.push(
+                    "a hand-made /proposal command (.claude/commands/proposal.md) is shadowed by the generated skill — rename or remove it"
                         .into(),
                 );
             }
