@@ -71,7 +71,9 @@ section p { margin: 6px 0; }
 .confirm { font-size: 13px; color: var(--warn); white-space: nowrap; }
 ul, ol { margin: 8px 0; padding-left: 22px; }
 li { margin: 4px 0; }
-code { padding: 1px 5px; border-radius: 4px; font: 13px var(--mono); background: var(--code); }
+code { padding: 1px 5px; border-radius: 4px; font: 13px var(--mono); background: var(--code); overflow-wrap: anywhere; }
+pre { margin: 12px 0 0; padding: 12px 14px; overflow-x: auto; border-radius: 8px; background: var(--code); }
+pre code { padding: 0; font: 13px/1.6 var(--mono); overflow-wrap: normal; }
 figure { margin: 16px 0 12px; padding: 16px; background: var(--panel); border: 1px solid var(--rule); border-radius: 10px; }
 figcaption { margin: 0 0 10px; font-size: 14px; font-weight: 600; }
 /* A diagram keeps its own size and only shrinks to fit; on a phone it scrolls in its box. */
@@ -83,8 +85,11 @@ figcaption { margin: 0 0 10px; font-size: 14px; font-weight: 600; }
 .legend i.new { border-color: var(--accent); background: var(--accent-soft); }
 .legend i.ext { background: var(--ext); }
 .legend i.group { border-style: dashed; border-color: var(--muted); background: transparent; }
-.legend i.line, .legend i.reply { height: 0; border: 0; border-top: 1.5px solid var(--ink); border-radius: 0; background: transparent; }
+.legend i.line, .legend i.reply, .legend i.dev { height: 0; border: 0; border-top: 1.5px solid var(--ink); border-radius: 0; background: transparent; }
 .legend i.reply { border-top-style: dashed; }
+.legend i.dev { border-top-style: dotted; border-top-width: 2px; }
+.legend i.step, .legend i.check { width: 12px; height: 12px; border: 0; border-radius: 50%; background: var(--ink); }
+.legend i.check { background: var(--warn); }
 .table-wrap { overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; font-size: 15px; font-variant-numeric: tabular-nums; }
 th, td { padding: 10px 12px; text-align: left; vertical-align: top; border-top: 1px solid var(--rule); }
@@ -107,7 +112,8 @@ svg .new { stroke: var(--accent); }
 svg rect.new, svg polygon.new { fill: var(--accent-soft); }
 svg .group { fill: none; stroke: var(--muted); stroke-width: 1; stroke-dasharray: 5 4; }
 svg .line { fill: none; stroke: var(--ink); stroke-width: 1.4; }
-svg .reply, svg .dev { stroke-dasharray: 5 4; }
+svg .reply { stroke-dasharray: 5 4; }
+svg .dev { stroke-dasharray: 2 3; }
 svg .line.new { stroke-width: 2.2; }
 svg .life { stroke: var(--rule); stroke-width: 1; stroke-dasharray: 3 4; }
 svg .head { fill: var(--ink); }
@@ -136,8 +142,7 @@ svg .step-n { font-size: 10px; font-weight: 700; text-anchor: middle; fill: var(
     color-scheme: light;
   }
   main { max-width: none; padding-block: 0; }
-  section { break-after: page; }
-  figure { break-inside: avoid; }
+  figure, pre { break-inside: avoid; }
   .diagram { overflow: visible; }
   .diagram svg { max-width: 100%; }
 }
@@ -164,6 +169,7 @@ svg .step-n { font-size: 10px; font-weight: 700; text-anchor: middle; fill: var(
   <h2>Today → Goal</h2>
   <p><b>Today:</b> …</p>
   <p><b>Goal:</b> …</p>
+  <!-- A diagram that holds for every option goes here, in a figure like the one below. -->
 </section>
 
 <section>
@@ -176,10 +182,12 @@ svg .step-n { font-size: 10px; font-weight: 700; text-anchor: middle; fill: var(
       <!-- diagrams/<kind>-<name>.svg -->
     </div>
     <div class="legend">
-      <!-- Only the marks this diagram uses. -->
+      <!-- Only the marks this diagram uses, in the words diagrams.md gives: new, ext, group, line,
+           reply, dev, step, check. -->
       <span><i class="new"></i>New or changed</span>
       <span><i class="line"></i>Request or data</span>
       <span><i class="reply"></i>Reply</span>
+      <span><i class="step"></i>Step, in order</span>
     </div>
   </figure>
   <ul>
@@ -212,6 +220,8 @@ svg .step-n { font-size: 10px; font-weight: 700; text-anchor: middle; fill: var(
   <ol>
     <li>…</li>
   </ol>
+  <!-- spec.md, if there is one, as it is. -->
+  <pre><code>…</code></pre>
 </section>
 
 <section>
@@ -229,8 +239,8 @@ svg .step-n { font-size: 10px; font-weight: 700; text-anchor: middle; fill: var(
 </section>
 
 <footer>
+  <!-- Sources the readers can open; none, no footer. -->
   <p><b>Sources:</b> a decision record, with what it decided · a document, with what it says</p>
-  <p>Proposed; not built. As of 1 Jan 2027.</p>
 </footer>
 
 </main>

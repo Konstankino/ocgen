@@ -200,7 +200,7 @@ fn it_ships_the_diagram_recipes_and_a_self_contained_page() {
         "background: var(--bg)",
         "overflow-x: auto",
         "@media print",
-        "break-after: page",
+        "break-inside: avoid",
     ] {
         assert!(page.contains(must), "missing {must:?} in page.html");
     }
@@ -251,7 +251,9 @@ fn it_knows_seven_diagrams_and_draws_only_the_needed_ones() {
     for must in [
         "Pick only the diagrams the readers need",
         "Usually 2 or 3",
-        "Show every option with the same kinds",
+        "A diagram that holds for every option goes once, under Today → Goal",
+        "only where the options differ, with the same kind for each",
+        "on a flow that is new from end to end, nothing is `new`",
         "data flow and its transformations",
         "the `new` style",
     ] {
@@ -326,7 +328,8 @@ fn it_keeps_the_page_short_and_plain() {
     for must in [
         "at most 3 questions in all",
         "Never ask what the request, the code or the docs answer",
-        "at most 500 words",
+        "at most 550, which leaves about 500 words of text",
+        "`wc` counts the Markdown signs",
         "One fact per sentence, at most 20 words",
         "at most 12 words a cell",
         "at most 7 numbered lines",
@@ -379,6 +382,11 @@ fn it_carries_the_evidence_rules_and_marks_what_is_unconfirmed() {
     for must in [
         "`(to confirm)`",
         "becomes a question for the readers",
+        // What a document says, unchecked, is its own tag; what only we can
+        // confirm is ours to chase, not a question for the readers.
+        "Documented (a document says it and nothing checked it)",
+        "if only we can, it goes under Risks and open points",
+        "only what they can answer",
         "marked `example`",
         "Change nothing in the project",
     ] {
@@ -573,5 +581,92 @@ fn the_notes_view_leaves_proposals_alone() {
         ".claude/notes/proposals/vendor-connect/vendor-connect.html",
     ] {
         assert_eq!(ledger_target(path), NoteTarget::NotLedger, "{path}");
+    }
+}
+
+/// What the probe runs needed when the happy path wasn't there: no git, no
+/// subagent, no browser, a spec too exact for prose. And nothing reaches the
+/// Artifact service before a confidentiality check.
+#[test]
+fn it_has_a_way_on_when_a_tool_or_fact_is_missing() {
+    let (_dir, md) = scaffolded(&claude("pr"));
+    let text = flat(&md);
+    for must in [
+        "Outside a git repository, carry on",
+        "If no subagent can be started, read those files cold yourself",
+        "Read only these files.",
+        "if you can't, say so in the hand-off",
+        "`spec.md`",
+        "at most 12 lines",
+        "`context`, `container`, `deployment`, `network`, `er`, `sequence`, `flowchart`",
+        "a date (or none yet)",
+        "We chose …, when the choice is ours",
+    ] {
+        assert!(text.contains(must), "missing {must:?}");
+    }
+    let ask = text
+        .find("If I called the material confidential or sensitive, ask before you go on")
+        .expect("the confidentiality check");
+    let quickstart = text.find("`action: \"quickstart\"`").expect("quickstart");
+    assert!(
+        ask < quickstart,
+        "confidential material is checked before any Artifact call"
+    );
+}
+
+/// The recipes' own examples keep the rules they teach: every shape 16px inside
+/// the viewBox, the size equal to it, and every arrow pointing at a marker the
+/// same SVG defines, named after its file.
+#[test]
+fn the_recipe_examples_keep_their_own_rules() {
+    let (dir, _md) = scaffolded(&claude("pr"));
+    let recipes = read(dir.path(), DIAGRAMS);
+    let num = |tag: &str, attr: &str| -> f64 {
+        let key = format!(" {attr}=\"");
+        let at = tag.find(&key).unwrap_or_else(|| panic!("{attr} in {tag}")) + key.len();
+        tag[at..].split('"').next().unwrap().parse().unwrap()
+    };
+    let blocks: Vec<&str> = recipes
+        .split("```svg\n")
+        .skip(1)
+        .map(|b| b.split("```").next().unwrap())
+        .filter(|b| b.starts_with("<svg"))
+        .collect();
+    assert_eq!(blocks.len(), 2, "the boxes and sequence examples");
+    for svg in blocks {
+        let head = svg.lines().next().unwrap();
+        let vb: Vec<f64> = head
+            .split("viewBox=\"")
+            .nth(1)
+            .unwrap()
+            .split('"')
+            .next()
+            .unwrap()
+            .split(' ')
+            .map(|n| n.parse().unwrap())
+            .collect();
+        let (w, h) = (vb[2], vb[3]);
+        assert_eq!(num(head, "width"), w, "{head}");
+        assert_eq!(num(head, "height"), h, "{head}");
+        for rect in svg.lines().filter(|l| l.trim_start().starts_with("<rect")) {
+            let (x, y) = (num(rect, "x"), num(rect, "y"));
+            let (rw, rh) = (num(rect, "width"), num(rect, "height"));
+            assert!(x >= 16.0 && y >= 16.0, "too near the top or left: {rect}");
+            assert!(x + rw <= w - 16.0, "too near the right: {rect}");
+            assert!(y + rh <= h - 16.0, "too near the bottom: {rect}");
+        }
+        let id = svg
+            .split("<marker id=\"")
+            .nth(1)
+            .and_then(|r| r.split('"').next())
+            .expect("an arrowhead");
+        assert!(id.starts_with("arrow-"), "{id}");
+        for (i, _) in svg.match_indices("marker-end=\"url(#") {
+            let used = svg[i + 17..].split(')').next().unwrap();
+            assert_eq!(
+                used, id,
+                "an arrow points at a marker this SVG doesn't define"
+            );
+        }
     }
 }

@@ -611,7 +611,7 @@ repo used for a plugin's marketplace and release workflow; `--team` enables
 .claude/skills/chapter/SKILL.md      # /chapter — one plain-language chapter about a part of the system, as a text file made to be read aloud
 .claude/notes/book/                  # /chapter's book: <NNN>-<slug>.txt, 000-contents.txt, glossary.txt, sources/ (its own .gitignore keeps it out of git)
 .claude/skills/proposal/             # /proposal — SKILL.md, diagrams.md (seven diagram recipes), page.html (the page template)
-.claude/notes/proposals/<slug>/      # one proposal's working files: facts.md, outline.md, diagrams/*.svg, <slug>.html (git-ignored)
+.claude/notes/proposals/<slug>/      # one proposal's working files: facts.md, outline.md, spec.md, diagrams/*.svg, <slug>.html (git-ignored)
 .claude/intent/issue-template.md     # /intent's GitHub issue structure — yours, written once
 .claude/intent/drafts/<name>.md      # an issue or pull request draft (/intent's, or any Claude writes) — type `draft` to edit, preview and copy it in your browser (git-ignored)
 .claude/intent/viewer/               # the intent files' viewer and session records — type `adr` to read them (git-ignored)
@@ -2036,25 +2036,28 @@ proposal or an architecture page for others; `/refine` is for talking a plan thr
 
 - **Less is more:** only what the readers need to decide, build or answer. The page runs In short
   (three lines), Today → Goal, 2–3 options, a comparison, what we ask them to do, questions for them,
-  risks, sources. Limits: at most 500 words outside the diagrams (checked with `wc -w`), 20 words a
-  sentence, 12 words a table cell, 3 questions to you. Options are named for what they do, never
-  "Option B".
+  risks, sources. Limits: about 500 words of text (`wc -w` at most 550, since it counts Markdown signs
+  too), 20 words a sentence, 12 words a table cell, 3 questions to you. Options are named for what
+  they do, never "Option B"; when the choice is ours, not the readers', it shows only the chosen one.
 - **Diagrams:** it can draw seven kinds (system context, container / component, deployment, network,
   entity-relationship, sequence, flowchart / activity) and draws only those the readers need, usually
-  2–3, as inline SVG from the recipes in `diagrams.md`. What the proposal changes is highlighted.
+  2–3, as inline SVG from the recipes in `diagrams.md`. A diagram that holds for every option is drawn
+  once; what the proposal changes against today is highlighted.
 - **Small steps:** each proposal has a folder in `.claude/notes/proposals/<slug>/`, kept out of git:
   `facts.md` (the evidence, what is to confirm, the artifact's link), `outline.md` (the page's text),
-  one SVG per diagram, and `<slug>.html`, put together from them with nothing added. A fresh subagent
-  reads the outline cold and lists what it had to read twice, for at most two rounds.
-- **Evidence:** facts come from the docs, code and infrastructure definitions; anything unverified
-  shows `(to confirm)` on the page and becomes a question for the readers.
+  `spec.md` (the exact names builders must match, at most 12 lines, only when they build), one SVG per
+  diagram, and `<slug>.html`, put together from them with nothing added. A fresh subagent reads the
+  outline cold and lists what it had to read twice, for at most two rounds.
+- **Evidence:** facts come from the docs, code and infrastructure definitions, tagged Verified,
+  Documented or Inferred. Anything unverified shows `(to confirm)`: a question for the readers when
+  they can answer it, otherwise a risk with who on our side confirms it.
 - **Publishing:** `/proposal <slug>` again updates the same artifact, so the readers' link stays.
   It checks the page for keys, tokens, account IDs and IP addresses first, asks before publishing what
   you called confidential, and never shares, pins or deletes the artifact. A session without the
   Artifact tool keeps the HTML file and says so.
 - **Page:** self-contained (no scripts, no external files), light and dark, readable on a phone. An
-  Artifact can't open the print dialog, so for a PDF print the local `<slug>.html`: one section per
-  page. The page is in English unless you ask for another language.
+  Artifact can't open the print dialog, so for a PDF print the local `<slug>.html`; figures stay
+  whole. The page is in English unless you ask for another language.
 
 To add `/proposal` to an existing project, re-render it with `ocgen doctor [dir]`. Projects created
 by older versions get it switched on automatically.
