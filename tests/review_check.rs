@@ -505,7 +505,7 @@ fn deliver_runs_the_review_check_between_scope_and_privacy() {
         "Merge `implementer`'s worktree branch into the working branch before each wave",
         "Write the pack the loop describes to `.claude/scratch/review-pack.md`",
         "give every run its absolute path",
-        "the precedent list from phase 4",
+        "the precedent list from phase 3",
         "the changed files and the diff",
         "Followed, Broken or Not applicable",
         "A Broken precedent with a reason I approved is not a finding",
