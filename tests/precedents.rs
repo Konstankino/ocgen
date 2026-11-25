@@ -96,22 +96,26 @@ fn the_rules_say_how_to_write_a_precedent_list() {
 
 // ------------------------------------------------------------- /deliver --
 
+/// The sweep runs before the plan is presented, so I approve a plan that already
+/// follows the precedents; research re-plans if it finds one that contradicts it.
 #[test]
-fn deliver_research_writes_the_precedent_list() {
+fn deliver_plan_carries_the_precedent_list() {
     let f = files(&project(&FULL));
-    let research = section(&f[DELIVER], "## 4. Research", "## 5.");
-    for must in ["`explorer`", "**Precedents**", "re-plan"] {
-        assert!(research.contains(must), "missing {must:?}:\n{research}");
+    let plan = section(&f[DELIVER], "## 3. Plan", "## 4. Research");
+    for must in ["`explorer`", "**Precedents**"] {
+        assert!(plan.contains(must), "missing {must:?}:\n{plan}");
     }
+    let research = section(&f[DELIVER], "## 4. Research", "## 5.");
+    assert!(research.contains("re-plan"), "{research}");
     // The implementer works from it.
     let execute = section(&f[DELIVER], "## 5. Execute", "**Scope check.**");
     assert!(execute.contains("precedents that bear on it"), "{execute}");
 
     // No explorer: the built-in Explore agent does the sweep.
     let f = files(&project(&without("explorer")));
-    let research = section(&f[DELIVER], "## 4. Research", "## 5.");
-    assert!(research.contains("built-in `Explore`"), "{research}");
-    assert!(!research.contains("`explorer`"), "{research}");
+    let plan = section(&f[DELIVER], "## 3. Plan", "## 4. Research");
+    assert!(plan.contains("built-in `Explore`"), "{plan}");
+    assert!(!plan.contains("`explorer`"), "{plan}");
 }
 
 #[test]
@@ -156,7 +160,7 @@ fn deliver_without_a_reviewer_checks_conformance_itself() {
 }
 
 /// Without a reviewer, the session checks conformance itself, word for word as
-/// before the review check existed.
+/// before the review check existed — the precedent list now comes from the plan.
 #[test]
 fn deliver_without_a_reviewer_reads_as_before() {
     let f = files(&project(&without("reviewer")));
@@ -169,7 +173,7 @@ fn deliver_without_a_reviewer_reads_as_before() {
 }
 
 const NO_REVIEWER_CHECK: &str = "\
-**Conformance check.** After the scope check, and before the adversary check, check the whole change against the precedent list from phase 4 yourself: the project has no reviewer.
+**Conformance check.** After the scope check, and before the adversary check, check the whole change against the precedent list from phase 3 yourself: the project has no reviewer.
 - Merge `implementer`'s worktree branch into the working branch before each check, or it checks code without the change.
 - Work from the goal, the approved plan, the precedent list verbatim, the base and the changed files. Each
   precedent is Followed, Broken or Not applicable, with its `file:line`. New code that duplicates an existing

@@ -1104,18 +1104,45 @@ default; the wizard asks about each ("Include the /deliver pipeline command?", "
 *build/change* runs the pipeline, *understand* hands off to `/inquire`, *mixed* runs a short
 `/inquire` orientation and then continues — and tells you the classification so you can
 override it. The pipeline then: sharpens the goal; skims the relevant code and interviews you
-one question at a time (never asking what the code already answers); drafts a plan + risk
-register for your approval; researches in parallel (re-planning if findings contradict the
-plan); executes with a stated `Confidence: NN%` per decision and no deploys/pushes without
-your approval; checks the result against the plan's success criteria before reporting (the scope
-guard does it when the team has one, otherwise a **final check** runs the tests and loops back);
-has the reviewer check the change against the research's precedent list (see below); and
-summarizes — for a goal that came from an `/intent`, with a pull request draft that asks the
-approvers to review the change ([details](#from-findings-to-a-github-issue-intent)). Small, clear
-goals collapse the interview and plan into a one-paragraph brief.
+one question at a time (never asking what the code already answers); for a reported bug,
+reproduces it first and stops to ask if it doesn't, then traces the root cause and every caller of
+what will change; finds the **project check** — the check command when you set one, plus whatever
+else CI runs (`.github/workflows/`, a Makefile, package scripts), each in its checking form
+(`--check`, never `--fix` or `--write`), so running it never changes a file; drafts a plan + risk register in
+which every success criterion names the **Check** that proves it (a test written before the code,
+or a command), with the precedent list already in it, for your approval; researches in parallel
+(re-planning if findings contradict the plan); executes with a stated `Confidence: NN%` per
+decision and no deploys/pushes without your approval; checks the result against the plan's success
+criteria before reporting (the scope guard does it when the team has one, otherwise a **final
+check** runs the tests and loops back); has the reviewer check the change against the precedent
+list (see below); and summarizes — for a goal that came from an `/intent`, with a pull request
+draft that asks the approvers to review the change
+([details](#from-findings-to-a-github-issue-intent)). Small, clear goals collapse the interview
+and plan into a one-paragraph brief, whose criteria still name their Checks.
 
-**Precedents and the review check.** The research always includes a precedent sweep: the
-`explorer` lists what the change must follow, by the **Precedents** rule in
+**The checks run, not just the reviews.** The implementer has no shell, so the session runs the
+checks itself:
+- **Baseline.** Before the first task, the project check and every criterion's Check run on the
+  base. A failure there is *pre-existing*: it is left alone and reported apart, so it isn't read as
+  a regression. A Check that already passes means the criterion is met or the Check tests nothing,
+  and the session stops to ask — unless the criterion keeps existing behavior (`holds on base`).
+  It stops to ask, too, when a task would change a file you have modified but not committed: the
+  implementer's worktree starts from the last commit and can't see your edit.
+- **After each task.** The implementer gets one brief per task: its criteria and their Checks, the
+  files it may change, the precedents, and the rules: change only what the task needs, write the
+  test first, and never edit an existing test to make the change pass. A worktree-isolated
+  implementer's branch is merged after each task, as `git merge --no-ff --no-edit
+  worktree-agent-<id>` alone in its command (the one merge the approval gate lets pass), so the next
+  task builds on it. Then the checks run again, and a new failure goes back as that task's next
+  attempt.
+- **Verify.** Last, after every review loop's fixes, the project check and every criterion's Check
+  run once more: up to 2 fixes and 3 runs, the last fix always followed by a run. That run supplies
+  every test count in the report, which has a fixed shape: Done, Not done, Unresolved, Commands
+  run, Check verdicts, Pre-existing failures, Decisions, Open risks, Next steps.
+
+**Precedents and the review check.** The plan always carries a precedent sweep, run before you
+approve it, so it can change the plan you see: the `explorer` lists what the change must follow,
+and the callers that rely on what will change, by the **Precedents** rule in
 `.claude/rules/ocgen-workflow.md`. An entry is code to **reuse**, a **pattern** nearby code already
 follows, or a **contract** callers rely on, each with a slug, a `file:line` and what the change
 must do. The implementer gets the entries that bear on each task. When the work is done, the

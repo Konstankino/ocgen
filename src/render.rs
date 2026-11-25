@@ -1893,6 +1893,13 @@ impl Project {
                         review_rounds => checks.review_rounds,
                         workstreams => self.claude.workflow.workstreams,
                         brief => self.brief_enabled(),
+                        // The project check the baseline and Verify run, as
+                        // /workstreams names it.
+                        check_cmd => self.claude.workflow.check_cmd.trim(),
+                        // The gate lets a lone merge of the implementer's
+                        // branch pass; the text says which form, and that any
+                        // other waits for `ocgen approve`.
+                        approval_gate => self.claude.team.enabled && self.claude.team.approval_gate,
                     },
                 )
                 .context("rendering deliver command")?,

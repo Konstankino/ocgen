@@ -231,16 +231,21 @@ that line in its final message counts. Read-only workers are not gated.
 Run `/deliver <goal>` to take a complex task end-to-end in one session:
 {% if inquire %}0. **Route** the goal — build/change continues below; "understand the code" goes to `/inquire`.
 {% endif %}1. **Sharpen** the goal (the `/improve-prompt` technique: explicit role, criteria, examples).
-2. **Gather requirements** — interview one question at a time, options-first.
-3. **Plan** — draft the shared task list + risk register and get **approval** before executing.
+2. **Gather requirements** — interview one question at a time, options-first; reproduce a reported
+   bug before planning for it, and find the project check (what CI runs).
+3. **Plan** — draft the shared task list + risk register, each success criterion with the **Check**
+   that proves it; a sweep of the code writes the precedent list (see **Precedents**) before you
+   see the plan; get **approval** before executing.
 4. **Research in parallel** (read-only) — fetch online HTML/PDF (trusted sites, see **Web research**)
-   and study local source concurrently; the sweep of the code writes the precedent list (see
-   **Precedents**).
+   and study local source concurrently; re-plan when a finding contradicts the plan.
 5. **Execute under the gates** — state a `Confidence: NN%` for each decision and surface it for
    confirmation; every risk gets a mitigation round. The implementer works from the precedent
    list, and {% if reviewer %}a **Review check** — three independent reviewer runs at once: `conformance` against
    that list, `correctness`, `tests` — checks the finished change, a fresh run confirming each finding{% else %}a **Conformance check** compares the finished change against it{% endif %}.
-6. **Synthesize** the deliverable.
+   A baseline run of the checks comes first, so a failure that was there already isn't read as a
+   regression; they run again after each task, and a last **Verify** runs the project check and
+   every criterion's Check after every fix.
+6. **Synthesize** the deliverable in a fixed shape, its numbers from that last run.
 
 ## Multi-session delivery
 

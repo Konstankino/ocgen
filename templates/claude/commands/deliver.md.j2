@@ -7,7 +7,9 @@ effort: high
 Deliver this end-to-end: $ARGUMENTS
 
 Run the pipeline in order, and don't advance a phase until the previous one is solid. Scale it to
-the goal: for a small, clear goal, collapse phases 1–3 into a one-paragraph brief and get approval.
+the goal: for a small, clear goal, collapse phases 1–3 into a one-paragraph brief and get approval;
+its criteria still name their Checks, a reported bug is still reproduced first, the project check is still named,
+and the precedent sweep still runs before you present it.
 {{ guidance }}
 
 {% if inquire %}
@@ -41,6 +43,9 @@ risk register; its Context is the skim already done (re-check a `file:line` that
 Inferred items are mine unless I contest one. Ask only what its Open section leaves open, then
 present the plan for approval as usual. `Status: draft` is usable — say it is unfinished. If no such
 file exists, say so (a brief written in a worktree stays in that worktree) and stop.
+{% endif %}{% if intent or brief %}An intent or a brief never settles these: each criterion's slug and Check, the project
+check, the precedent sweep, and a reported bug's reproduction. Add what it lacks of them and present the plan for
+approval before phase 4.
 {% endif %}Rewrite the goal into a crisp brief using the prompt-engineering technique: explicit role, task,
 and success criteria; remove ambiguity.
 
@@ -50,33 +55,86 @@ what the code already answers. Then interview me one question at a time — 2–
 (recommended first), only what resolves real ambiguity; infer the rest and say what you inferred.
 Cover scope, constraints, success criteria, and out-of-scope.
 
+**Check the premise.** When the goal reports a bug or says something doesn't work, reproduce it before you
+plan, even when a brief or an intent settles the rest of this phase: run the failing test, a command, or the
+steps the report gives, and quote the output. Reproduce it here, locally: if that needs anything gated, destructive
+or outside the project, ask me first. If it doesn't reproduce, say so with that output and ask me before
+planning — never change code to fix what you haven't seen fail. When it does, trace it to its root cause: the code
+that produces the wrong result, not the place where it shows. Search for every caller of each function whose
+behavior will change; each one goes into the plan's tasks or its risk register.
+
+**Find the project check.**
+{% if check_cmd %}The project check is `{{ check_cmd }}`. Read what CI runs too (`.github/workflows/`, a Makefile, the
+package's scripts) and add any check it runs that this one leaves out.{% else %}It is what CI runs (`.github/workflows/`,
+a Makefile, the package's scripts): the tests, linters, formatters, and type and style checks, as commands you can
+run here — together, the project check.{% endif %} A brief's Context may name it
+already. The project check never changes a file: run each command in its checking form (`--check`, a dry run;
+never `--fix` or `--write`). Name it in the plan; a check you can't run here is a risk.
+
 ## 3. Plan and get approval
 Draft a numbered task list + intent + a **risk register** (every risk gets a mitigation task).
-{% if scope_guard %}Give each success criterion a slug too (the project rules' **Naming what you refer back to**), and add a **Scope** line: what will change, what is out of scope, and any
+Give each success criterion a slug (the project rules' **Naming what you refer back to**) and a **Check**: the test
+or command that proves it, and what it gives on the base now — it fails there, or doesn't exist yet. A criterion that
+keeps existing behavior is marked `holds on base`: its Check passes there and must still pass at the end. A
+criterion's Check belongs to the last task it needs; name that task. Order the work test-first: the task that meets
+a criterion writes that criterion's test before the code that makes it pass.
+{% if scope_guard %}Add a **Scope** line: what will change, what is out of scope, and any
 refactor, rename or dependency change the goal needs. `{{ scope_guard }}` checks the change against the tasks, the
 criteria and the Scope line in phase 5.
-{% endif %}Present it and **invite push-back**; iterate until I approve. Do not execute yet.
+{% endif %}Before you present the plan, run the precedent sweep: {% if explorer %}the `{{ explorer }}` subagent{% else %}a built-in `Explore` subagent{% endif %} gets the draft
+plan and lists the precedents the change must follow, by the project rule **Precedents**, and the callers that rely on
+what will change. Fold them in — a precedent that changes a task changes the draft — and keep the list with the plan;
+for a small goal keep the sweep short, but run it.
+Present the plan with its precedent list and **invite push-back**; iterate until I approve. Do not execute yet.
 
 ## 4. Research in parallel (read-only)
 Investigate concurrently where independent: fetch the relevant online HTML/PDF docs — from the
 trusted documentation sites only (the project's **Web research** rule) — and study the local source. Run these in parallel — exploration is side-effect-free.
-One thread is always the precedent sweep: {% if explorer %}the `{{ explorer }}` subagent{% else %}a built-in `Explore` subagent{% endif %} gets the approved plan
-and lists the precedents the change must follow, by the project rule **Precedents**. Keep the list with the
-plan; for a small goal keep the sweep short, but run it. If what you find — a precedent included — contradicts
-the approved plan, go back to phase 3 and re-plan rather than pushing through — at most 2 re-plans;
+If approval changed the plan's tasks, run the precedent sweep again on what changed. If what you find — a precedent
+included — contradicts the approved plan, go back to phase 3 and re-plan rather than pushing through — at most 2 re-plans;
 after that, stop and present the conflict to me instead of looping.
 
 ## 5. Execute under the gates
-{% if scope_guard %}Before the first task, note the base for the scope check below: run
+**Baseline.** Before the first task, note the base{% if scope_guard %} for the scope check below{% endif %}: run
 `git status --porcelain=v2 --branch --untracked-files=all` — its `# branch.oid` line is the commit you start
-from, and the files it lists are mine, already modified.
-{% endif %}Work the approved plan. With each task, give {% if implementer_agent %}`{{ implementer_agent }}`{% else %}whoever makes the change{% endif %} the precedents that bear on it,
-verbatim. For each decision or completed task, **state a `Confidence: NN%`** and
+from, and the files it lists are mine, already modified. If you are on the base branch, cut a working branch first
+and name it. If a file a task may change is among the files already modified, stop and ask me before the first task:
+a worker's worktree starts from the last commit and can't see my edits. Then run the project check and every
+criterion's Check that exists on the base, and keep their output. A Check passes only when it ran at least one test or
+assertion for its criterion; one that selects nothing hasn't run. A check that fails here is a **pre-existing
+failure**: leave it as it is — don't fix, skip, silence or delete it unless the plan says so — and report it apart
+in phase 6. A criterion's Check that already passes on the base, unless the criterion is marked `holds on base`,
+means the criterion is met already or the Check doesn't test it: stop and tell me.{% if check_cmd %} Except: if
+`{{ check_cmd }}` fails on the base, every worker's stop gate fails too: stop and tell me before the first task.{% endif %}
+
+Work the approved plan, one task at a time. Give {% if implementer_agent %}`{{ implementer_agent }}`{% else %}whoever makes the change{% endif %} one brief per task:
+- the task as the plan words it, and the criteria it meets, each with its Check;
+- the files it may change, and the precedents that bear on it, verbatim;
+- the pre-existing failures, to leave alone;
+- these rules: change only what the task needs, and list other improvements in your report instead of making them;
+  write each criterion's test before the code; never change or delete an existing test or its assertions to make the
+  change pass — stop and report the conflict, which I decide; if you have no shell, I run the Checks after you stop,
+  so base your confidence on the code as you read it and name what only a run would show; end with the files you
+  changed and a `Confidence: NN%` line.
+{% if worktree_implementer %}
+**Merging `{{ worktree_implementer }}`'s work.** `{{ worktree_implementer }}` works in its own git worktree, and its changes land on its
+`worktree-agent-<id>` branch when it stops. Merge that branch into the working branch after each task and each rework,
+before anything checks the change — or the next task starts without it — alone in its command:
+`git merge --no-ff --no-edit worktree-agent-<id>`.{% if approval_gate %} The approval gate lets exactly that merge pass; any other merge,
+a push or a deploy waits until I run `ocgen approve` in my own terminal, and a yes in chat doesn't open it.{% endif %}
+If ocgen holds the merge to commit what the worker left uncommitted, run the same command once more. If git reports a
+conflict, run `git merge --abort`, stop and tell me; if the merge is refused for any other reason, stop and tell me —
+never get around it. If the loop guard released that worker, read its branch's diff
+(`git diff HEAD...worktree-agent-<id>`) and tell me what it holds before you merge it.
+{% endif %}
+After each task and each rework, run the project check and that task's Checks yourself — whoever makes the change may
+have no shell — and compare with the baseline: a new failure, or a Check that still fails, goes back with its output
+as that task's next attempt. For each decision or completed task, **state a `Confidence: NN%`** and
 surface gated decisions for me to confirm; keep working a risk until its mitigation round is done.
 Give each task at most 3 attempts: if the same approach fails twice, change it; on the third
 failure, stop and report the blocker with evidence.
-Do not perform high-impact external actions (deploys, `git push`/merge, cloud mutations) without my
-explicit approval.
+Do not perform high-impact external actions (deploys, `git push`, {% if worktree_implementer %}any merge but the one of its branch above{% else %}a merge{% endif %},
+cloud mutations) without my explicit approval{% if approval_gate %} — `ocgen approve`, from my own terminal{% endif %}.
 {% if scope_guard %}
 **Scope check.** When the plan's tasks are done{% if adversary %}, and before the adversary check{% endif %},
 have `{{ scope_guard }}` check the whole change against the plan in both directions — nothing planned missing, nothing
@@ -85,8 +143,8 @@ unplanned added — the scope loop in `.claude/rules/ocgen-team.md`:
 {% endif %}- Give it the goal and the approved plan verbatim (after a re-plan, the newest one; if phases 1–3 collapsed, the brief;
   if an approved intent replaced them, its plan and acceptance criteria), the decisions I confirmed, the base,
   and the files that were already modified.
-- Cuts: revert each one yourself, exactly as it says, and write nothing new; then run the tests, and
-  undo any revert that breaks one.
+- Cuts: revert each one yourself, exactly as it says, and write nothing new; then run the project check, and
+  undo any revert that breaks it.
 - `Verdict: INCOMPLETE`: send {% if implementer %}`{{ implementer }}`{% else %}the subagent that made the change{% endif %} only the Partial and Missing items, verbatim, then have
   `{{ scope_guard }}` check the whole change once more. At most {{ scope_rounds }} completion round: an item still
   missing after it is **not done** in phase 6, never done.
@@ -105,14 +163,14 @@ and fresh `{{ reviewer }}` runs confirm the findings: the review loop in `.claud
 {% if worktree_implementer %}- Merge `{{ worktree_implementer }}`'s worktree branch into the working branch before each wave, or it checks code without the change.
 {% endif %}- Write the pack the loop describes to `.claude/scratch/review-pack.md` and give every run its absolute path: the goal; the
   approved plan (after a re-plan, the newest one; if phases 1–3 collapsed, the brief; if an approved intent replaced
-  them, its plan and acceptance criteria); the precedent list from phase 4; the base; the changed files and the diff.
+  them, its plan and acceptance criteria); the precedent list from phase 3; the base; the changed files and the diff.
   The `conformance` run marks each precedent Followed, Broken or Not applicable, with its `file:line`, and flags new
   code that duplicates an existing function, type or helper missing from the list.
 - A Broken precedent with a reason I approved is not a finding. Send {% if implementer_agent %}`{{ implementer_agent }}`{% else %}the subagent that made the change{% endif %} the confirmed findings that are Critical or High, Broken precedents or duplicates,
   in one list, verbatim, then run a new wave; when nothing is left to send, the check is done. At most {{ review_rounds }} rework rounds.
 - A finding that should go back but is still open after that is **UNRESOLVED** in phase 6, never done; a precedent still
   broken is reported as broken, never as followed.
-{% else %}**Conformance check.** After the {% if scope_guard %}scope{% else %}final{% endif %} check{% if adversary %}, and before the adversary check{% endif %}, check the whole change against the precedent list from phase 4 yourself: the project has no reviewer.
+{% else %}**Conformance check.** After the {% if scope_guard %}scope{% else %}final{% endif %} check{% if adversary %}, and before the adversary check{% endif %}, check the whole change against the precedent list from phase 3 yourself: the project has no reviewer.
 {% if worktree_implementer %}- Merge `{{ worktree_implementer }}`'s worktree branch into the working branch before each check, or it checks code without the change.
 {% endif %}- Work from the goal, the approved plan, the precedent list verbatim, the base and the changed files. Each
   precedent is Followed, Broken or Not applicable, with its `file:line`. New code that duplicates an existing
@@ -141,12 +199,38 @@ the adversary loop in `.claude/rules/ocgen-team.md`:
 - A Critical or High finding still open after that is **UNRESOLVED**: report it in phase 6 with its
   evidence, never as done.
 {% endif %}
+**Verify.** Last, after every check above and its rework{% if worktree_implementer %}, with `{{ worktree_implementer }}`'s last branch merged{% endif %}: run the
+project check and every criterion's Check on the working branch, and compare with the baseline. Each criterion is Met
+(its Check passes; quote the output) or Not met; each failure is new or pre-existing. Send a new failure or an unmet
+criterion back to {% if implementer_agent %}`{{ implementer_agent }}`{% else %}whoever made the change{% endif %} with its output{% if worktree_implementer %}, take in the fix as above{% endif %} and run Verify again — at most 2
+fix rounds: up to 2 fixes and 3 Verify runs, and a fix is always followed by a run. A criterion still unmet after
+that is **not done** in phase 6, never done, and a new failure still there is unresolved. No check above reviewed
+a fix made here or traced it against the plan: say so under Open risks. Every test and check count phase 6 gives
+comes from the last Verify run.
+
 ## 6. Synthesize
 Summarize what was done, the decisions and their confidence, open risks, and next steps. Report
 anything left unresolved — including each agent the loop guard released in this session, which a
 hook names to you, with its branch — as unresolved, not done. Lines of other sessions in
 `.claude/loop-guard/escalations.md` are not this run's work. If a coordinator session is named,
 report status to it with `SendMessage`.
+Write the report in this shape — every heading, in this order, with `none` under an empty one. This shape replaces any
+other final answer format for this run; where a rule says remarks and risks, that is Open risks here.
+- **Done** — each success criterion by its slug, Met, with its Check and the line of output that shows it.
+- **Not done** — each criterion Not met, each task left and each item still missing, with why.
+- **Unresolved** — everything left unresolved: the findings still open, a new failure still there, and each agent
+  the loop guard released, with what its Checks gave once its branch was in.
+- **Commands run** — the project check and the Checks from the last Verify run, each command with its counts (passed,
+  failed, skipped) where the command prints them, else its exit status and last line, copied. If Verify didn't run,
+  say so and give the last run after a task, named as such.
+- **Check verdicts** — each check of phase 5 that ran: its verdict, the rounds or waves it used, and what it reports
+  below that no other heading takes.
+- **Pre-existing failures** — what failed on the base already, and whether it still fails.
+- **Decisions** — each with its confidence, the ones I confirmed{% if scope_guard %}, each Differs for me to accept or reject{% endif %}, and where
+  agents disagreed, both positions and the side you took, with why.
+- **Open risks** — the risks the plan didn't close, and the Medium and Low findings.
+- **Next steps** — the follow-ups, most important first{% if scope_guard %}, the Defer list among them{% endif %}.
+What each check reports below goes under these headings.
 {% if reviewer %}From the review check, report each angle's verdict and the waves used; each precedent followed, each one broken
 with its reason or as still broken; each duplicate; every UNRESOLVED finding;
 every rejected or unsettled one with its reason; and the confirmed Medium and Low findings under open risks.
@@ -157,6 +241,8 @@ every cut (reverted, or kept with its reason), every Differs for me to accept or
 follow-ups.
 {% endif %}{% if privacy_guard %}From the privacy check, report its verdict, the rounds used and every finding still open as unresolved;
 put its Medium and Low findings under open risks.
+{% endif %}{% if adversary %}From the adversary check, report its verdict, the rounds used and every UNRESOLVED finding; put its
+Medium and Low findings under open risks.
 {% endif %}{% if intent %}
 If the goal came from an intent, draft the pull request that delivers it as
 `.claude/intent/drafts/pr-<the intent's draft name>.md` (the intent's issue draft is

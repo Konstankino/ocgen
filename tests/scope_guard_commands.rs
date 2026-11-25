@@ -67,7 +67,7 @@ fn deliver_plans_a_scope_and_named_criteria() {
     let f = files(&project(true, false));
     let plan = section(&f[DELIVER], "## 3. Plan", "## 4. Research");
     for must in [
-        "Give each success criterion a slug too",
+        "Give each success criterion a slug",
         "a **Scope** line",
         "what is out of scope",
         "`scope-guard` checks the change against",
@@ -90,7 +90,9 @@ fn deliver_has_the_guard_check_the_change_before_any_review() {
         "if phases 1–3 collapsed, the brief",
         "its plan and acceptance criteria",
         "revert each one yourself",
-        "undo any revert that breaks one",
+        // The project check, not only the tests: a cut can break a lint too.
+        "then run the project check",
+        "undo any revert that breaks it",
         "`Verdict: INCOMPLETE`",
         "send `implementer` only the Partial and Missing items",
         "At most 1 completion round",

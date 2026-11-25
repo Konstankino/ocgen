@@ -6395,9 +6395,10 @@ fn deliver_drafts_the_pull_request_of_an_intent_for_the_approvers() {
     p.scaffold(dir.path(), false).unwrap();
     let md = read(dir.path(), ".claude/skills/deliver/SKILL.md");
     let synth = md.split("## 6. Synthesize").nth(1).unwrap();
-    // A paragraph of its own, not run into the scope check's.
+    // A paragraph of its own, not run into the last check's report line
+    // (the adversary's, in this team).
     assert!(
-        synth.contains("follow-ups.\n\nIf the goal came from an intent")
+        synth.contains("open risks.\n\nIf the goal came from an intent")
             && synth.contains("I open the pull request.\n\nFor several"),
         "{synth}"
     );
