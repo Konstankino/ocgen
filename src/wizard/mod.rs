@@ -2109,7 +2109,7 @@ fn configure_claude_agent_extras(
     )?;
     a.memory = pick(
         "  Memory",
-        "Lets the agent keep notes across sessions: project = committed .claude/agent-memory/, local = git-ignored, user = all projects.",
+        "Lets the agent keep what it learns across sessions; the lead saves what the agent reports under Remember. local = .claude/agent-memory-local/, project = .claude/agent-memory/ (committed only if you commit .claude/), user = all projects.",
         &MEMORY_SCOPES,
         "none",
         &a.memory,

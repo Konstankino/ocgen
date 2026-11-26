@@ -35,9 +35,15 @@ pub const WORKTREE_COPIES: [&str; 12] = [
     ".claude/skills/**",
 ];
 
-/// Kept out of git along with [`WORKTREE_COPIES`], though never copied: the
-/// agents' project memory and the worktrees themselves.
-const ALSO_EXCLUDED: [&str; 2] = [".claude/agent-memory/", ".claude/worktrees/"];
+/// Kept out of git along with [`WORKTREE_COPIES`], but never a gap: the agents'
+/// memory, project and local, which the lead keeps in the main checkout and
+/// `.worktreeinclude` copies into each new worktree when it exists, and the
+/// worktrees themselves, never copied.
+const ALSO_EXCLUDED: [&str; 3] = [
+    ".claude/agent-memory/",
+    ".claude/agent-memory-local/",
+    ".claude/worktrees/",
+];
 
 /// Opens ocgen's block in `.git/info/exclude`, followed by the project's folder
 /// from the repository's top (`.` at the top), so projects in one repository

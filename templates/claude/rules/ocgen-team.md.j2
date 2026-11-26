@@ -9,6 +9,23 @@ on one task at once.
 {% for sub in subagents -%}
 - **{{ sub.name }}** — {{ sub.description }}
 {% endfor %}
+{%- set kept = subagents | selectattr("memory") | list %}
+{%- if kept %}
+**Agent memory.** The agents below keep Claude Code memory, and you keep it for them: they
+read their memory but never write it, since a read-only agent has no tool to write with and an
+isolated worker's copy goes with its worktree. When one's report ends with **Remember:**, save
+each fact that holds to its file, in the main checkout, even when you work in a worktree (a new
+worktree gets a copy of these files, and what is written in one goes with it):
+
+{% for sub in kept -%}
+- `{{ sub.name }}`: `{{ sub.memory }}`
+{% endfor %}
+One line per fact, with its evidence; fix or drop a line the report shows is wrong, and merge
+repeats. Keep each file well under 200 lines: Claude Code loads only the first 200 lines into
+the agent. Save what will hold next session (how to run the checks, tests that fail on a clean
+base, where things live, traps that cost a round), never task progress, secrets or personal
+data.
+{% endif %}
 {% endif -%}
 {% if coordinator %}
 ## Coordination

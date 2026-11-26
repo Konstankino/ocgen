@@ -108,10 +108,15 @@ fn uncommitted_claude_config_is_kept_out_of_git_so_worktrees_copy_it() {
     }
     assert!(ignored(dir.path(), ".claude/agents/implementer.md"));
     assert!(ignored(dir.path(), ".claude/skills/fanout/SKILL.md"));
-    // Never copied, but kept out of git with the rest.
+    // Kept out of git with the rest: the agents' memory, which the lead keeps
+    // and worktrees get a copy of, and the worktrees themselves.
     assert!(ignored(
         dir.path(),
         ".claude/agent-memory/reviewer/MEMORY.md"
+    ));
+    assert!(ignored(
+        dir.path(),
+        ".claude/agent-memory-local/explorer/MEMORY.md"
     ));
     assert!(ignored(dir.path(), ".claude/worktrees/w1/x"));
     // The copy list itself and the user's code stay visible.
@@ -307,6 +312,7 @@ fn a_worktree_gets_the_agents_commands_and_skills() {
         (".claude/commands/legacy.md", "x\n"),
         (".claude/skills/deliver/reference/notes.md", "x\n"),
         (".claude/agent-memory/reviewer/MEMORY.md", "x\n"),
+        (".claude/agent-memory-local/explorer/MEMORY.md", "x\n"),
         (".claude/worktrees/w1/x", "x\n"),
     ] {
         let path = dir.path().join(rel);
@@ -322,15 +328,17 @@ fn a_worktree_gets_the_agents_commands_and_skills() {
         ".claude/commands/legacy.md",
         ".claude/settings.json",
         "CLAUDE.md",
+        // The lead keeps the agents' memory in the main checkout; a worker
+        // reads it from its own worktree.
+        ".claude/agent-memory/reviewer/MEMORY.md",
+        ".claude/agent-memory-local/explorer/MEMORY.md",
     ] {
         assert!(copied.iter().any(|f| f == want), "{want}: {copied:#?}");
     }
-    for never in [".claude/agent-memory/", ".claude/worktrees/"] {
-        assert!(
-            !copied.iter().any(|f| f.starts_with(never)),
-            "{never}: {copied:#?}"
-        );
-    }
+    assert!(
+        !copied.iter().any(|f| f.starts_with(".claude/worktrees/")),
+        "the worktrees: {copied:#?}"
+    );
 }
 
 /// verify in-process, with no user settings.

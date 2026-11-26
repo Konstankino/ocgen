@@ -140,6 +140,7 @@ impl Agent {
             steps: arch.claude_max_turns,
             disallowed_tools: arch.claude_disallowed_tools.clone().unwrap_or_default(),
             effort: arch.claude_effort.clone().unwrap_or_default(),
+            memory: arch.claude_memory.clone().unwrap_or_default(),
             ..Default::default()
         })
     }

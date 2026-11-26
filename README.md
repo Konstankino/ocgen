@@ -921,8 +921,17 @@ and autocomplete it.
 - `effort`: the reviewer, adversary, scope-guard and privacy-guard use `high`, the explorer
   `medium`.
 - `permissionMode`.
-- `memory`: `project` is committed under `.claude/agent-memory/`, `local` is git-ignored,
-  `user` spans every project.
+- `memory`: Claude Code agent memory, a `MEMORY.md` loaded into the agent at start. `local` lives
+  in `.claude/agent-memory-local/<name>/`. `project` lives in `.claude/agent-memory/<name>/` and is
+  committed only if you commit `.claude/`. `user` lives in `~/.claude/agent-memory/<name>/` and
+  spans every project. The explorer, implementer and verifier ship with `local`. It works only
+  while Claude Code's auto memory is on.
+
+  The agent reads its memory but never writes it. A read-only agent loses the Write and Edit that
+  memory grants to its `disallowedTools`, and an isolated worker's memory folder is in its own
+  worktree, which is removed with it. So the agent ends its report with up to 5 facts under
+  **Remember:**, and the lead saves them in the main checkout. `.worktreeinclude` copies the
+  memory into each new worktree.
 - `background`.
 - preloaded `skills`. Claude Code never preloads a user-run-only skill
   (`disable-model-invocation`), and since v2.1.295 preloads at most 32; `landscape` warns about
@@ -2674,11 +2683,11 @@ Committing `.claude/` is optional. Both ways work:
   `.claude/` settings, rules, hooks, agents, skills, agent memory and state, plus `CLAUDE.md`,
   `.mcp.json` and `.claude/worktrees/`. Because the config is now git-ignored, the generated `.worktreeinclude`
   copies the settings, rules, hooks, status line, output styles, state file, `/intent` templates,
-  agents, commands, skills, `CLAUDE.md` and `.mcp.json` into each new worktree. The copy is a snapshot taken when the
+  agents, commands, skills, agent memory, `CLAUDE.md` and `.mcp.json` into each new worktree. The copy is a snapshot taken when the
   worktree is created. `git status` doesn't show these files in this clone.
 - **In git:** commit `.claude/` and ignore only the local parts: `.claude/settings.local.json`,
-  `.claude/worktrees/`, `.claude/notes/`, `.claude/loop-guard/` and `.claude/team/execution-*`.
-  Once anything under `.claude/` is tracked, ocgen stops adding the block and removes it. To
+  `.claude/worktrees/`, `.claude/notes/`, `.claude/loop-guard/`, `.claude/team/execution-*` and
+  `.claude/agent-memory-local/`. Once anything under `.claude/` is tracked, ocgen stops adding the block and removes it. To
   switch, delete the `# ocgen:exclude` block from `.git/info/exclude`, then commit `.claude/`,
   `CLAUDE.md` and `.mcp.json`.
 - **Detection:** `ocgen verify` ("`.claude/` config reaches worktrees"), `ocgen landscape` and

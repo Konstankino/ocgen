@@ -833,6 +833,21 @@ fn utc_stamp() -> String {
 struct SubCtx {
     name: String,
     description: String,
+    /// The agent's Claude Code memory file, which the lead keeps for it
+    /// (empty = no memory).
+    memory: String,
+}
+
+/// Where Claude Code keeps the memory of agent `name` for `scope`: `local`
+/// and `project` under the project's `.claude/`, `user` under `~/.claude/`.
+/// Empty for no memory, or a scope Claude Code doesn't know.
+fn memory_file(name: &str, scope: &str) -> String {
+    match scope.trim() {
+        "local" => format!(".claude/agent-memory-local/{name}/MEMORY.md"),
+        "project" => format!(".claude/agent-memory/{name}/MEMORY.md"),
+        "user" => format!("~/.claude/agent-memory/{name}/MEMORY.md"),
+        _ => String::new(),
+    }
 }
 
 /// The agents the check steps in /deliver, /intent and /workstreams name, by
@@ -946,6 +961,20 @@ impl Project {
         )
         .map(|n| n.trim().to_string())
         .context("rendering the trusted docs note")
+    }
+
+    /// What an agent with Claude Code memory is told: read it, never write it,
+    /// and end with what to keep under **Remember**, for the lead to save. A
+    /// read-only agent loses the Write and Edit that memory gives it to its
+    /// `disallowedTools`, and an isolated worker's memory folder is in its own
+    /// worktree, so the lead keeps every agent's memory in the main checkout.
+    fn memory_note(&self, env: &Environment) -> Result<String> {
+        env.render_str(
+            &templates::load("memory-note.md.j2")?,
+            context! { language => canonical_language(&self.language) },
+        )
+        .map(|n| n.trim().to_string())
+        .context("rendering the agent memory note")
     }
 
     /// The mindset every agent and the coordinator are given, in the instruction
@@ -1206,6 +1235,7 @@ impl Project {
             .map(|a| SubCtx {
                 name: a.name.clone(),
                 description: a.description.clone(),
+                memory: memory_file(&a.name, &a.memory),
             })
             .collect()
     }
@@ -1634,6 +1664,7 @@ impl Project {
             .map(|a| SubCtx {
                 name: a.name.clone(),
                 description: a.description.clone(),
+                memory: memory_file(&a.name, &a.memory),
             })
             .collect();
 
@@ -1668,6 +1699,11 @@ impl Project {
             let body = match role_guidance(&agent.role) {
                 Some(g) => with_paragraph(&body, &self.guidance(&env, &self.language, g)?),
                 None => body,
+            };
+            let body = if memory_file(&agent.name, &agent.memory).is_empty() {
+                body
+            } else {
+                with_paragraph(&body, &self.memory_note(&env)?)
             };
             let body = with_paragraph(&body, &mindset);
             let agent_val = context! {
