@@ -2842,6 +2842,9 @@ fn worktreeinclude_carries_claude_config_but_not_runtime_dirs() {
         ".claude/agents/**",
         ".claude/commands/**",
         ".claude/skills/**",
+        // The agents' memory, kept by the lead in the main checkout.
+        ".claude/agent-memory/**",
+        ".claude/agent-memory-local/**",
     ]
     .into_iter()
     .chain(ocgen::gitcheck::WORKTREE_COPIES)
@@ -2852,7 +2855,7 @@ fn worktreeinclude_carries_claude_config_but_not_runtime_dirs() {
         );
     }
     // Runtime state must never be copied into a worktree.
-    for never in ["agent-memory", "notes", "loop-guard", "worktrees"] {
+    for never in ["notes", "loop-guard", "worktrees"] {
         assert!(
             !wti.lines()
                 .any(|l| !l.starts_with('#') && l.contains(never)),
@@ -3628,8 +3631,10 @@ fn read_only_roles_are_enforced_and_reviewer_thinks_harder() {
     assert!(read(dir.path(), ".claude/agents/reviewer.md").contains("effort: max"));
     let imp = read(dir.path(), ".claude/agents/implementer.md");
     assert!(!imp.contains("disallowedTools") && !imp.contains("effort:"));
-    // Opt-in fields stay off by default.
-    assert!(!imp.contains("memory:") && !imp.contains("permissionMode:"));
+    // Opt-in fields stay off by default; the implementer keeps local memory
+    // (see tests/agent_memory.rs).
+    assert!(!imp.contains("permissionMode:"));
+    assert!(imp.contains("\nmemory: local\n"));
 }
 
 #[test]

@@ -10,7 +10,7 @@
 # `.git/info/exclude`), so these lines copy it. Without them a worktree session
 # would start with no settings, hooks (approval gate, confidence gates, loop
 # guard), rules, project instructions, agents or skills. Runtime state (notes,
-# loop-guard, agent memory, worktrees) is never copied.
+# loop-guard, worktrees) is never copied.
 CLAUDE.md
 .mcp.json
 .claude/settings.json
@@ -23,3 +23,9 @@ CLAUDE.md
 .claude/agents/**
 .claude/commands/**
 .claude/skills/**
+
+# The agents' memory. The lead keeps it in the main checkout (an agent reads its
+# memory but never writes it); a worker in its own worktree reads it from this
+# copy. What is written in a worktree goes with it.
+.claude/agent-memory/**
+.claude/agent-memory-local/**

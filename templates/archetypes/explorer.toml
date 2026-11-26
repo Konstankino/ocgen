@@ -23,6 +23,9 @@ tools = "Read, Grep, Glob, WebFetch, WebSearch"
 claude_max_turns = 40
 claude_disallowed_tools = "Edit, Write, NotebookEdit"
 claude_effort = "high"
+# Claude Code agent memory, local to this clone: it reads what earlier runs
+# learned and reports what to keep under **Remember**; the lead saves that.
+claude_memory = "local"
 
 [description]
 Ukrainian = "Досліджує код та вхідні дані, звітує про знахідки; тільки читання"

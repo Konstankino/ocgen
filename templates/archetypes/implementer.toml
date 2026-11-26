@@ -20,6 +20,10 @@ claude_max_turns = 60
 # The writer role runs in its own enforced git worktree so parallel edits never
 # collide (Claude Code `isolation: worktree`).
 claude_isolation = "worktree"
+# Claude Code agent memory, local to this clone: it reads what earlier runs
+# learned and reports what to keep under **Remember**; the lead saves that (its
+# own copy goes with its worktree).
+claude_memory = "local"
 
 [description]
 Ukrainian = "Реалізує зміну відповідно до задачі та перелічує внесені правки"

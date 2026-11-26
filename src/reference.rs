@@ -242,8 +242,11 @@ const CLAUDE_FIELDS: &[Field] = &[
                  to read git and run the project's own scanner); effort \
                  (low/medium/high/xhigh/max) trades cost for depth (the reviewer, adversary, \
                  scope-guard and privacy-guard use high); \
-                 permissionMode (plan/acceptEdits/dontAsk/default); memory (project = committed \
-                 .claude/agent-memory/, local = git-ignored, user = every project); background; \
+                 permissionMode (plan/acceptEdits/dontAsk/default); memory (local = \
+                 .claude/agent-memory-local/, project = .claude/agent-memory/, committed only if \
+                 you commit .claude/, user = every project; the explorer, implementer and \
+                 verifier ship with local; the agent reads its memory and the lead saves what \
+                 the agent reports under Remember); background; \
                  skills to preload; and the MCP servers it may use. All optional; set them in \
                  `ocgen add/edit agent`.",
         example: "disallowedTools: Edit, Write   effort: high",
